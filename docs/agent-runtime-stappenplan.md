@@ -134,8 +134,7 @@ De runtime heeft slechts twee fundamenteel verschillende jobsoorten. Verschillen
 - Gebruikt een vast prompttemplate en eventueel een JSON-resultaatschema.
 - Kan zonder tools draaien voor onderzoek, analyse, samenvatting en planvorming.
 - Kan taakgebonden tools of API's krijgen voor bijvoorbeeld HKH of Newsfeed.
-- Krijgt nooit automatisch toegang tot een productiedatabase.
-- De toegestane tools, gegevens, looptijd en output worden per profiel geconfigureerd.
+- De toegestane tools, gegevens, looptijd en output worden per profiel geconfigureerd — inclusief eventuele productiedatabasetoegang, als het jobprofile die expliciet toekent. Er is geen categorie die standaard verboden is; alleen wat het profiel toekent is beschikbaar.
 - Dit is het eerste echte AI-jobtype in de MVP.
 
 ### `repository-agent`
@@ -145,15 +144,15 @@ De runtime heeft slechts twee fundamenteel verschillende jobsoorten. Verschillen
 - Agentcontainer krijgt de workspace, maar geen GitHub-credentials.
 - Worker verzorgt fetch, branch, commit, push en eventueel pull request.
 - De repositoryalias bepaalt repository, basisbranch, toegestane paden, validaties en publicatiebeleid.
-- De Product Factory gebruikt ditzelfde jobtype met uitsluitend de alias `product-factory-workspace` en een streng padbeleid.
-- De Software Factory gebruikt dit jobtype met de repositoryalias van het te bouwen project.
+- Een consumer kan met een vaste alias aan precies één werkspace gebonden zijn, of per taak een andere alias uit zijn toegestane lijst kiezen — dat verschil zit volledig in de aliasconfiguratie, niet in het jobtype zelf.
 
 ### Execution engines zijn geen jobsoort
 
-Codex CLI, Claude Code en eventuele toekomstige lokale modellen zijn execution engines achter dezelfde jobsoorten. De enginekeuze verandert niet wat de taak functioneel mag doen.
+Codex CLI, Claude Code, een mock-testengine en eventuele toekomstige lokale modellen zijn execution engines achter dezelfde jobsoorten. De enginekeuze verandert niet wat de taak functioneel mag doen.
 
 - `codex-cli` gebruikt een lokaal geauthenticeerde Codex-installatie.
 - `claude-code` gebruikt een lokaal geauthenticeerde Claude Code-installatie.
+- `mock` is een deterministische testengine zonder echte AI-aanroep: canned responses, instelbare vertraging en instelbare foutscenario's (timeout, crash, ongeldige output). Bedoeld om de rest van de pipeline — worker, server, monitor, contracttests — snel en gratis te testen. Alleen beschikbaar in jobprofielen die expliciet testwerk toestaan, nooit standaard in productieprofielen.
 - `local-model` wordt later een adapter voor een lokaal model of lokale modelserver.
 - Een cloud-API-adapter kan later als fallback worden toegevoegd voor tijdkritische of publieke interacties.
 - Een worker meldt per verbinding welke engines, versies en capabilities op dat moment beschikbaar zijn.
@@ -292,7 +291,7 @@ Een achtergrondworker op macOS die veilig verbinding maakt, een gecontroleerde t
 - Capabilityregistratie en heartbeat implementeren.
 - Lease ophalen, verlengen, voltooien en vrijgeven implementeren.
 - Een lokale werkmap per job maken met veilige naamgeving en limieten.
-- Een eerste `echo`- of `fixture`-executor maken zonder shellinvoer van de aanvrager.
+- Een eerste `mock`-engine (`echo`/fixture, zonder shellinvoer van de aanvrager) toevoegen; deze blijft daarna permanent beschikbaar als testengine naast `codex-cli` en `claude-code`.
 - Logstreaming met redactiefilter en maximale omvang toevoegen.
 - Annuleringssignalen verwerken.
 - Crash recovery maken voor lokaal bekende actieve jobs: elke agentcontainer krijgt een Docker-label met job-ID en lease-token. Bij het opstarten van de worker wordt via `docker ps --filter label=...` vastgesteld welke containers nog daadwerkelijk draaien, in plaats van te vertrouwen op lokale state die het herstart zelf niet overleefd hoeft te hebben. Een container zonder geldige, actuele lease wordt geforceerd gestopt vóór een nieuwe poging start, zodat een lease-conflict na een worker-herstart nooit tot dubbele uitvoering leidt.
@@ -585,7 +584,7 @@ Per applicatie komen minimaal limieten voor gelijktijdige jobs, maximale looptij
 - Branchprefix, basisbranch, toegestane paden en validaties horen bij het profiel.
 - De agent krijgt geen GitHub-credential; de worker voert Git-publicatie uit.
 - Applicatieagents krijgen taakgebonden API-tokens, geen algemene database-URL.
-- Coding agents krijgen nooit toegang tot productiegegevens.
+- Productiegegevens zijn nooit standaard toegankelijk. Alleen een jobprofile dat dat expliciet toekent kan een agent scoped en kortlevend toegang geven — er is geen categorie die per definitie verboden is.
 - Execution images staan op een allowlist en zijn met versie of digest vastgezet.
 - Vrije shellcommando's in een jobpayload zijn verboden.
 - Prompt, log, result en foutdetails gaan door redactieregels en groottelimieten.
