@@ -32,7 +32,8 @@ mainbuild publiceert de imageworkflow:
 - `ghcr.io/robbertvdzon/agent-runtime-server:main`;
 - `ghcr.io/robbertvdzon/agent-runtime-execution:main`.
 
-Een release gebruikt bij voorkeur een immutable `sha-...`-tag. Voor een eerste handmatige rollout:
+Een release gebruikt een immutable `sha-...`-tag. De serveroverlay en lokale workerdefault worden
+samen op dezelfde gevalideerde release-SHA vastgezet. Voor een eerste handmatige rollout:
 
 ```bash
 oc apply -k deploy/acceptance
