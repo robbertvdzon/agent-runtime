@@ -39,6 +39,10 @@ oc rollout status deployment/postgres -n agent-runtime --timeout=180s
 oc rollout status deployment/agent-runtime-server -n agent-runtime --timeout=180s
 ```
 
+Na de eerste gevalideerde rollout beheren de twee Applications onder `deploy/argocd` beide
+overlays automatisch met prune en self-heal. Zij mogen pas worden toegepast nadat de in Git
+vastgezette immutable image daadwerkelijk in GHCR bestaat.
+
 ## Probes en metrics
 
 - liveness: `/actuator/health/liveness`;

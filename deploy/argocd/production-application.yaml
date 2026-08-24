@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: agent-runtime
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/robbertvdzon/agent-runtime.git
+    targetRevision: main
+    path: deploy/production
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: agent-runtime
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=true]
+
