@@ -15,7 +15,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: postgres
-          image: quay.io/sclorg/postgresql-16-c9s:latest
+          image: quay.io/sclorg/postgresql-16-c9s@sha256:22162c54bc5a00ac54c5d48da193a8a3805e10950b961b36aa121ea6b11ea6ae
           env:
             - {name: POSTGRESQL_DATABASE, value: agent_runtime}
             - name: POSTGRESQL_USER
@@ -27,6 +27,10 @@ spec:
             exec: {command: [pg_isready, -U, agent_runtime]}
             initialDelaySeconds: 5
             periodSeconds: 5
+          livenessProbe:
+            exec: {command: [pg_isready, -U, agent_runtime]}
+            initialDelaySeconds: 20
+            periodSeconds: 20
           resources:
             requests: {cpu: 50m, memory: 256Mi}
             limits: {cpu: 500m, memory: 1Gi}

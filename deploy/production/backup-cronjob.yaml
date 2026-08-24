@@ -10,10 +10,19 @@ spec:
     spec:
       template:
         spec:
+          serviceAccountName: postgres
           restartPolicy: OnFailure
+          securityContext:
+            fsGroupChangePolicy: OnRootMismatch
+            seLinuxOptions: {type: spc_t}
+            seccompProfile: {type: RuntimeDefault}
           containers:
             - name: backup
               image: postgres:17.6-alpine
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}
+                runAsNonRoot: true
               env:
                 - {name: PGHOST, value: agent-runtime-postgresql}
                 - {name: PGDATABASE, value: agent_runtime}
