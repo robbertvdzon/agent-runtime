@@ -25,6 +25,14 @@ class AgentRuntimeIntegrationTest(
     @Autowired private val mocks: MockResponseStore,
 ) {
     @Test
+    fun `incomplete request is a safe client error`() {
+        mvc.perform(
+            post("/v1/jobs").bearer(PRODUCT_TOKEN).contentType(MediaType.APPLICATION_JSON)
+                .content("""{"jobKind":"APPLICATION_WORK"}""")
+        ).andExpect(status().isBadRequest)
+    }
+
+    @Test
     fun `mocked application work is durable idempotent and schema validated`() {
         val key = UUID.randomUUID().toString()
         mocks.insert(PrepareMockResponseRequest("product-factory", "product-factory-default", key, result = mapper.readTree("""{"answer":"ok"}""")))
