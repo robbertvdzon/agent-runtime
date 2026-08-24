@@ -16,9 +16,8 @@ RUN node --version \
     && npm --version \
     && npm install -g @openai/codex @anthropic-ai/claude-code playwright \
     && npx playwright install --with-deps chromium \
-    && arch="$(dpkg --print-architecture)" \
-    && case "$arch" in amd64) oc_arch=amd64 ;; arm64) oc_arch=arm64 ;; *) exit 1 ;; esac \
-    && curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux-${oc_arch}.tar.gz" -o /tmp/oc.tar.gz \
+    && test "$(dpkg --print-architecture)" = amd64 \
+    && curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz" -o /tmp/oc.tar.gz \
     && tar -xzf /tmp/oc.tar.gz -C /usr/local/bin oc kubectl \
     && rm -f /tmp/oc.tar.gz
 
