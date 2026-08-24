@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: postgres, labels: {app: postgres}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: postgres}}
+  strategy: {type: Recreate}
+  template:
+    metadata: {labels: {app: postgres}}
+    spec:
+      serviceAccountName: postgres
+      securityContext:
+        fsGroupChangePolicy: OnRootMismatch
+        seLinuxOptions: {type: spc_t}
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: postgres
+          image: quay.io/sclorg/postgresql-16-c9s:latest
+          env:
+            - {name: POSTGRESQL_DATABASE, value: agent_runtime}
+            - name: POSTGRESQL_USER
+              valueFrom: {secretKeyRef: {name: agent-runtime-secrets, key: AR_DB_USERNAME}}
+            - name: POSTGRESQL_PASSWORD
+              valueFrom: {secretKeyRef: {name: agent-runtime-secrets, key: AR_DB_PASSWORD}}
+          ports: [{containerPort: 5432}]
+          readinessProbe:
+            exec: {command: [pg_isready, -U, agent_runtime]}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 256Mi}
+            limits: {cpu: 500m, memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            runAsNonRoot: true
+          volumeMounts: [{name: data, mountPath: /var/lib/pgsql/data}]
+      volumes: [{name: data, persistentVolumeClaim: {claimName: postgres-data}}]

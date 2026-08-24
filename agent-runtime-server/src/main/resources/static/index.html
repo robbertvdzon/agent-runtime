@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Agent Runtime</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <header><div><small>VDZON PLATFORM</small><h1>Agent Runtime</h1></div><button id="auth">Beheertoken instellen</button></header>
+  <main>
+    <section class="intro"><div><small>CONTROL PLANE</small><h2>Werk, workers en herstel</h2><p>Veilige technische uitvoering voor alle aangesloten applicaties.</p></div><span id="live" class="pill">Verbinden…</span></section>
+    <section id="summary" class="stats"></section>
+    <section class="panel"><div class="panelhead"><div><small>UITVOERING</small><h2>Recente jobs</h2></div><select id="status"><option value="">Alle statussen</option></select></div><div class="tablewrap"><table><thead><tr><th>Applicatie</th><th>Taak</th><th>Provider</th><th>Status</th><th>Pogingen</th><th>Bijgewerkt</th></tr></thead><tbody id="jobs"></tbody></table></div></section>
+    <section class="panel"><div class="panelhead"><div><small>CAPACITEIT</small><h2>Workers</h2></div></div><div id="workers" class="workers"></div></section>
+  </main>
+  <dialog id="login"><form method="dialog"><h2>Inloggen</h2><p id="login-help">Log in met het toegestane Google-account. Lokaal kan ook een beheertoken worden gebruikt.</p><div id="google-login"></div><input id="token" type="password" autocomplete="off" placeholder="Lokaal beheertoken"><div><button value="cancel" class="secondary">Annuleren</button><button id="save" value="default">Token opslaan</button></div></form></dialog>
+  <script src="https://accounts.google.com/gsi/client" async></script>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

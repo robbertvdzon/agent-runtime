@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-runtime-server
+  labels: {app: agent-runtime-server}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: agent-runtime-server}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels: {app: agent-runtime-server}
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: server
+          image: ghcr.io/robbertvdzon/agent-runtime-server:main
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef: {name: agent-runtime-secrets}
+          ports:
+            - {name: http, containerPort: 8080}
+          startupProbe:
+            httpGet: {path: /actuator/health/liveness, port: http}
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet: {path: /actuator/health/readiness, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /actuator/health/liveness, port: http}
+            periodSeconds: 30
+          resources:
+            requests: {cpu: 50m, memory: 384Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}

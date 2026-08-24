@@ -1,0 +1,43 @@
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+spring:
+  application:
+    name: agent-runtime-server
+  datasource:
+    url: ${AR_DB_URL:jdbc:h2:mem:agent_runtime;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE}
+    username: ${AR_DB_USERNAME:sa}
+    password: ${AR_DB_PASSWORD:}
+  flyway:
+    enabled: true
+  jackson:
+    default-property-inclusion: non_null
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  info:
+    env:
+      enabled: true
+info:
+  app:
+    name: agent-runtime
+    version: "@project.version@"
+agent-runtime:
+  environment: ${AR_ENVIRONMENT:LOCAL}
+  product-factory-token: ${AR_PRODUCT_FACTORY_TOKEN:local-product-factory-token}
+  software-factory-token: ${AR_SOFTWARE_FACTORY_TOKEN:local-software-factory-token}
+  worker-token: ${AR_WORKER_TOKEN:local-worker-token}
+  admin-token: ${AR_ADMIN_TOKEN:local-admin-token}
+  google-client-id: ${AR_GOOGLE_CLIENT_ID:}
+  admin-emails: ${AR_ADMIN_EMAILS:}
+  session-signing-secret: ${AR_SESSION_SIGNING_SECRET:local-session-signing-secret}
+  lease-seconds: ${AR_LEASE_SECONDS:120}
+  recovery-seconds: ${AR_RECOVERY_SECONDS:1800}

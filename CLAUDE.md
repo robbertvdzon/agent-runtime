@@ -4,19 +4,35 @@ Gedeeld platform waarmee geautoriseerde applicaties op OpenShift (Software Facto
 
 ## Begin hier
 
-Lees eerst [`docs/agent-runtime-stappenplan.md`](docs/agent-runtime-stappenplan.md). Dat is de volledige en enige bron van waarheid voor dit project: aanleiding, architectuur, jobsoorten, jobstatussen, alle fases (0 t/m 10), beveiligingsgrenzen, betrouwbaarheids- en uitrolstrategie, openstaande beslissingen en ontwerpvragen. Deze repo bevat verder nog geen code — het stappenplan is het vertrekpunt voor alles.
+Lees eerst [`README.md`](README.md) en daarna [`docs/agent-runtime-stappenplan.md`](docs/agent-runtime-stappenplan.md).
+De repository bevat een werkende eerste platformrelease. Verander het externe contract alleen
+achterwaarts compatibel en pas contract, tests en documentatie samen aan.
 
 Kernbeslissingen om in het achterhoofd te houden (staan uitgewerkt in het stappenplan):
 
-- **Transport worker↔server**: HTTPS long-polling (geen WebSocket, geen directe databasetoegang vanaf de worker — ook al staat de laptop in hetzelfde netwerk als OpenShift). De server gebruikt intern PostgreSQL `LISTEN`/`NOTIFY` om long-poll-requests direct te beantwoorden.
-- **Crash-/herstartherstel**: agentcontainers krijgen een Docker-label met job-ID en lease-token; de worker reconcilieert bij opstarten via `docker ps --filter label=...` in plaats van op lokale state te vertrouwen, en voorkomt zo dubbele uitvoering na een lease-conflict.
+- **Twee jobsoorten**: Product Factory gebruikt `APPLICATION_WORK`; Software Factory gebruikt
+  `REPOSITORY_WORK`. Agent Runtime kent hun agentrollen en domeinentiteiten niet.
+- **Eén technische eigenaar**: Agent Runtime beheert jobqueue, attempts, leases, heartbeats,
+  fencing, technische retries, resultaten en artifacts. Consumenten houden alleen hun eigen
+  orkestratie en domeinverwerking.
+- **Transport worker↔server**: HTTPS long-polling (geen WebSocket en nooit directe databaseverbinding vanuit de worker).
+- **Fencing**: agentcontainers krijgen alleen labels met workerbootsessie, job-ID en attempt-ID;
+  tokens of andere secrets mogen nooit in labels of logs staan. De server accepteert iedere
+  mutatie alleen met het actuele attempt en fencing token.
+- **Centrale mocks**: `MOCKED` wordt server-side afgehandeld met dezelfde jobopslag,
+  schema-validatie en resultaten, maar zonder worker, lease of Dockercontainer. Productie weigert
+  deze route.
+- **Provider en model**: een vertrouwde consument vraagt beide exact aan binnen haar jobprofile; de
+  runtime valideert de keuze en wisselt nooit stilzwijgend van model.
 - **Credentialmodel**: allowlist per jobprofile (niet een denylist) — elk jobprofile bepaalt vooraf exact welke secrets, mounts en tools een job krijgt.
 - **Eén breed gedeeld execution-image**, niet per-profiel images: browser (Playwright/Chromium), build/test-toolchains, `oc`/`kubectl` en databaseclients zitten er allemaal in. Aanwezigheid van een tool geeft geen rechten; alleen de credentials/mounts die het jobprofile toestaat bepalen wat een job echt kan.
-- **Deterministische verificatierunner**: build/testcommando's die de AI claimt te hebben uitgevoerd, worden door een aparte, niet-AI component nogmaals gedraaid en tegen de Git-toestand vóór/na gecontroleerd.
+- **Deterministische verificatierunner**: repositoryprofielen die dit vereisen laten build- en
+  testcommando's door een aparte, niet-AI component herhalen en vergelijken de Git-toestand vóór en
+  na.
 
 ## Referentierepositories
 
 Beide staan naast deze repo in `~/git/` en mogen vrij gelezen worden voor context — er hoeft niets in gewijzigd te worden.
 
 - **Software Factory** — `/Users/robbertvdzon/git/softwarefactory` (GitHub: `robbertvdzon/software-factory`). Robbert's bestaande autonome multi-agent pipeline (planner/developer/reviewer/tester-agents) die tracker-stories omzet in gemergde PR's. De volwassen referentie voor hoe agents nu al in Docker draaien, browser-automation, build/test-toolchains, `oc`-toegang en de verificatierunner werken — deze runtime hergebruikt de architectuur en lessen daarvan, niet de code. Zie de sectie "Referentiemateriaal in andere repositories" in het stappenplan voor concrete bestandsverwijzingen (`Dockerfile.agent`, `DockerAgentRuntime.kt`, `TesterVerificationRunner.kt`, `.factory/verification.yaml`, `AgentWorkspace.kt`).
-- **Product Factory** — `/Users/robbertvdzon/git/product-factory` (GitHub: `robbertvdzon/product-factory`). Waar dit stappenplan oorspronkelijk is opgesteld, en de beoogde eerste pilot-consument van deze runtime (Fase 6).
+- **Product Factory** — `/Users/robbertvdzon/git/product-factory` (GitHub: `robbertvdzon/product-factory`). Eerste consument van `APPLICATION_WORK` in fase 5. Product Factory bouwt geen nieuwe eigen laptopworker.

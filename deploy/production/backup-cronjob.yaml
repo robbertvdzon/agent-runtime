@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: agent-runtime-database-backup}
+spec:
+  schedule: "17 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: postgres:17.6-alpine
+              env:
+                - {name: PGHOST, value: agent-runtime-postgresql}
+                - {name: PGDATABASE, value: agent_runtime}
+                - name: PGUSER
+                  valueFrom: {secretKeyRef: {name: agent-runtime-secrets, key: AR_DB_USERNAME}}
+                - name: PGPASSWORD
+                  valueFrom: {secretKeyRef: {name: agent-runtime-secrets, key: AR_DB_PASSWORD}}
+              command: [/bin/sh, -ec]
+              args:
+                - |
+                  umask 077
+                  dir=/backups
+                  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+                  tmp="$dir/.agent-runtime-$stamp.dump.tmp"
+                  final="$dir/agent-runtime-$stamp.dump"
+                  pg_dump --format=custom --file="$tmp"
+                  pg_restore --list "$tmp" >/dev/null
+                  sha256sum "$tmp" > "$tmp.sha256"
+                  mv "$tmp" "$final"
+                  mv "$tmp.sha256" "$final.sha256"
+                  find "$dir" -type f -mtime +14 -name 'agent-runtime-*.dump*' -delete
+              volumeMounts: [{name: backups, mountPath: /backups}]
+          volumes: [{name: backups, persistentVolumeClaim: {claimName: database-backups}}]

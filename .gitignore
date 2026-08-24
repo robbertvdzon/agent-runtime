@@ -1,0 +1,10 @@
+.DS_Store
+.idea/
+*.iml
+target/
+**/target/
+work/
+*.log
+properties.env
+secrets.env
+deploy/secrets-cluster.env

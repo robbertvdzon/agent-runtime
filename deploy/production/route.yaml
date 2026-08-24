@@ -1,0 +1,8 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata: {name: agent-runtime}
+spec:
+  host: agent-runtime.apps.sno.lab.vdzon.com
+  to: {kind: Service, name: agent-runtime-server}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}

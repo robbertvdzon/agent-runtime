@@ -1,0 +1,107 @@
+openapi: 3.1.0
+info:
+  title: Agent Runtime API
+  version: 1.0.0
+  description: Versioned asynchronous contract for opaque application and repository agent work.
+servers:
+  - url: /v1
+security:
+  - bearerAuth: []
+paths:
+  /jobs:
+    post:
+      operationId: createJob
+      summary: Create or return an idempotent job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateJobRequest'}
+      responses:
+        '202':
+          description: Accepted
+          content: {application/json: {schema: {$ref: '#/components/schemas/JobView'}}}
+    get:
+      operationId: listJobs
+      parameters:
+        - {in: query, name: status, schema: {type: string}}
+      responses:
+        '200':
+          description: Jobs visible to the authenticated tenant
+  /jobs/{jobId}:
+    get:
+      operationId: getJob
+      parameters: [{$ref: '#/components/parameters/JobId'}]
+      responses:
+        '200': {description: Job status}
+  /jobs/{jobId}/result:
+    get:
+      operationId: getJobResult
+      parameters: [{$ref: '#/components/parameters/JobId'}]
+      responses:
+        '200': {description: Immutable result}
+  /jobs/{jobId}/events:
+    get:
+      operationId: getJobEvents
+      parameters: [{$ref: '#/components/parameters/JobId'}]
+      responses:
+        '200': {description: Immutable event timeline}
+  /jobs/{jobId}/cancel:
+    post:
+      operationId: cancelJob
+      parameters: [{$ref: '#/components/parameters/JobId'}]
+      responses:
+        '200': {description: Cancelled or cancellation requested}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer}
+  parameters:
+    JobId: {in: path, name: jobId, required: true, schema: {type: string, format: uuid}}
+  schemas:
+    CreateJobRequest:
+      type: object
+      required: [jobKind, idempotencyKey, jobProfile, jobKey, provider, model, configurationVersion, instructionVersion, instructions, input]
+      properties:
+        jobKind: {type: string, enum: [APPLICATION_WORK, REPOSITORY_WORK]}
+        idempotencyKey: {type: string, maxLength: 160}
+        jobProfile: {type: string, maxLength: 100}
+        jobKey: {type: string, maxLength: 160}
+        provider: {type: string, enum: [CODEX, CLAUDE, MOCKED]}
+        model: {type: string, maxLength: 100}
+        configurationVersion: {type: string}
+        instructionVersion: {type: string}
+        instructions: {type: string, maxLength: 200000}
+        input: {}
+        responseSchema: {}
+        repositorySnapshot: {$ref: '#/components/schemas/RepositorySnapshot'}
+        repositoryRequest: {$ref: '#/components/schemas/RepositoryRequest'}
+        resourceRequests: {type: array, maxItems: 20, items: {type: object, required: [key], properties: {key: {type: string}}}}
+        executionTimeoutSeconds: {type: integer, minimum: 30, maximum: 86400, default: 3600}
+        maxAttempts: {type: integer, minimum: 1, maximum: 10, default: 3}
+        priority: {type: integer, minimum: 0, maximum: 100, default: 50}
+        consumerContext: {}
+    RepositorySnapshot:
+      type: object
+      required: [url, commitSha]
+      properties:
+        url: {type: string, pattern: '^https://'}
+        commitSha: {type: string, pattern: '^[0-9a-fA-F]{40}$'}
+    RepositoryRequest:
+      type: object
+      required: [alias, baseBranch]
+      properties:
+        alias: {type: string}
+        baseBranch: {type: string}
+        branchHint: {type: string}
+        publish: {type: boolean, default: true}
+    JobView:
+      type: object
+      required: [id, tenantId, jobKind, status, phase, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        tenantId: {type: string}
+        jobKind: {type: string}
+        status: {type: string, enum: [QUEUED, WAITING_FOR_WORKER, RUNNING, SUCCEEDED, FAILED, CANCELLED]}
+        phase: {type: string}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
