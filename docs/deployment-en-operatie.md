@@ -4,10 +4,13 @@
 
 | Omgeving | Namespace | Database | Route |
 |---|---|---|---|
-| Acceptatie | `agent-runtime-acceptance` | H2 in-memory | `agent-runtime-acceptance.apps.sno.lab.vdzon.com` |
-| Productie | `agent-runtime` | PostgreSQL op 5 GiB PVC | `agent-runtime.apps.sno.lab.vdzon.com` |
+| Acceptatie | `agent-runtime-acceptance` | H2 in-memory | `agent-runtime-acceptance.vdzonsoftware.nl` |
+| Productie | `agent-runtime` | PostgreSQL op 5 GiB PVC | `agent-runtime.vdzonsoftware.nl` |
 
 Acceptatie is resetbaar en staat `MOCKED` toe. Productie is duurzaam en weigert mockuitvoering.
+Cloudflare beëindigt publieke HTTPS en bereikt de OpenShift-route via HTTP. De routes gebruiken
+daarom, net als Software Factory, `insecureEdgeTerminationPolicy: Allow`; `Redirect` zou achter
+deze proxy een redirectlus maken.
 Beide omgevingen gebruiken dezelfde serverartifact en dezelfde externe v1-contracten.
 
 ## Secrets voorbereiden
