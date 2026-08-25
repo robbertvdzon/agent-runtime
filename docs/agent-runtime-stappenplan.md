@@ -13,6 +13,14 @@ OpenShift-overlays zijn aanwezig. De fases voor het omschakelen van Product Fact
 Factory, Newsfeed en HKH blijven bewust migratiefases in hun eigen repositories; de Runtime-grens
 waarop zij aansluiten is nu inzetbaar.
 
+Na deze release is voor `APPLICATION_WORK` een eenvoudiger v2-contract besloten. Eén complete
+`prompt` vervangt `instructions` plus `input`; domeincorrelatie en configuratieversies blijven bij
+de consument; projectcredentials worden lokaal door workers ontdekt en alleen bij naam gevraagd;
+kleine inputattachments worden Base64 aangeleverd; outputartifacts blijven bestanden; en iedere
+attempt krijgt een harde deadline. [Vereenvoudigd APPLICATION_WORK-contract v2](application-work-v2.md)
+is voor deze migratie leidend. De onderstaande v1-velden beschrijven de bestaande release en mogen
+niet als doelcontract voor de Product Factory-aansluiting worden gebruikt.
+
 Dit document is de enige bron voor deze roadmap. Het stond eerder tijdelijk in de Product Factory-repository (`docs/agent-runtime-stappenplan.md`); die kopie verwijst nu alleen nog hierheen.
 
 ## Referentiemateriaal in andere repositories
@@ -202,6 +210,11 @@ domeinentiteiten komen niet in het runtimecontract voor.
   werkvolgorde en beoordeling van het resultaat.
 
 ### Gemeenschappelijk aanvraagcontract
+
+De volgende veldlijst beschrijft v1. Voor `APPLICATION_WORK` v2 vervallen `jobProfile`, `jobKey`,
+`configurationVersion`, `instructionVersion`, `resourceRequests` en `consumerContext`; `instructions`
+plus `input` worden één `prompt`. Zie het leidende [v2-contract](application-work-v2.md). V1 blijft
+tijdens de migratie beschikbaar voor bestaande consumenten.
 
 Het versieerbare OpenAPI-contract bevat voor beide jobsoorten minimaal:
 
@@ -554,15 +567,27 @@ gebouwd.
 
 - In Product Factory een dunne Agent Runtime-client achter de publieke AI-uitvoeringscapability
   plaatsen.
-- De Product Factory-module haar globale `AiJobConfiguration` laten lezen en provider, model,
-  configuratieversie, complete instructies, input en resultaatschema bevroren meesturen.
-- Runtime-job-ID en idempotency key bij de wachtende Product Factory-processessie of meeting bewaren.
+- De Product Factory-module haar globale `AiJobConfiguration` laten lezen en alleen provider, model,
+  één complete prompt, resultaatschema, harde time-out, inputattachments, repositorysnapshot en
+  afgeleide environmentkeynamen bevroren meesturen. Jobkey, configuratieversie,
+  prompttemplateversie en domeincorrelatie blijven lokaal.
+- Een lokale Product Factory-outbox plus Runtime-job-ID en idempotency key bij de wachtende
+  processessie of meeting bewaren.
 - Een volgende geplande of handmatige procesrun status en resultaat laten lezen zonder een thread of
   HTTP-call open te houden.
 - Optionele publieke Gitcontext uitsluitend als URL plus volledige commit-SHA meesturen; er bestaat
   geen `product-factory-workspace` en geen Git-publicatie vanuit Product Factory-jobs.
 - Product Factory-integratietests en acceptatie de centrale `MOCKED`-route en Test Control API laten
   gebruiken. Unit tests mogen de Runtime-client faken.
+- De worker environmentkeynamen uit lokaal `project-credentials.env` laten registreren, de
+  gefilterde catalogus aan Product Factory aanbieden en alleen jobs claimen waarvoor alle gevraagde
+  namen beschikbaar zijn.
+- Product Factory per product zelf bekende keys aan agentrollen laten koppelen; Runtime kent deze
+  rollen niet en ontvangt nooit credentialwaarden.
+- Kleine Base64-inputattachments materialiseren en outputbestanden automatisch als artifacts
+  verzamelen.
+- De harde attemptdeadline in server en worker afdwingen; lease, slaap en recovery verlengen haar
+  nooit.
 - Veilige jobstatus, voortgang, fout en artifacts in de bestaande Product Factory-operatieweergave
   projecteren; de gedeelde monitor blijft daarnaast beschikbaar voor technische diagnose.
 - Vastleggen dat alleen Product Factory de schema-geldige AI-uitkomst inhoudelijk valideert en
@@ -577,6 +602,8 @@ gebouwd.
 - Een centrale mockjob en een echte Codex- of Claude-job doorlopen vanuit Product Factory dezelfde
   asynchrone domeinflow.
 - Product Factory beheert geen workercredential, attempt, lease, heartbeat of technische retry.
+- Product Factory kan ontdekte environmentkeys aan rollen koppelen en een echte job ontvangt alleen
+  de backend-side afgeleide subset; databases bevatten nooit de waarden.
 - Een Runtime-fout laat de gekoppelde processessie zichtbaar wachten of blokkeren en veroorzaakt
   geen dubbele AI-uitvoering of dubbele domeinpublicatie.
 
@@ -779,18 +806,22 @@ Per applicatie komen minimaal limieten voor gelijktijdige jobs, maximale looptij
 
 ## Beveiligingsgrenzen
 
-- Iedere applicatie krijgt een eigen serviceaccount en alleen toegestane profielen.
+- Iedere applicatie krijgt een eigen serviceaccount en server-side policy. V1 gebruikt toegestane
+  profielen; `APPLICATION_WORK` v2 leidt rechten af zonder vrij `jobProfile`-veld.
 - Iedere worker heeft een eigen roteerbare identiteit.
-- Provider, model en opgegeven limieten worden altijd tegen serviceaccount en jobprofile
+- Provider, model en opgegeven limieten worden altijd tegen serviceaccount en serverpolicy
   gevalideerd; payloadvelden verlenen zelf geen rechten.
-- Elk jobprofile bepaalt via een allowlist welke secrets, mounts en tools een agentcontainer krijgt; er is geen standaardset die alleen via een denylist wordt beperkt. Dit geldt ook wanneer een profiel brede capabilities toestaat zoals browser, build/test, `oc` of database-toegang: die worden per profiel expliciet toegekend, niet standaard meegegeven omdat het execution-image ze toevallig bevat.
+- V1-jobprofielen blijven geldig tijdens migratie. `APPLICATION_WORK` v2 gebruikt een vaste toolset
+  per consument en selecteert alleen geregistreerde environmentkeynamen uit zichtbare
+  projectprefixes. `REPOSITORY_WORK` behoudt zijn strengere repositoryprofielen.
 - Repository's worden via aliases en allowlists geselecteerd.
 - Een `APPLICATION_WORK`-repositorysnapshot mag alleen een toegestane publieke HTTPS-URL en exacte
   commit-SHA bevatten en heeft nooit een schrijfcredential.
 - Branchprefix, basisbranch, toegestane paden en validaties horen bij het profiel.
 - De agent krijgt geen GitHub-credential; de worker voert Git-publicatie uit.
-- Applicatieagents krijgen taakgebonden API-tokens, geen algemene database-URL.
-- Productiegegevens zijn nooit standaard toegankelijk. Alleen een jobprofile dat dat expliciet toekent kan een agent scoped en kortlevend toegang geven — er is geen categorie die per definitie verboden is.
+- Applicatieagents krijgen alleen de door de consumentrol geselecteerde lokale credentialsubset.
+  Voor deze persoonlijke projecten kunnen daarin bewust database-URL's of testaccounts staan; het
+  volledige bronbestand en Runtime-/providercredentials blijven buiten de container.
 - Execution images staan op een allowlist en zijn met versie of digest vastgezet.
 - Vrije shellcommando's in een jobpayload zijn verboden.
 - Prompt, log, result en foutdetails gaan door redactieregels en groottelimieten.
@@ -814,6 +845,9 @@ Per applicatie komen minimaal limieten voor gelijktijdige jobs, maximale looptij
   afronden.
 - De server accepteert voortgang en eindresultaat alleen met job-ID, attempt-ID en geldig fencing
   token.
+- Iedere echte attempt heeft daarnaast een bij claimen bevroren harde deadline. Server en worker
+  dwingen haar onafhankelijk af; heartbeat, slaap, lease en recovery kunnen haar niet verlengen en
+  ieder laat bericht wordt gefencet.
 - Retries krijgen een maximum en een expliciete back-off.
 - Git- en publicatiebijwerkingen gebruiken job-ID's om dubbele acties te herkennen.
 - Een worker reconcilieert journal en Dockercontainers vóór hij nieuwe jobs claimt. Dockerlabels

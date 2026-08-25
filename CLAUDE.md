@@ -7,6 +7,9 @@ Gedeeld platform waarmee geautoriseerde applicaties op OpenShift (Software Facto
 Lees eerst [`README.md`](README.md) en daarna [`docs/agent-runtime-stappenplan.md`](docs/agent-runtime-stappenplan.md).
 De repository bevat een werkende eerste platformrelease. Verander het externe contract alleen
 achterwaarts compatibel en pas contract, tests en documentatie samen aan.
+Lees voor nieuw `APPLICATION_WORK` ook
+[`docs/application-work-v2.md`](docs/application-work-v2.md); dit is het leidende doelcontract voor
+de Product Factory-migratie en wordt naast v1 ingevoerd.
 
 Kernbeslissingen om in het achterhoofd te houden (staan uitgewerkt in het stappenplan):
 
@@ -24,7 +27,10 @@ Kernbeslissingen om in het achterhoofd te houden (staan uitgewerkt in het stappe
   deze route.
 - **Provider en model**: een vertrouwde consument vraagt beide exact aan binnen haar jobprofile; de
   runtime valideert de keuze en wisselt nooit stilzwijgend van model.
-- **Credentialmodel**: allowlist per jobprofile (niet een denylist) — elk jobprofile bepaalt vooraf exact welke secrets, mounts en tools een job krijgt.
+- **Credentialmodel**: v1 en `REPOSITORY_WORK` gebruiken jobprofielen; `APPLICATION_WORK` v2 leidt
+  de vaste policy uit de consumentidentiteit af en vraagt alleen namen die een worker lokaal uit
+  `project-credentials.env` ontdekt. Runtime- en providercredentials blijven altijd buiten de
+  agentcontainer.
 - **Eén breed gedeeld execution-image**, niet per-profiel images: browser (Playwright/Chromium), build/test-toolchains, `oc`/`kubectl` en databaseclients zitten er allemaal in. Aanwezigheid van een tool geeft geen rechten; alleen de credentials/mounts die het jobprofile toestaat bepalen wat een job echt kan.
 - **Deterministische verificatierunner**: repositoryprofielen die dit vereisen laten build- en
   testcommando's door een aparte, niet-AI component herhalen en vergelijken de Git-toestand vóór en

@@ -66,9 +66,16 @@ De bron staat in
 De belangrijkste consumentenroutes zijn `POST /v1/jobs`, `GET /v1/jobs/{id}`,
 `GET /v1/jobs/{id}/result`, `GET /v1/jobs/{id}/events` en `POST /v1/jobs/{id}/cancel`.
 
+Voor de volgende contractversie is een vereenvoudigd `APPLICATION_WORK`-contract besloten met één
+complete prompt, kleine Base64-inputattachments, file-based outputartifacts, lokaal ontdekte
+projectcredentials en een harde attempt-time-out. Dit doelontwerp staat in
+[`docs/application-work-v2.md`](docs/application-work-v2.md). De huidige code en `/v1` implementeren
+dit nog niet en blijven tijdens de migratie achterwaarts compatibel.
+
 ## Documentatie
 
 - [Stappenplan en volledig ontwerp](docs/agent-runtime-stappenplan.md)
+- [Vereenvoudigd APPLICATION_WORK-contract v2](docs/application-work-v2.md)
 - [Implementatieplan betrouwbare JSON-resultaten](docs/implementatieplan-betrouwbare-json-resultaten.md)
 - [Architectuur en veiligheidsgrenzen](docs/architectuur-en-beveiliging.md)
 - [Deployment en operatie](docs/deployment-en-operatie.md)

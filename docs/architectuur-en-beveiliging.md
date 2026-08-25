@@ -1,5 +1,12 @@
 # Architectuur en beveiliging
 
+Voor `APPLICATION_WORK` geldt aanvullend het doelontwerp
+[Vereenvoudigd APPLICATION_WORK-contract v2](application-work-v2.md). De huidige implementatie volgt
+nog v1. V2 houdt Runtime- en providercredentials buiten de agentcontainer, maar maakt een bewust
+geselecteerde subset uit lokaal `project-credentials.env` wel leesbaar voor de agent. Dit is voor
+deze persoonlijke projecten een expliciet geaccepteerde risicoafweging en geen algemene veilige
+standaard voor multitenant- of bedrijfscredentials.
+
 ## Grens van het platform
 
 Agent Runtime kent alleen technische uitvoering. `APPLICATION_WORK` bevat opaque instructies en
@@ -40,8 +47,10 @@ Vier onafhankelijke bearercredentials bestaan in productie:
 | `AR_ADMIN_TOKEN` | Alle veilige metadata bekijken, terminal werk opnieuw aanbieden en mocks in acceptatie beheren |
 
 Tenant en rechten volgen uitsluitend uit het token. Payloadvelden kunnen nooit meer rechten geven.
-Een ongeldig token, profiel, resource, repositoryalias, provider of werksoort faalt vóór opslag of
-uitvoering. Productie weigert `MOCKED` en stelt de Test Control API niet bruikbaar beschikbaar.
+In v1 falen een ongeldig profiel of resource; in `APPLICATION_WORK` v2 verdwijnen deze vrije velden
+en gelden vaste serverpolicies plus de voor de consument zichtbare projectprefixes. Een ongeldig
+token, environmentkey, repositoryalias, provider of werksoort faalt vóór uitvoering. Productie
+weigert `MOCKED` en stelt de Test Control API niet bruikbaar beschikbaar.
 
 ## Secrets
 
@@ -56,12 +65,20 @@ Het secretproces volgt dezelfde regels als Product Factory:
   genereert onafhankelijke ontbrekende waarden;
 - een productieproces start niet met lege, korte of lokale standaardtokens.
 
+De lokale worker scheidt vanaf contract v2 deze Runtime-secrets van
+`project-credentials.env`. Alleen namen uit dat tweede, eveneens gitignored en met `0600`
+beschermde bestand worden geregistreerd. Een job bevat uitsluitend namen; de worker maakt per
+attempt een tijdelijke subset. Het bronbestand zelf en alle `AR_*`-, provider- en
+Git-publicatiecredentials worden nooit gemount.
+
 ## Execution-containers
 
 Het brede image bevat Codex, Claude, Git, Java/Maven, Node, Playwright/Chromium, `oc`/`kubectl` en
-PostgreSQL-tools. Aanwezigheid van tooling verleent geen autoriteit. Het jobprofiel bepaalt welke
-resourcekeys zijn toegestaan; credentials worden vanaf de worker als read-only bron gemount en
-binnen de tijdelijke containerhome gekopieerd.
+PostgreSQL-tools. Aanwezigheid van tooling verleent geen autoriteit. In v1 bepaalt een jobprofiel
+welke resourcekeys zijn toegestaan. In `APPLICATION_WORK` v2 geldt een vaste serverpolicy per
+consument en selecteert de job alleen geregistreerde environmentkeynamen. De worker materialiseert
+daarvan een tijdelijke, read-only `secrets.env`; het volledige lokale bronbestand wordt nooit
+gemount.
 
 De agentcontainer krijgt nooit het GitHub-token waarmee de worker publiceert. Bij
 `APPLICATION_WORK` verwijdert de worker zelfs de remote na een detached checkout. Bij
