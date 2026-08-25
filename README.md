@@ -69,6 +69,7 @@ De belangrijkste consumentenroutes zijn `POST /v1/jobs`, `GET /v1/jobs/{id}`,
 ## Documentatie
 
 - [Stappenplan en volledig ontwerp](docs/agent-runtime-stappenplan.md)
+- [Implementatieplan betrouwbare JSON-resultaten](docs/implementatieplan-betrouwbare-json-resultaten.md)
 - [Architectuur en veiligheidsgrenzen](docs/architectuur-en-beveiliging.md)
 - [Deployment en operatie](docs/deployment-en-operatie.md)
 - [Runbook](docs/runbook.md)
