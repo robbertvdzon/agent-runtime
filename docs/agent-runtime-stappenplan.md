@@ -124,7 +124,7 @@ De server is het control plane en is verantwoordelijk voor:
 - prioriteiten, quota en eerlijke planning tussen applicaties;
 - workerregistratie, capabilities en heartbeats;
 - leases, time-outs, retries en annuleren;
-- jobevents, geredigeerde logs, resultaten en artefactmetadata;
+- jobevents, geredigeerde logs, zichtbare agenttranscriptdelen, resultaten en artefactmetadata;
 - deterministische mockuitvoering buiten productie;
 - monitor-API en live statusupdates;
 - audittrail van alle beslissingen en statusovergangen.
@@ -142,7 +142,7 @@ De worker is verantwoordelijk voor:
 - de gekozen AI-provider starten en bewaken;
 - bij repositorywerk de volledige Git-lifecycle uitvoeren;
 - toegestane validaties uitvoeren;
-- voortgang, logs en resultaten terugmelden;
+- voortgang, geredigeerde zichtbare agenttranscriptdelen, logs en resultaten terugmelden;
 - bij herstart herkennen welke agentcontainers nog daadwerkelijk draaien en die aan de juiste job koppelen, zonder een taak dubbel uit te voeren;
 - lokale tijdelijke gegevens gecontroleerd opruimen.
 
@@ -171,12 +171,16 @@ herstart nooit zelf een nog actieve of herstelbare Runtime-attempt.
 De monitor toont minimaal:
 
 - online en offline workers en hun capabilities;
-- wachtende, actieve, geslaagde, mislukte en geannuleerde jobs;
-- de actuele stap van een job;
-- geredigeerde logs en foutmeldingen;
-- looptijd, retries en gebruikte provider;
-- bij repositoryjobs de branch, commit, pull request en diffstatistieken;
-- acties voor opnieuw proberen en annuleren, afhankelijk van de status.
+- actieve jobs met actuele stap, looptijd, worker en provider/model;
+- de wachtrij met claimvolgorde en wachtreden;
+- de laatste 30 afgeronde jobs per pagina, server-side zoeken en cursorpaginering;
+- een jobdetail met schema-gevalideerd resultaat of veilige fout;
+- het volledige beschikbare, geredigeerde zichtbare agenttranscript, ook live tijdens uitvoering.
+
+Het transcript bevat geen verborgen chain-of-thought. Het bevat alleen de exacte prompt,
+provider-zichtbare agenttekst, zichtbare toolaanroepen en geredigeerde tooluitvoer die de adapter
+daadwerkelijk kan leveren. De beheerinterface biedt in de MVP geen annuleren, retry, mock- of
+configuratieacties.
 
 ## Jobsoorten, configuratie en providers
 
@@ -453,6 +457,10 @@ Een achtergrondworker op macOS die veilig verbinding maakt, een gecontroleerde t
 - Heartbeat en veilige inhoudelijke voortgang scheiden: heartbeat bewijst alleen dat attempt en
   providerproces leven; voortgang bevat uitsluitend fase, optioneel percentage en een korte
   geredigeerde melding, nooit chain-of-thought of ruwe provideroutput.
+- Naast voortgang een afzonderlijke duurzame transcriptstream toevoegen. Provideradapters leveren
+  de exacte prompt en alle beschikbare zichtbare agenttekst, toolaanroepen en tooluitvoer als
+  oplopende, idempotente delen aan; worker en server redigeren vóór opslag. Verborgen
+  chain-of-thought is nooit onderdeel van dit contract.
 - Lease ophalen, verlengen, voltooien en vrijgeven implementeren.
 - Begrensde artifacts met MIME-type, grootte en SHA-256 uploaden voordat het eindresultaat wordt
   gemeld.
@@ -536,11 +544,12 @@ De runtime is zonder database- of clusterinspectie operationeel te volgen.
 ### Werk
 
 - Google-authenticatie voor beheerders toevoegen.
-- Overzicht maken van workers, jobs, wachtrijen en foutpercentages.
-- Jobdetail tonen met tijdlijn, actuele fase en geredigeerde logs.
-- Filteren op applicatie, profiel, status, provider en periode.
-- Annuleren en gecontroleerd opnieuw proberen toevoegen.
-- Quota, prioriteiten en worker-capabilities alleen-lezen tonen.
+- Losse pagina's maken voor actieve jobs, wachtrij, de laatste 30 afgeronde jobs en workers.
+- Afgeronde jobs server-side doorzoekbaar en met cursor-gebaseerde volgende/vorige pagina tonen.
+- Jobdetail tonen met resultaat of veilige fout en het volledige beschikbare geredigeerde
+  agenttranscript.
+- Het transcript van een actieve job incrementeel bijwerken vanaf het laatst ontvangen
+  sequence-nummer, zonder scrollpositie of reeds geladen tekst te verliezen.
 - Prometheus-metrics en waarschuwingen toevoegen voor:
   - geen worker online;
   - oudste wachtende job;
@@ -552,8 +561,9 @@ De runtime is zonder database- of clusterinspectie operationeel te volgen.
 ### Definition of Done
 
 - Een beheerder kan de oorzaak van een vastgelopen voorbeeldjob vanuit de monitor achterhalen.
+- Een beheerder kan het resultaat en volledige beschikbare transcript van een afgeronde job lezen.
+- Een open detail van een actieve job ontvangt nieuwe transcriptdelen zonder duplicaten.
 - Gevoelige payloadvelden en secrets worden nergens in de interface getoond.
-- Alle beheerdersacties komen in de audittrail.
 
 ## Fase 5 — Product Factory als eerste consument
 

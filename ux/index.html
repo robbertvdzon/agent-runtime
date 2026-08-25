@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Agent Runtime — operationele monitor</title>
+  <style>
+    :root {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #123432; background: #f6f8f5;
+      --ink: #123432; --muted: #6d8580; --dark: #0c3331; --green: #0e9675;
+      --mint: #2dd4aa; --line: #d9e5df; --surface: #fff; --soft: #eef5f1;
+      --blue: #e4f3f8; --blue-ink: #1a6b83; --amber: #fff1e7;
+      --amber-ink: #9a4a21; --red: #fdebea; --red-ink: #a83b36;
+      --shadow: 0 18px 50px rgba(18, 52, 50, .08);
+    }
+    * { box-sizing: border-box; }
+    html { min-width: 320px; }
+    body { margin: 0; min-height: 100vh; background: #f6f8f5; }
+    button, input { font: inherit; color: inherit; }
+    button:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 3px solid #56d9b5; outline-offset: 3px; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1, h2, h3, p, strong, small, pre { overflow-wrap: anywhere; }
+    h1 { margin-bottom: 8px; font-size: clamp(2.25rem, 4vw, 3.5rem); line-height: 1; letter-spacing: -.045em; }
+    h2 { margin-bottom: 7px; font-size: 1.45rem; letter-spacing: -.025em; }
+    .app { min-height: 100vh; display: grid; grid-template-columns: 270px minmax(0, 1fr); }
+
+    .sidebar { position: sticky; top: 0; height: 100vh; z-index: 20; display: flex; flex-direction: column; padding: 28px 16px 18px; color: #d8ebe6; background: var(--dark); }
+    .brand { display: flex; gap: 13px; align-items: center; padding: 8px 12px 34px; }
+    .brand strong { display: block; color: #fff; font-size: 1.18rem; }
+    .brand small { display: block; margin-top: 2px; color: #8fb0aa; }
+    .brand-mark { width: 42px; height: 42px; border-radius: 12px; background: #20caa1; display: flex; gap: 3px; align-items: flex-end; justify-content: center; padding: 9px; }
+    .brand-mark span { width: 7px; border-radius: 5px; background: white; }
+    .brand-mark span:nth-child(1) { height: 13px; }
+    .brand-mark span:nth-child(2) { height: 23px; }
+    .brand-mark span:nth-child(3) { height: 17px; }
+    .nav { display: grid; gap: 5px; }
+    .nav button { display: grid; grid-template-columns: 24px 1fr auto; gap: 8px; align-items: center; min-height: 52px; padding: 0 14px; border: 0; border-radius: 13px; color: #adc9c3; background: transparent; text-align: left; cursor: pointer; }
+    .nav button:hover { color: #fff; background: #174642; }
+    .nav button.active { color: #fff; background: #23514e; box-shadow: inset 4px 0 var(--mint); }
+    .nav-icon { color: #39caaa; text-align: center; }
+    .nav-count { min-width: 27px; padding: 3px 8px; border-radius: 99px; background: #35615e; color: #fff; text-align: center; font-size: .75rem; font-weight: 800; }
+    .sidebar-footer { margin-top: auto; display: flex; gap: 11px; align-items: center; padding: 20px 12px 2px; border-top: 1px solid #28504d; }
+    .avatar { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: #9cebd5; color: #174943; font-weight: 850; }
+    .sidebar-footer strong, .sidebar-footer small { display: block; }
+    .sidebar-footer strong { color: #fff; }
+    .sidebar-footer small { color: #8fb0aa; }
+    .sidebar-close { display: none; position: absolute; top: 12px; right: 12px; border: 0; background: transparent; color: #fff; font-size: 1.9rem; cursor: pointer; }
+
+    .page { min-width: 0; }
+    .topbar { position: sticky; top: 0; z-index: 15; min-height: 76px; display: flex; align-items: center; gap: 15px; padding: 12px clamp(18px, 4vw, 56px); border-bottom: 1px solid var(--line); background: rgba(250,252,249,.94); backdrop-filter: blur(16px); }
+    .menu { display: none; border: 0; background: transparent; font-size: 1.45rem; cursor: pointer; }
+    .environment, .refresh { min-height: 42px; display: inline-flex; align-items: center; gap: 9px; padding: 8px 13px; border: 1px solid var(--line); border-radius: 12px; background: #fff; font-weight: 800; }
+    .environment i, .live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 5px #dcf5eb; }
+    .spacer { flex: 1; }
+    .live { display: flex; align-items: center; gap: 8px; color: #58736e; font-size: .9rem; }
+    .refresh { color: var(--green); cursor: pointer; }
+
+    main { min-width: 0; max-width: 1500px; margin: 0 auto; padding: 50px clamp(18px, 4vw, 58px) 80px; }
+    .view { display: none; }
+    .view.active { display: block; }
+    .heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 22px; margin-bottom: 29px; }
+    .heading p:last-child { margin: 0; color: var(--muted); font-size: 1.05rem; }
+    .eyebrow { margin-bottom: 10px; color: #14896f; font-size: .74rem; font-weight: 850; letter-spacing: .16em; text-transform: uppercase; }
+    .surface { border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); overflow: hidden; }
+    .snapshot { margin: 18px 0 0; color: var(--muted); font-size: .83rem; text-align: right; }
+
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 17px 19px; border-top: 1px solid #e4ece8; text-align: left; vertical-align: middle; }
+    th { border-top: 0; color: #718681; font-size: .72rem; letter-spacing: .1em; text-transform: uppercase; }
+    td strong, td small { display: block; }
+    td small { margin-top: 4px; color: var(--muted); }
+    tbody tr[data-job] { cursor: pointer; }
+    tbody tr[data-job]:hover { background: #f4f8f6; }
+    .job-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; }
+    .status { display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 99px; font-size: .77rem; font-weight: 800; white-space: nowrap; }
+    .running { background: var(--blue); color: var(--blue-ink); }
+    .ready, .success { background: #dcf5ea; color: #08765d; }
+    .waiting { background: #eeeafb; color: #674b9f; }
+    .delayed { background: var(--amber); color: var(--amber-ink); }
+    .failed { background: var(--red); color: var(--red-ink); }
+    .neutral { background: #edf2ef; color: #5b716c; }
+    .progress { width: min(170px, 100%); height: 7px; margin-top: 9px; overflow: hidden; border-radius: 99px; background: #e4ece8; }
+    .progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #12ad86, #32c9a2); }
+
+    .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 15px; }
+    .search { flex: 1; min-height: 46px; padding: 0 15px; border: 1px solid #bfd0c9; border-radius: 12px; background: #fff; }
+    .page-size { color: var(--muted); font-size: .88rem; font-weight: 750; }
+    .pagination { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-top: 15px; }
+    .pagination div { display: flex; gap: 8px; }
+    .secondary, .text-button { min-height: 42px; border-radius: 11px; padding: 9px 15px; font-weight: 800; cursor: pointer; }
+    .secondary { border: 1px solid #c9d9d3; background: #fff; }
+    .secondary:disabled { opacity: .45; cursor: default; }
+    .text-button { border: 0; padding-inline: 0; background: transparent; color: #087e65; }
+
+    .workers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .worker { min-width: 0; padding: 23px; }
+    .worker-head { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; }
+    .machine { display: flex; gap: 12px; align-items: center; min-width: 0; }
+    .machine-icon { flex: 0 0 42px; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; background: #e1f5ed; color: #087d64; font-size: 1.2rem; }
+    .machine strong, .machine small { display: block; }
+    .machine small { margin-top: 4px; color: var(--muted); }
+    .chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 19px 0; }
+    .chip { padding: 5px 9px; border: 1px solid var(--line); border-radius: 99px; background: #f8fbf9; font-size: .75rem; font-weight: 750; }
+    .current { padding: 14px; border-radius: 13px; background: var(--soft); }
+    .current small, .current strong { display: block; }
+    .current small { margin-bottom: 4px; color: var(--muted); }
+
+    .back { margin-bottom: 17px; border: 0; background: transparent; color: #087e65; font-weight: 800; cursor: pointer; }
+    .detail-hero { padding: 27px; margin-bottom: 16px; }
+    .detail-title { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; }
+    .detail-title h1 { font-size: clamp(1.9rem, 3vw, 2.7rem); }
+    .detail-meta { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 11px; margin-top: 22px; }
+    .meta { min-width: 0; padding: 13px; border-radius: 12px; background: #f2f7f4; }
+    .meta small, .meta strong { display: block; }
+    .meta small { margin-bottom: 4px; color: var(--muted); }
+    .tabs { display: flex; gap: 5px; padding: 5px; border: 1px solid var(--line); border-radius: 13px; background: #fff; }
+    .tabs button { min-height: 40px; padding: 8px 14px; border: 0; border-radius: 9px; background: transparent; font-weight: 800; cursor: pointer; }
+    .tabs button.active { color: #08785f; background: #e3f5ee; }
+    .detail-panel { display: none; margin-top: 15px; padding: 25px; }
+    .detail-panel.active { display: block; }
+    .result-note { padding: 17px; border-radius: 13px; color: var(--muted); background: var(--soft); }
+    pre { margin: 0; padding: 19px; overflow-x: auto; border-radius: 13px; color: #d9f6ec; background: #102f2e; white-space: pre-wrap; font: .86rem/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .transcript-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 18px; }
+    .transcript-head p { margin: 4px 0 0; color: var(--muted); }
+    .transcript { display: grid; gap: 12px; }
+    .message { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 15px; padding: 17px; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+    .message-label strong, .message-label time { display: block; }
+    .message-label time { margin-top: 4px; color: var(--muted); font-size: .75rem; }
+    .message-text { margin: 0; white-space: pre-wrap; line-height: 1.55; }
+    .message.tool { background: #f5f8f6; }
+    .message.agent { border-color: #cde7de; background: #f4fbf8; }
+    .message.correction { border-color: #f1d2bc; background: #fff9f5; }
+    .live-label { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 99px; color: #08765d; background: #dcf5ea; font-size: .77rem; font-weight: 850; }
+    .live-label i { width: 8px; height: 8px; border-radius: 50%; background: #0e9675; }
+    .redacted { display: inline-block; padding: 2px 6px; border-radius: 5px; color: #7b4a1c; background: #fff0d7; font-weight: 750; }
+    .toast { position: fixed; right: 22px; bottom: 22px; z-index: 40; max-width: calc(100vw - 32px); padding: 14px 17px; border-radius: 12px; color: #fff; background: var(--dark); box-shadow: 0 15px 40px #0004; transform: translateY(140%); transition: transform .2s ease; }
+    .toast.visible { transform: translateY(0); }
+    .backdrop { display: none; }
+
+    @media (max-width: 1000px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { position: fixed; left: 0; width: min(300px, 88vw); transform: translateX(-105%); box-shadow: 20px 0 60px #0016; transition: transform .2s ease; }
+      body.nav-open .sidebar { transform: translateX(0); }
+      .sidebar-close, .menu { display: block; }
+      .backdrop { position: fixed; inset: 0; z-index: 19; background: #062a2866; }
+      body.nav-open .backdrop { display: block; }
+      .detail-meta { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 720px) {
+      .topbar { padding: 10px 14px; gap: 10px; }
+      .live span:last-child, .refresh span { display: none; }
+      main { padding: 30px 14px 60px; }
+      .heading, .detail-title { align-items: flex-start; flex-direction: column; }
+      .toolbar { align-items: stretch; flex-direction: column; }
+      .workers { grid-template-columns: 1fr; }
+      .table-wrap table, .table-wrap thead, .table-wrap tbody, .table-wrap tr, .table-wrap td { display: block; }
+      .table-wrap thead { display: none; }
+      .table-wrap tbody { display: grid; gap: 10px; padding: 10px; }
+      .table-wrap tr { padding: 14px; border: 1px solid var(--line); border-radius: 14px; }
+      .table-wrap td { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 8px; padding: 7px 0; border: 0; }
+      .table-wrap td::before { content: attr(data-label); color: var(--muted); font-size: .71rem; font-weight: 850; letter-spacing: .04em; text-transform: uppercase; }
+      .table-wrap td:first-child { display: block; }
+      .table-wrap td:first-child::before { display: none; }
+      .detail-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .message { grid-template-columns: 1fr; gap: 8px; }
+    }
+    @media (max-width: 420px) {
+      h1 { font-size: 2.2rem; }
+      .worker, .detail-hero, .detail-panel { padding: 19px; }
+      .worker-head { flex-direction: column; }
+      .transcript-head { align-items: flex-start; flex-direction: column; }
+      .detail-meta { grid-template-columns: 1fr; }
+      .pagination { align-items: flex-start; flex-direction: column; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" aria-label="Hoofdnavigatie">
+      <button class="sidebar-close" aria-label="Navigatie sluiten" data-action="close-nav">×</button>
+      <div class="brand"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span><strong>Agent Runtime</strong><small>Operationele monitor</small></span></div>
+      <nav class="nav">
+        <button class="active" data-view="running"><span class="nav-icon">↗</span><span>Actieve jobs</span><span class="nav-count">2</span></button>
+        <button data-view="queue"><span class="nav-icon">⇥</span><span>Wachtrij</span><span class="nav-count">3</span></button>
+        <button data-view="completed"><span class="nav-icon">✓</span><span>Afgeronde jobs</span><span></span></button>
+        <button data-view="workers"><span class="nav-icon">◇</span><span>Workers</span><span class="nav-count">2</span></button>
+      </nav>
+      <div class="sidebar-footer"><span class="avatar">RV</span><span><strong>Robbert</strong><small>Beheerder</small></span></div>
+    </aside>
+    <button class="backdrop" aria-label="Navigatie sluiten" data-action="close-nav"></button>
+
+    <div class="page">
+      <header class="topbar">
+        <button class="menu" aria-label="Menu openen" data-action="open-nav">☰</button>
+        <span class="environment"><i></i> Productie</span><span class="spacer"></span>
+        <span class="live"><i class="live-dot"></i><span>Live</span><span>· momentopname 21:14:08</span></span>
+        <button class="refresh" data-action="refresh" aria-label="Gegevens verversen">↻ <span>Verversen</span></button>
+      </header>
+
+      <main>
+        <section class="view active" id="view-running" aria-labelledby="running-title">
+          <div class="heading"><div><p class="eyebrow">Uitvoering</p><h1 id="running-title">Actieve jobs</h1><p>Werk dat op dit moment door een worker wordt uitgevoerd.</p></div><span class="status running">2 actief</span></div>
+          <div class="surface table-wrap"><table><thead><tr><th>Job</th><th>Applicatie</th><th>Uitvoering</th><th>Worker</th><th>Looptijd</th></tr></thead><tbody>
+            <tr tabindex="0" data-job="running-design"><td data-label="Job"><strong>product-design.session</strong><small class="job-id">64c1…a2f9 · APPLICATION_WORK</small></td><td data-label="Applicatie"><strong>Product Factory</strong><small>Codex · gpt-5.6-terra</small></td><td data-label="Uitvoering"><span class="status running">JSON-correctie</span><div class="progress" aria-label="68 procent voltooid"><span style="width:68%"></span></div></td><td data-label="Worker"><strong>macbook-robbert</strong><small>Heartbeat 8 sec geleden</small></td><td data-label="Looptijd"><strong>12 minuten</strong><small>gestart 21:02</small></td></tr>
+            <tr tabindex="0" data-job="running-dev"><td data-label="Job"><strong>developer.implement</strong><small class="job-id">fa32…17c8 · REPOSITORY_WORK</small></td><td data-label="Applicatie"><strong>Software Factory</strong><small>Codex · gpt-5.6-sol</small></td><td data-label="Uitvoering"><span class="status running">Tests uitvoeren</span><div class="progress" aria-label="81 procent voltooid"><span style="width:81%"></span></div></td><td data-label="Worker"><strong>macbook-robbert</strong><small>Heartbeat 8 sec geleden</small></td><td data-label="Looptijd"><strong>7 minuten</strong><small>gestart 21:07</small></td></tr>
+          </tbody></table></div><p class="snapshot">Klik op een job om de live AI-conversatie te volgen.</p>
+        </section>
+
+        <section class="view" id="view-queue" aria-labelledby="queue-title">
+          <div class="heading"><div><p class="eyebrow">Planning</p><h1 id="queue-title">Wachtrij</h1><p>Werk dat nog niet wordt uitgevoerd, in verwachte claimvolgorde.</p></div><span class="status waiting">3 wachtend</span></div>
+          <div class="surface table-wrap"><table><thead><tr><th>Volgorde</th><th>Job</th><th>Applicatie</th><th>Reden</th><th>Wachttijd</th></tr></thead><tbody>
+            <tr><td data-label="Volgorde"><strong>1</strong></td><td data-label="Job"><strong>dispatcher.sync-result</strong><small class="job-id">8fa3…11b2 · APPLICATION_WORK</small></td><td data-label="Applicatie"><strong>Product Factory</strong><small>Codex · gpt-5.6-terra</small></td><td data-label="Reden"><span class="status ready">Klaar om te claimen</span></td><td data-label="Wachttijd"><strong>2 minuten</strong></td></tr>
+            <tr><td data-label="Volgorde"><strong>2</strong></td><td data-label="Job"><strong>quality.story-check</strong><small class="job-id">24b8…e771 · APPLICATION_WORK</small></td><td data-label="Applicatie"><strong>Product Factory</strong><small>Claude · sonnet-4-6</small></td><td data-label="Reden"><span class="status waiting">Wacht op worker</span></td><td data-label="Wachttijd"><strong>8 minuten</strong></td></tr>
+            <tr><td data-label="Volgorde"><strong>3</strong></td><td data-label="Job"><strong>developer.review</strong><small class="job-id">b471…c903 · REPOSITORY_WORK</small></td><td data-label="Applicatie"><strong>Software Factory</strong><small>Codex · gpt-5.6-sol</small></td><td data-label="Reden"><span class="status delayed">Retry om 21:20</span></td><td data-label="Wachttijd"><strong>5 minuten</strong></td></tr>
+          </tbody></table></div>
+        </section>
+
+        <section class="view" id="view-completed" aria-labelledby="completed-title">
+          <div class="heading"><div><p class="eyebrow">Historie</p><h1 id="completed-title">Afgeronde jobs</h1><p>De nieuwste resultaten, maximaal 30 jobs per pagina.</p></div></div>
+          <div class="toolbar"><input class="search" id="completed-search" type="search" placeholder="Zoek op job, ID of applicatie" aria-label="Afgeronde jobs zoeken"><span class="page-size">30 per pagina</span></div>
+          <div class="surface table-wrap"><table><thead><tr><th>Job</th><th>Applicatie</th><th>Provider</th><th>Status</th><th>Afgerond</th><th>Looptijd</th></tr></thead><tbody id="completed-table">
+            <tr tabindex="0" data-job="completed-design"><td data-label="Job"><strong>product-design.session</strong><small class="job-id">20a1…c100 · APPLICATION_WORK</small></td><td data-label="Applicatie"><strong>Product Factory</strong><small>productontwerp</small></td><td data-label="Provider"><strong>Codex</strong><small>gpt-5.6-terra</small></td><td data-label="Status"><span class="status success">Geslaagd</span></td><td data-label="Afgerond"><strong>Vandaag 20:42</strong></td><td data-label="Looptijd"><strong>18 minuten</strong></td></tr>
+            <tr tabindex="0" data-job="completed-dev"><td data-label="Job"><strong>developer.implement</strong><small class="job-id">18fb…d283 · REPOSITORY_WORK</small></td><td data-label="Applicatie"><strong>Software Factory</strong><small>story SF-281</small></td><td data-label="Provider"><strong>Codex</strong><small>gpt-5.6-sol</small></td><td data-label="Status"><span class="status success">Geslaagd</span></td><td data-label="Afgerond"><strong>Vandaag 20:31</strong></td><td data-label="Looptijd"><strong>24 minuten</strong></td></tr>
+            <tr tabindex="0" data-job="completed-failed"><td data-label="Job"><strong>planning.session</strong><small class="job-id">91a0…42bd · APPLICATION_WORK</small></td><td data-label="Applicatie"><strong>Product Factory</strong><small>productplanning</small></td><td data-label="Provider"><strong>Claude</strong><small>haiku-4-5</small></td><td data-label="Status"><span class="status failed">Mislukt</span></td><td data-label="Afgerond"><strong>Vandaag 19:54</strong></td><td data-label="Looptijd"><strong>6 minuten</strong></td></tr>
+            <tr tabindex="0" data-job="completed-design"><td data-label="Job"><strong>quality.epic-check</strong><small class="job-id">7ec1…a801 · APPLICATION_WORK</small></td><td data-label="Applicatie"><strong>Product Factory</strong><small>kwaliteitsbewaking</small></td><td data-label="Provider"><strong>Claude</strong><small>sonnet-4-6</small></td><td data-label="Status"><span class="status success">Geslaagd</span></td><td data-label="Afgerond"><strong>Vandaag 18:22</strong></td><td data-label="Looptijd"><strong>11 minuten</strong></td></tr>
+            <tr tabindex="0" data-job="completed-cancelled"><td data-label="Job"><strong>meeting.minutes</strong><small class="job-id">01dc…0ae4 · APPLICATION_WORK</small></td><td data-label="Applicatie"><strong>Product Factory</strong><small>overleg</small></td><td data-label="Provider"><strong>Codex</strong><small>gpt-5.6-terra</small></td><td data-label="Status"><span class="status neutral">Geannuleerd</span></td><td data-label="Afgerond"><strong>Gisteren 16:04</strong></td><td data-label="Looptijd"><strong>2 minuten</strong></td></tr>
+          </tbody></table></div>
+          <div class="pagination"><span id="page-label">1–30 van 86 jobs</span><div><button class="secondary" id="previous-page" disabled>Vorige</button><button class="secondary" id="next-page">Volgende</button></div></div>
+        </section>
+
+        <section class="view" id="view-workers" aria-labelledby="workers-title">
+          <div class="heading"><div><p class="eyebrow">Capaciteit</p><h1 id="workers-title">Workers</h1><p>Beschikbaarheid en ondersteunde uitvoering.</p></div><span class="status ready">1 van 2 online</span></div>
+          <div class="workers">
+            <article class="surface worker"><div class="worker-head"><div class="machine"><span class="machine-icon">▣</span><span><strong>macbook-robbert</strong><small>Heartbeat 8 seconden geleden</small></span></div><span class="status ready">Online · 2/2</span></div><div class="chips"><span class="chip">Codex</span><span class="chip">Claude</span><span class="chip">Application work</span><span class="chip">Repository work</span></div><div class="current"><small>Actuele jobs</small><strong>product-design.session · developer.implement</strong></div></article>
+            <article class="surface worker"><div class="worker-head"><div class="machine"><span class="machine-icon">▣</span><span><strong>mac-mini-lab</strong><small>Laatst gezien 2 dagen geleden</small></span></div><span class="status neutral">Offline · 0/1</span></div><div class="chips"><span class="chip">Codex</span><span class="chip">Application work</span></div><div class="current"><small>Actuele job</small><strong>Geen — worker offline</strong></div></article>
+          </div>
+        </section>
+
+        <section class="view" id="view-detail" aria-labelledby="detail-title">
+          <button class="back" id="detail-back">← Terug naar afgeronde jobs</button>
+          <section class="surface detail-hero">
+            <div class="detail-title"><div><p class="eyebrow" id="detail-context">Product Factory · APPLICATION_WORK</p><h1 id="detail-title">product-design.session</h1><p id="detail-summary">De job is succesvol afgerond.</p></div><span class="status success" id="detail-status">Geslaagd</span></div>
+            <div class="detail-meta"><div class="meta"><small>Job-ID</small><strong id="detail-id">20a1…c100</strong></div><div class="meta"><small>Provider</small><strong id="detail-provider">Codex · gpt-5.6-terra</strong></div><div class="meta"><small>Worker</small><strong>macbook-robbert</strong></div><div class="meta"><small>Gestart</small><strong>Vandaag 20:24</strong></div><div class="meta"><small>Looptijd</small><strong id="detail-duration">18 minuten</strong></div></div>
+          </section>
+          <div class="tabs" aria-label="Jobdetail"><button class="active" data-tab="result">Resultaat</button><button data-tab="transcript">AI-conversatie</button></div>
+          <section class="surface detail-panel active" data-panel="result"><div id="result-content"><pre>{
+  "status": "SUCCEEDED",
+  "summary": "Twee duidelijke productepics opgesteld.",
+  "epicsCreated": ["EP-021", "EP-022"],
+  "artifacts": ["mobile-flow.png"]
+}</pre></div></section>
+          <section class="surface detail-panel" data-panel="transcript">
+            <div class="transcript-head"><div><h2>AI-conversatie</h2><p>Het volledige beschikbare, geredigeerde transcript.</p></div><span class="live-label" id="transcript-state"><i></i> Afgerond</span></div>
+            <div class="transcript" id="transcript"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+  </div>
+  <div class="toast" role="status" aria-live="polite">Gegevens zijn ververst.</div>
+
+  <script>
+    const views = [...document.querySelectorAll('.view')];
+    const navButtons = [...document.querySelectorAll('.nav [data-view]')];
+    const toast = document.querySelector('.toast');
+    const transcript = document.querySelector('#transcript');
+    let previousView = 'completed';
+    let liveTimer;
+    let completedPage = 1;
+
+    const completedTranscript = [
+      ['Opdracht','20:24:03','Maak op basis van de productrichting, signalen en huidige code maximaal twee duidelijke epics. Iedere epic moet een aantoonbare gebruikersverbetering, eenduidige scope, acceptatiecriteria en UX-ontwerp bevatten.'],
+      ['Agent','20:24:18','Ik lees eerst de aangeleverde signalen en vergelijk die met de huidige acceptatieomgeving.'],
+      ['Tool','20:25:07','Browsercontrole uitgevoerd op de mobiele aanvraagflow. De stap “contactgegevens” veroorzaakt onnodige uitval.'],
+      ['Agent','20:31:44','Ik werk twee afgebakende verbeteringen uit: een kortere mobiele aanvraagflow en duidelijkere voortgang na verzenden.'],
+      ['Correctie','20:39:12','Het eerste antwoord miste acceptanceCriteria bij EP-022. Lever dezelfde JSON opnieuw met dat verplichte veld.'],
+      ['Agent','20:41:58','De gecorrigeerde JSON is geschreven. Beide epics hebben nu scope, gebruikerswaarde, acceptatiecriteria en UX-artifactverwijzingen.']
+    ];
+    const runningTranscript = [
+      ['Opdracht','21:02:11','Maak op basis van de actuele productsignalen één of meer duidelijke epics en lever schema-geldige JSON.'],
+      ['Agent','21:02:26','Ik controleer de productrichting en de bestaande implementatie voordat ik voorstellen maak.'],
+      ['Tool','21:05:18','Repositorysnapshot gelezen. De huidige mobiele flow bevat vijf invoerstappen.'],
+      ['Agent','21:10:54','Ik heb één behapbare epic gekozen die de mobiele flow terugbrengt naar drie duidelijke stappen.'],
+      ['Correctie','21:11:40','$.epics[0].acceptanceCriteria is verplicht. Corrigeer alleen de ontbrekende structuur en behoud de inhoud.']
+    ];
+    const developmentTranscript = [
+      ['Opdracht','20:07:02','Implementeer story SF-281 in de aangeleverde repositorysnapshot, voer de relevante tests uit en lever het gecontroleerde repositoryresultaat.'],
+      ['Agent','20:08:14','Ik heb de bestaande implementatie en tests gelezen. Ik pas alleen de verzendbevestiging en bijbehorende tests aan.'],
+      ['Tool','20:21:36','mvn verify voltooid: 184 tests geslaagd, 0 mislukt.'],
+      ['Agent','20:30:51','De wijziging is gecommit en gepubliceerd. Het resultaat bevat branch, commit en uitgevoerde controles.']
+    ];
+
+    const jobs = {
+      'running-design': {title:'product-design.session', id:'64c1…a2f9', context:'Product Factory · APPLICATION_WORK', provider:'Codex · gpt-5.6-terra', duration:'12 minuten', status:'Wordt uitgevoerd', statusClass:'running', running:true},
+      'running-dev': {title:'developer.implement', id:'fa32…17c8', context:'Software Factory · REPOSITORY_WORK', provider:'Codex · gpt-5.6-sol', duration:'7 minuten', status:'Wordt uitgevoerd', statusClass:'running', running:true, development:true},
+      'completed-design': {title:'product-design.session', id:'20a1…c100', context:'Product Factory · APPLICATION_WORK', provider:'Codex · gpt-5.6-terra', duration:'18 minuten', status:'Geslaagd', statusClass:'success'},
+      'completed-dev': {title:'developer.implement', id:'18fb…d283', context:'Software Factory · REPOSITORY_WORK', provider:'Codex · gpt-5.6-sol', duration:'24 minuten', status:'Geslaagd', statusClass:'success', development:true},
+      'completed-failed': {title:'planning.session', id:'91a0…42bd', context:'Product Factory · APPLICATION_WORK', provider:'Claude · haiku-4-5', duration:'6 minuten', status:'Mislukt', statusClass:'failed', failed:true},
+      'completed-cancelled': {title:'meeting.minutes', id:'01dc…0ae4', context:'Product Factory · APPLICATION_WORK', provider:'Codex · gpt-5.6-terra', duration:'2 minuten', status:'Geannuleerd', statusClass:'neutral', cancelled:true}
+    };
+
+    function showToast(message) {
+      toast.textContent = message; toast.classList.add('visible');
+      window.clearTimeout(showToast.timer); showToast.timer = window.setTimeout(() => toast.classList.remove('visible'), 2200);
+    }
+    function showView(name) {
+      window.clearTimeout(liveTimer);
+      views.forEach(view => view.classList.toggle('active', view.id === `view-${name}`));
+      navButtons.forEach(button => button.classList.toggle('active', button.dataset.view === name));
+      document.body.classList.remove('nav-open'); window.scrollTo(0, 0);
+    }
+    function messageHtml([role,time,text]) {
+      const cls = role === 'Agent' ? 'agent' : role === 'Tool' ? 'tool' : role === 'Correctie' ? 'correction' : '';
+      return `<article class="message ${cls}"><div class="message-label"><strong>${role}</strong><time>${time}</time></div><p class="message-text"></p></article>`;
+    }
+    function renderTranscript(messages) {
+      transcript.innerHTML = messages.map(messageHtml).join('');
+      [...transcript.querySelectorAll('.message-text')].forEach((node,index) => node.textContent = messages[index][2]);
+    }
+    function selectTab(name) {
+      document.querySelectorAll('[data-tab]').forEach(button => button.classList.toggle('active', button.dataset.tab === name));
+      document.querySelectorAll('[data-panel]').forEach(panel => panel.classList.toggle('active', panel.dataset.panel === name));
+    }
+    function openJob(key) {
+      const job = jobs[key] || jobs['completed-design']; previousView = job.running ? 'running' : 'completed';
+      document.querySelector('#detail-back').textContent = job.running ? '← Terug naar actieve jobs' : '← Terug naar afgeronde jobs';
+      document.querySelector('#detail-title').textContent = job.title;
+      document.querySelector('#detail-id').textContent = job.id;
+      document.querySelector('#detail-context').textContent = job.context;
+      document.querySelector('#detail-provider').textContent = job.provider;
+      document.querySelector('#detail-duration').textContent = job.duration;
+      document.querySelector('#detail-summary').textContent = job.running ? 'De AI-conversatie wordt tijdens de uitvoering bijgewerkt.' : job.failed ? 'De job eindigde met een veilige technische fout.' : job.cancelled ? 'De job is geannuleerd.' : 'De job is succesvol afgerond.';
+      const status = document.querySelector('#detail-status'); status.className = `status ${job.statusClass}`; status.textContent = job.status;
+      const state = document.querySelector('#transcript-state'); state.innerHTML = job.running ? '<i></i> Live' : '<i></i> Afgerond';
+      const result = document.querySelector('#result-content');
+      if (job.running) result.innerHTML = '<p class="result-note">Resultaat is beschikbaar zodra de job is afgerond.</p>';
+      else if (job.failed) result.innerHTML = '<pre>{\n  "status": "FAILED",\n  "errorCode": "MODEL_OUTPUT_RETRIES_EXHAUSTED",\n  "message": "Na drie pogingen voldeed het antwoord niet aan het schema."\n}</pre>';
+      else if (job.cancelled) result.innerHTML = '<pre>{\n  "status": "CANCELLED",\n  "cancelledAt": "2026-08-24T16:04:11Z",\n  "reason": "Door beheerder geannuleerd"\n}</pre>';
+      else if (job.development) result.innerHTML = '<pre>{\n  "status": "SUCCEEDED",\n  "branch": "agent/story-SF-281",\n  "commit": "8b71c2e",\n  "tests": {"passed": 184, "failed": 0}\n}</pre>';
+      else result.innerHTML = '<pre>{\n  "status": "SUCCEEDED",\n  "summary": "Twee duidelijke productepics opgesteld.",\n  "epicsCreated": ["EP-021", "EP-022"],\n  "artifacts": ["mobile-flow.png"]\n}</pre>';
+      renderTranscript(job.development ? developmentTranscript : job.running ? runningTranscript : completedTranscript);
+      selectTab(job.running ? 'transcript' : 'result'); showView('detail');
+      if (job.running) liveTimer = window.setTimeout(() => {
+        const next = ['Agent','21:14:16','De correctie is verwerkt. Ik valideer nu het volledige resultaat tegen het aangeleverde schema.'];
+        const wrapper = document.createElement('div'); wrapper.innerHTML = messageHtml(next); const article = wrapper.firstElementChild;
+        article.querySelector('.message-text').textContent = next[2]; transcript.append(article); showToast('Nieuwe AI-conversatietekst ontvangen.');
+      }, 1200);
+    }
+
+    document.addEventListener('click', event => {
+      const view = event.target.closest('[data-view]')?.dataset.view; if (view) showView(view);
+      const job = event.target.closest('[data-job]')?.dataset.job; if (job) openJob(job);
+      const tab = event.target.closest('[data-tab]')?.dataset.tab; if (tab) selectTab(tab);
+      const action = event.target.closest('[data-action]')?.dataset.action;
+      if (action === 'open-nav') document.body.classList.add('nav-open');
+      if (action === 'close-nav') document.body.classList.remove('nav-open');
+      if (action === 'refresh') showToast('Gegevens zijn ververst om 21:14:12.');
+    });
+    document.addEventListener('keydown', event => {
+      const row = event.target.closest('tr[data-job]');
+      if (row && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); openJob(row.dataset.job); }
+    });
+    document.querySelector('#detail-back').addEventListener('click', () => showView(previousView));
+    document.querySelector('#completed-search').addEventListener('input', event => {
+      const query = event.target.value.toLowerCase(); completedPage = 1;
+      document.querySelectorAll('#completed-table tr').forEach(row => row.hidden = !row.textContent.toLowerCase().includes(query));
+      document.querySelector('#page-label').textContent = query ? 'Zoekresultaten op pagina 1' : '1–30 van 86 jobs';
+      document.querySelector('#previous-page').disabled = true; document.querySelector('#next-page').disabled = Boolean(query);
+    });
+    document.querySelector('#next-page').addEventListener('click', () => {
+      completedPage = 2; document.querySelector('#page-label').textContent = '31–60 van 86 jobs';
+      document.querySelector('#previous-page').disabled = false; showToast('Volgende 30 afgeronde jobs geladen.');
+    });
+    document.querySelector('#previous-page').addEventListener('click', () => {
+      completedPage = 1; document.querySelector('#page-label').textContent = '1–30 van 86 jobs';
+      document.querySelector('#previous-page').disabled = true; showToast('Nieuwste 30 afgeronde jobs geladen.');
+    });
+  </script>
+</body>
+</html>

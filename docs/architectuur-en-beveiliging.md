@@ -24,9 +24,10 @@ flowchart LR
   CONTAINER --> CODEX[Codex of Claude]
 ```
 
-De server is de enige eigenaar van queue, status, attempts, leases, retries, events en resultaten.
-Een consument verwerkt alleen een terminale, schema-geldige technische uitkomst naar zijn eigen
-domein. De worker kent geen consumentendatabase en de server bewaart geen lokale AI-credentials.
+De server is de enige eigenaar van queue, status, attempts, leases, retries, events, geredigeerde
+transcriptdelen en resultaten. Een consument verwerkt alleen een terminale, schema-geldige
+technische uitkomst naar zijn eigen domein. De worker kent geen consumentendatabase en de server
+bewaart geen lokale AI-credentials.
 
 ## Maven- en Modulithgrenzen
 
@@ -95,8 +96,11 @@ hij commit en publiceert.
   een poging verlaten en met 30, 60, 120 seconden enzovoort opnieuw aangeboden, maximaal 30 minuten
   en nooit boven `maxAttempts`.
 - Resultaat, artifacts en progress worden alleen geaccepteerd voor het actuele attempt.
+- Transcriptdelen worden alleen voor de actuele gefencete attempt geaccepteerd, zijn idempotent op
+  deel-ID en sequence-nummer en worden vóór opslag geredigeerd.
 - Artifacts zijn per stuk maximaal 5 MB en per job 25 MB, met verplichte SHA-256-controle.
-- Events zijn append-only; het resultaat van een geslaagde job verandert niet meer.
+- Events en transcriptdelen zijn append-only; het resultaat van een geslaagde job verandert niet
+  meer.
 
 ## Threatmodel in het kort
 
@@ -108,5 +112,7 @@ hij commit en publiceert.
 | Laptop slaapt tijdelijk | Lease wordt eerst `SUSPECTED`; ruim herstelvenster voorkomt dubbel werk |
 | Agent probeert Gitcredential te lezen | Credential blijft buiten container; publicatie door worker |
 | Secret in log of fout | Redactie, maximale lengte en veilige generieke serverfouten |
+| Secret in zichtbaar agenttranscript | Redactie in de worker en opnieuw op de server vóór duurzame opslag |
+| Verborgen modelredenering wordt als transcript verwacht | Alleen provider-zichtbare tekst en toolgebeurtenissen opslaan; niets reconstrueren |
 | Mock per ongeluk in productie | Startupomgeving en aanvraagvalidatie weigeren `MOCKED` |
 | Databaseverlies | Dagelijkse custom-format backup, hash, retentie en restorecontrole |

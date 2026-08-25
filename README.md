@@ -76,6 +76,8 @@ dit nog niet en blijven tijdens de migratie achterwaarts compatibel.
 
 - [Stappenplan en volledig ontwerp](docs/agent-runtime-stappenplan.md)
 - [Vereenvoudigd APPLICATION_WORK-contract v2](docs/application-work-v2.md)
+- [Beheerinterface en Flutter-frontend](docs/beheerinterface.md)
+- [Klikbaar UX-concept](ux/README.md)
 - [Implementatieplan betrouwbare JSON-resultaten](docs/implementatieplan-betrouwbare-json-resultaten.md)
 - [Architectuur en veiligheidsgrenzen](docs/architectuur-en-beveiliging.md)
 - [Deployment en operatie](docs/deployment-en-operatie.md)
