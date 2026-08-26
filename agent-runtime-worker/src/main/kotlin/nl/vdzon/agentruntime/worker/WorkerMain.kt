@@ -53,7 +53,7 @@ data class WorkerConfig(
                 required("AR_SERVER_URL").removeSuffix("/"), required("AR_WORKER_TOKEN"),
                 values["AR_WORKER_ID"]?.takeIf(String::isNotBlank) ?: InetAddress.getLocalHost().hostName,
                 Path.of(values["AR_WORK_ROOT"] ?: "work/worker").toAbsolutePath().normalize(),
-                values["AR_EXECUTION_IMAGE"] ?: "ghcr.io/robbertvdzon/agent-runtime-execution:main",
+                values["AR_EXECUTION_IMAGE"] ?: "ghcr.io/robbertvdzon/agent-runtime-execution:sha-6624cdda7cf12e4b7c03604d5e0a2fc3b203c87b",
                 values["AR_CODEX_CREDENTIALS_DIR"]?.takeIf(String::isNotBlank)?.let(Path::of),
                 values["AR_CLAUDE_CREDENTIALS_DIR"]?.takeIf(String::isNotBlank)?.let(Path::of),
                 aliases, root.resolve("project-credentials.env"), projectCredentials.toMutableMap(),
