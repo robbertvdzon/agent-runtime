@@ -37,6 +37,7 @@ agent-runtime:
   product-factory-token: ${AR_PRODUCT_FACTORY_TOKEN:local-product-factory-token}
   software-factory-token: ${AR_SOFTWARE_FACTORY_TOKEN:local-software-factory-token}
   worker-token: ${AR_WORKER_TOKEN:local-worker-token}
+  worker-api-enabled: ${AR_WORKER_API_ENABLED:true}
   admin-token: ${AR_ADMIN_TOKEN:local-admin-token}
   google-client-id: ${AR_GOOGLE_CLIENT_ID:}
   admin-emails: ${AR_ADMIN_EMAILS:}

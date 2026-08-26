@@ -11,6 +11,7 @@ data class RuntimeProperties(
     var productFactoryToken: String = "local-product-factory-token",
     var softwareFactoryToken: String = "local-software-factory-token",
     var workerToken: String = "local-worker-token",
+    var workerApiEnabled: Boolean = true,
     var adminToken: String = "local-admin-token",
     var googleClientId: String = "",
     var adminEmails: String = "",
@@ -34,6 +35,11 @@ data class RuntimeProperties(
 ) {
     @PostConstruct
     fun validate() {
+        if (environment == RuntimeEnvironment.ACCEPTANCE) {
+            require(!workerApiEnabled) { "Acceptance must have the worker API disabled." }
+            require(allowedProviders("product-factory") == setOf("MOCKED")) { "Acceptance Product Factory may only allow MOCKED." }
+            require(allowedProviders("software-factory") == setOf("MOCKED")) { "Acceptance Software Factory may only allow MOCKED." }
+        }
         if (environment == RuntimeEnvironment.PRODUCTION) {
             val unsafe = listOf(productFactoryToken, softwareFactoryToken, workerToken, adminToken, sessionSigningSecret)
                 .any { it.isBlank() || it.startsWith("local-") || it.length < 24 }

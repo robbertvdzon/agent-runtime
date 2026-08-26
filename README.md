@@ -14,6 +14,10 @@ De runtime ondersteunt:
 - `MOCKED`: dezelfde job- en resultaatketen server-side uitvoeren in lokale en
   acceptatieomgevingen.
 
+Acceptatie is bewust volledig van laptopworkers geïsoleerd: de server accepteert daar uitsluitend
+provider `MOCKED` en stelt de worker-API niet beschikbaar. Codex en Claude zijn alleen lokaal en in
+productie inzetbaar.
+
 De server beheert queue, idempotentie, attempts, leases, heartbeats, fencing, retries, harde
 deadlines, events, transcripten, JSON-schemavalidatie, resultaten, attachments en artifacts.
 Consumenten leveren alleen de technische opdracht en verwerken de terminale uitkomst in hun eigen

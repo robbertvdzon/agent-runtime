@@ -13,6 +13,9 @@ patches:
         path: /spec/template/spec/containers/0/env
         value:
           - {name: AR_ENVIRONMENT, value: ACCEPTANCE}
+          - {name: AR_WORKER_API_ENABLED, value: "false"}
+          - {name: AR_PRODUCT_FACTORY_PROVIDERS, value: MOCKED}
+          - {name: AR_SOFTWARE_FACTORY_PROVIDERS, value: MOCKED}
           - {name: AR_DB_URL, value: "jdbc:h2:mem:agent_runtime_acceptance;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"}
           - {name: AR_DB_USERNAME, value: sa}
           - {name: AR_DB_PASSWORD, value: ""}

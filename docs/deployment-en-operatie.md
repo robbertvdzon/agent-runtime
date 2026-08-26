@@ -2,12 +2,14 @@
 
 ## Omgevingen
 
-| Omgeving | Namespace | Database | Route |
-| --- | --- | --- | --- |
-| Acceptatie | `agent-runtime-acceptance` | H2 in-memory | `agent-runtime-acceptance.vdzonsoftware.nl` |
-| Productie | `agent-runtime` | PostgreSQL op 5 GiB PVC | `agent-runtime.vdzonsoftware.nl` |
+| Omgeving | Providers | Worker-API | Namespace | Database | Route |
+| --- | --- | --- | --- | --- | --- |
+| Acceptatie | Alleen `MOCKED` | Uit | `agent-runtime-acceptance` | H2 in-memory | `agent-runtime-acceptance.vdzonsoftware.nl` |
+| Productie | `CODEX`, `CLAUDE` | Aan | `agent-runtime` | PostgreSQL op 5 GiB PVC | `agent-runtime.vdzonsoftware.nl` |
 
-Acceptatie staat `MOCKED` toe en verliest H2-data bij een nieuwe pod. Productie weigert
+Acceptatie weigert Codex en Claude, blokkeert `/v1/workers` en verliest H2-data bij een nieuwe pod.
+De overlay zet beide consumerallowlists expliciet op `MOCKED`; de server weigert te starten als de
+acceptatieconfiguratie die grens verruimt of de worker-API activeert. Productie weigert
 mockuitvoering en bewaart data in PostgreSQL.
 
 Cloudflare beëindigt publieke HTTPS en bereikt de OpenShift-route via HTTP. De routes gebruiken

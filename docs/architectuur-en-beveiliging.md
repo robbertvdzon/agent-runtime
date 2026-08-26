@@ -38,7 +38,7 @@ Productie gebruikt vier onafhankelijke bearercredentials:
 | --- | --- |
 | `AR_PRODUCT_FACTORY_TOKEN` | Eigen `APPLICATION_WORK` maken, lezen, annuleren en artifacts downloaden |
 | `AR_SOFTWARE_FACTORY_TOKEN` | Eigen `REPOSITORY_WORK` maken, lezen, annuleren en artifacts downloaden |
-| `AR_WORKER_TOKEN` | Worker registreren, jobs claimen en actuele gefencete attempts bedienen |
+| `AR_WORKER_TOKEN` | In lokaal en productie workers registreren, jobs claimen en actuele gefencete attempts bedienen |
 | `AR_ADMIN_TOKEN` | Managementmetadata lezen en terminale jobs opnieuw aanbieden |
 
 Tenant en rechten volgen uit het token. De server valideert jobsoort, provider, model,
@@ -119,7 +119,8 @@ maakt de commit, pusht de vaste jobbranch en opent het pull request.
   onveranderlijk.
 - `APPLICATION_WORK`-uitvoer wordt door de server geparseerd en volledig tegen het aangevraagde
   JSON-schema gevalideerd.
-- Productie weigert `MOCKED`; acceptatie gebruikt dezelfde opslag- en validatieketen zonder worker.
+- Productie weigert `MOCKED`. Acceptatie accepteert uitsluitend `MOCKED` en blokkeert de volledige
+  `/v1/workers`-API, zodat een laptopworker zich daar niet kan registreren of jobs kan claimen.
 
 ## Bestandsgrenzen
 

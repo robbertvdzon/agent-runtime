@@ -20,7 +20,7 @@ import java.util.UUID
 import java.security.MessageDigest
 import java.util.HexFormat
 
-@SpringBootTest(properties = ["agent-runtime.environment=ACCEPTANCE"])
+@SpringBootTest(properties = ["agent-runtime.environment=LOCAL"])
 @AutoConfigureMockMvc
 class AgentRuntimeIntegrationTest(
     @Autowired private val mvc: MockMvc,

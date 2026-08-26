@@ -219,5 +219,6 @@ modelredenering wordt niet opgevraagd of gereconstrueerd.
 
 In `LOCAL` en `ACCEPTANCE` kan provider `MOCKED` een vooraf geregistreerde server-side respons
 gebruiken. De mock doorloopt dezelfde jobopslag, JSON-normalisatie, schemavalidatie,
-outputpogingen en resultaatroutes zonder worker, lease of container. `PRODUCTION` weigert
+outputpogingen en resultaatroutes zonder worker, lease of container. Acceptatie accepteert geen
+`CODEX`- of `CLAUDE`-jobs en de worker-API retourneert daar not-found. `PRODUCTION` weigert
 `MOCKED`.

@@ -13,7 +13,8 @@ documentatie vormen één versie en worden samen bijgewerkt.
   transcripten, resultaten en artifacts.
 - Worker-servertransport gebruikt uitgaande HTTPS-long-polling, geen WebSocket en geen directe
   databaseverbinding.
-- `MOCKED` draait server-side in `LOCAL` en `ACCEPTANCE`; `PRODUCTION` weigert deze provider.
+- `MOCKED` draait server-side in `LOCAL` en `ACCEPTANCE`; `ACCEPTANCE` accepteert uitsluitend
+  `MOCKED` en heeft geen worker-API, terwijl `PRODUCTION` deze provider weigert.
 - Provider en model komen uit de job en worden tegen de serverpolicy van de geauthenticeerde
   consument gevalideerd.
 - Projectcredentials staan lokaal in `project-credentials.env`. Alleen namen gaan naar de server;

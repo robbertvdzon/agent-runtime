@@ -66,6 +66,9 @@ class JobService(
     }
 
     private fun validatePolicy(tenant: String, request: CreateJobRequest) {
+        if (properties.environment == RuntimeEnvironment.ACCEPTANCE && request.provider != Provider.MOCKED) {
+            throw ApiException("PROVIDER_FORBIDDEN_IN_ACCEPTANCE", "Acceptance only accepts the MOCKED provider.")
+        }
         if (properties.environment == RuntimeEnvironment.PRODUCTION && request.provider == Provider.MOCKED) {
             throw ApiException("MOCKED_FORBIDDEN", "MOCKED is never accepted in production.")
         }

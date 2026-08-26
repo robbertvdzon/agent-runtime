@@ -20,6 +20,13 @@ class ApiSecurity(private val properties: RuntimeProperties, private val adminAu
     }
 
     override fun doFilterInternal(request: HttpServletRequest, response: HttpServletResponse, chain: FilterChain) {
+        val path = request.requestURI
+        if (!properties.workerApiEnabled && (path == "/v1/workers" || path.startsWith("/v1/workers/"))) {
+            response.status = 404
+            response.contentType = MediaType.APPLICATION_JSON_VALUE
+            response.writer.write("{\"code\":\"NOT_FOUND\",\"message\":\"Not found.\"}")
+            return
+        }
         val token = request.getHeader("Authorization")?.removePrefix("Bearer ")?.takeIf { it.isNotBlank() }
         val identity = when {
             secureEquals(token, properties.productFactoryToken) -> RequestIdentity(PrincipalRole.CONSUMER, "product-factory")
