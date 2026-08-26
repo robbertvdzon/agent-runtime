@@ -76,11 +76,19 @@ waarden.
 Per attempt maakt de worker een tijdelijk bestand met uitsluitend de door de job aangevraagde en
 door de tenantpolicy toegestane subset. Dit bestand wordt read-only onder
 `/job/secrets/secrets.env` gemount en na de attempt verwijderd. De agent kan deze geselecteerde
-waarden tijdens de uitvoering lezen. De worker blokkeert bekende projectcredentialwaarden in
-provideruitvoer en artifacts. Runtime-, worker- en Git-publicatiecredentials blijven buiten de
-agentcontainer. Providerauthenticatie wordt uitsluitend aan de gekozen providercontainer gegeven:
-Claude bij voorkeur als `CLAUDE_CODE_OAUTH_TOKEN`, Codex via zijn geïsoleerde credentialmount en
-Claude-filecredentials alleen als fallback.
+waarden tijdens de uitvoering lezen. Keys met `PASSWORD`, `TOKEN`, `SECRET`, `KEY`, `KUBECONFIG`
+of `CREDENTIALS` en database-URL's met ingebedde authenticatie gelden als gevoelig. De worker
+blokkeert alleen de voor deze job geselecteerde gevoelige waarden in provideruitvoer en artifacts;
+gewone configuratie zoals usernames, schema's en booleans veroorzaakt geen blokkade.
+
+Runtime-, worker- en Git-publicatiecredentials blijven buiten de agentcontainer.
+Providerauthenticatie wordt uitsluitend aan de gekozen providercontainer gegeven: Claude bij
+voorkeur als `CLAUDE_CODE_OAUTH_TOKEN`, Codex via zijn geïsoleerde credentialmount en
+Claude-filecredentials alleen als fallback. De outputcontrole vindt plaats nadat de provider heeft
+gewerkt. Omdat de agent het geselecteerde `secrets.env` kan lezen, kan deze opzet niet technisch
+garanderen dat een agent nooit een waarde in provider-tooloutput laat verschijnen. De jobinstructie
+verbiedt daarom het tonen, dumpen en tracen van het bestand; een harde preventie vereist een aparte
+credentialbroker in plaats van een leesbare secretmount.
 
 ## Execution-container
 

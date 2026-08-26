@@ -133,7 +133,17 @@ Per attempt maakt de worker een tijdelijke `/job/secrets/secrets.env` met alleen
 waarden. Het volledige `project-credentials.env` wordt niet gemount. Runtime-, worker- en
 Git-publicatiecredentials blijven buiten de agentcontainer. Alleen de authenticatie van de gekozen
 AI-provider wordt aan die providercontainer gegeven. De worker blokkeert resultaten en artifacts
-waarin een lokaal bekende projectcredentialwaarde voorkomt.
+waarin een voor deze job geselecteerde gevoelige waarde voorkomt. Gevoeligheid volgt de keynaam
+(`PASSWORD`, `TOKEN`, `SECRET`, `KEY`, `KUBECONFIG`, `CREDENTIALS`) en ingebedde authenticatie in
+database-URL's. Usernames, schema's, gewone URL's en booleans blijven normale configuratie.
+
+De agent leest de geselecteerde waarden zelf. Tooloutput is onderdeel van de providerconversatie;
+daarom verbiedt de vaste instructie `cat`, `od`, `printenv`, shelltracing en vergelijkbare manieren
+om `secrets.env` te tonen. Deze instructie en de uitvoercontrole beperken het risico, maar vormen
+geen harde isolatie tegen een agent die de leesbare waarden bewust naar de provider stuurt.
+
+Gebruik in projectwaarden `host.docker.internal` in plaats van `localhost` wanneer een service op
+de workerlaptop vanuit de execution-container bereikbaar moet zijn.
 
 ## Taakdirectory
 
