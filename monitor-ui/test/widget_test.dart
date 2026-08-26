@@ -43,4 +43,46 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('beheer-token blijft een verborgen noodlogin', (tester) async {
+    final api = _UnavailableGoogleApiClient()..clearToken();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showDialog<bool>(
+              context: context,
+              builder: (_) => LoginDialog(api: api, allowCancel: false),
+            ),
+            child: const Text('Open login'),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Open login'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Gebruik je Google-account om de uitvoeringsmonitor te openen.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.byType(TextField), findsNothing);
+
+    await tester.tap(find.text('Inloggen met een beheertoken'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'nood-token');
+    await tester.tap(find.text('Inloggen met beheertoken'));
+    await tester.pumpAndSettle();
+
+    expect(api.token, 'nood-token');
+  });
+}
+
+class _UnavailableGoogleApiClient extends ApiClient {
+  @override
+  Future<AuthConfig> authConfig() async {
+    throw const ApiError('Google-login is niet geconfigureerd');
+  }
 }

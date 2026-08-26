@@ -168,8 +168,11 @@ jobuitkomst; aanvullende technische diagnose kan via bestaande logs en metrics.
 - Implementatie: Flutter Web, geleverd vanuit Agent Runtime of als onderdeel van dezelfde release.
 - Gegevensbron: uitsluitend beveiligde beheerquery's van Agent Runtime, nooit rechtstreekse
   databasetoegang.
-- Authenticatie: dezelfde beheerderlogin als de Runtime; jobs, resultaten en transcripties zijn
-  nooit publiek.
+- Authenticatie: standaard via de officiele Google-login. De frontend haalt de publieke OAuth-
+  configuratie bij de Runtime op en wisselt het Google ID-token direct in voor een eigen, tijdelijk
+  Runtime-sessietoken. Alleen Google-accounts op de server-side beheerdersallowlist worden
+  toegelaten. Het Google ID-token wordt niet bewaard. Een handmatig beheertoken blijft uitsluitend
+  beschikbaar als ingeklapte noodoptie; jobs, resultaten en transcripties zijn nooit publiek.
 - Cache: `index.html` en versie-informatie krijgen `no-store`; inhoudsgehashte assets mogen lang
   worden gecachet.
 - Omgeving: bovenin staat duidelijk **Acceptatie** of **Productie**. Dit is een serverwaarde en geen
@@ -222,4 +225,5 @@ De Flutter- en contractimplementatie krijgt minimaal tests voor:
 - productie- en acceptatielabel;
 - 320 CSS-pixels en 200% tekstvergroting;
 - backend onbereikbaar en verlopen beheerderssessie.
-
+- Google-login als standaardroute, afwijzing van een niet-toegestane beheerder en de verborgen
+  beheertoken-noodroute.

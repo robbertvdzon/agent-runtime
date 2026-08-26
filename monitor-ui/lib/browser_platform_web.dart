@@ -2,9 +2,20 @@ import 'package:web/web.dart' as web;
 
 class BrowserPlatform {
   static String readToken() =>
-      web.window.sessionStorage.getItem('ar-token') ?? '';
-  static void writeToken(String value) =>
-      web.window.sessionStorage.setItem('ar-token', value);
+      web.window.localStorage.getItem('ar-token') ??
+      web.window.sessionStorage.getItem('ar-token') ??
+      '';
+  static void writeToken(String value) {
+    if (value.isEmpty) {
+      web.window.localStorage.removeItem('ar-token');
+      web.window.sessionStorage.removeItem('ar-token');
+      return;
+    }
+    web.window.localStorage.setItem('ar-token', value);
+    // Migreer bestaande sessies weg uit sessionStorage.
+    web.window.sessionStorage.removeItem('ar-token');
+  }
+
   static void replaceQuery(String query) => web.window.history.replaceState(
     null,
     '',
