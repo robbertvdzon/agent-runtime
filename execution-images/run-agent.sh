@@ -13,7 +13,9 @@ case "${AR_ENGINE:-}" in
     codex "${args[@]}" "$(cat /job/input/prompt.md)"
     ;;
   CLAUDE)
-    cp -R /credential-source/. /home/agent/.claude/
+    if [[ -d /credential-source ]]; then
+      cp -R /credential-source/. /home/agent/.claude/
+    fi
     if [[ -f /credential-config.json ]]; then
       cp /credential-config.json /home/agent/.claude.json
     fi

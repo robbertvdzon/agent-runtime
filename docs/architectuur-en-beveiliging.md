@@ -64,8 +64,9 @@ bearer- en herkenbare key/valuepatronen geredigeerd.
 ## Worker- en projectcredentials
 
 De worker leest interne configuratie uit het gitignored `properties.env` met mode `0600`.
-Workertoken, providercredentialpaden en repository-URL's uit dit bestand zijn niet selecteerbaar
-door een job.
+Workertoken, Claude OAuth-token, providercredentialpaden en repository-URL's uit dit bestand zijn
+niet selecteerbaar door een job. De Claude-token is een abonnementgebonden OAuth-token en geen
+Anthropic API-key.
 
 Projectgebonden waarden staan apart in `project-credentials.env`. De worker accepteert alleen
 reguliere bestanden zonder symlink, veilige rechten, unieke namen en namen volgens
@@ -76,8 +77,10 @@ Per attempt maakt de worker een tijdelijk bestand met uitsluitend de door de job
 door de tenantpolicy toegestane subset. Dit bestand wordt read-only onder
 `/job/secrets/secrets.env` gemount en na de attempt verwijderd. De agent kan deze geselecteerde
 waarden tijdens de uitvoering lezen. De worker blokkeert bekende projectcredentialwaarden in
-provideruitvoer en artifacts. Runtime-, worker-, provider- en Git-publicatiecredentials blijven
-buiten de agentcontainer.
+provideruitvoer en artifacts. Runtime-, worker- en Git-publicatiecredentials blijven buiten de
+agentcontainer. Providerauthenticatie wordt uitsluitend aan de gekozen providercontainer gegeven:
+Claude bij voorkeur als `CLAUDE_CODE_OAUTH_TOKEN`, Codex via zijn geïsoleerde credentialmount en
+Claude-filecredentials alleen als fallback.
 
 ## Execution-container
 

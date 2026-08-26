@@ -107,8 +107,10 @@ project-credentials.env
 ```
 
 `properties.env` bevat de workerconfiguratie en interne credentials, waaronder server-URL,
-workertoken, worker-ID, providercredentialpaden en repositoryaliases. Een worker-only laptop heeft
-geen `secrets.env` nodig.
+workertoken, worker-ID, de Claude OAuth-token, providercredentialpaden en repositoryaliases. Een
+worker-only laptop heeft geen `secrets.env` nodig. `AR_CLAUDE_OAUTH_TOKEN` bevat de uitvoer van
+`claude setup-token`, gebruikt het Claude-abonnement en heeft voorrang op filecredentials uit
+`AR_CLAUDE_CREDENTIALS_DIR`.
 
 `project-credentials.env` bevat uitsluitend projectgebonden waarden die een job expliciet kan
 selecteren:
@@ -128,9 +130,10 @@ beschikbaarheid, het aantal passende online workers en `lastSeenAt`. Een job wor
 door een worker die alle gevraagde namen heeft geregistreerd.
 
 Per attempt maakt de worker een tijdelijke `/job/secrets/secrets.env` met alleen de geselecteerde
-waarden. Het volledige `project-credentials.env` wordt niet gemount. Runtime-, worker-, provider-
-en Git-publicatiecredentials blijven buiten de agentcontainer. De worker blokkeert resultaten en
-artifacts waarin een lokaal bekende projectcredentialwaarde voorkomt.
+waarden. Het volledige `project-credentials.env` wordt niet gemount. Runtime-, worker- en
+Git-publicatiecredentials blijven buiten de agentcontainer. Alleen de authenticatie van de gekozen
+AI-provider wordt aan die providercontainer gegeven. De worker blokkeert resultaten en artifacts
+waarin een lokaal bekende projectcredentialwaarde voorkomt.
 
 ## Taakdirectory
 
