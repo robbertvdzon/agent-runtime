@@ -539,8 +539,10 @@ Een beheerder kan actuele en afgeronde uitvoering volgen via één beveiligde, r
 - Gebruik daarbij de vastgelegde teksten **Er worden nu geen jobs uitgevoerd**, **De wachtrij is
   leeg**, **Er zijn nog geen afgeronde jobs**, **Geen jobs gevonden voor deze zoekterm** en
   **Er zijn geen workers geregistreerd**.
-- Gebruik de bestaande adminlogin en toon bovenin de servergeleverde omgeving `Acceptatie` of
-  `Productie`; dit label is geen schakelaar.
+- Gebruik standaard Google-login tegen de server-side beheerdersallowlist, wissel het Google
+  ID-token in voor een eigen Runtime-sessie en bewaar het ID-token niet. Houd het handmatige
+  beheertoken alleen als ingeklapte noodoptie. Toon bovenin de servergeleverde omgeving `Acceptatie`
+  of `Productie`; dit label is geen schakelaar.
 - Geef `index.html` en versie-informatie `no-store`; geef inhoudsgehashte assets een lange cache.
 - Volg het UX-concept in `ux/index.html`: rustige donkergroene navigatie, lichte achtergrond,
   witte kaarten, veel witruimte en tekstlabels naast statuskleur.

@@ -1,10 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 
 import 'browser_platform.dart';
+import 'google_signin_button_stub.dart'
+    if (dart.library.html) 'google_signin_button_web.dart'
+    as gis_button;
 
 void main() => runApp(const RuntimeMonitor());
 
@@ -34,10 +39,12 @@ class ApiClient {
     final response = await http
         .get(Uri.parse(path), headers: headers)
         .timeout(const Duration(seconds: 20));
-    if (response.statusCode == 401)
+    if (response.statusCode == 401) {
       throw const ApiError('Sessie verlopen', unauthorized: true);
-    if (response.statusCode < 200 || response.statusCode >= 300)
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiError('Backend antwoordde met HTTP ${response.statusCode}');
+    }
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
@@ -46,12 +53,53 @@ class ApiClient {
     BrowserPlatform.writeToken(token);
   }
 
+  void clearToken() => saveToken('');
+
+  Future<AuthConfig> authConfig() async {
+    final response = await http
+        .get(Uri.parse('/v1/auth/config'))
+        .timeout(const Duration(seconds: 20));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiError('Google-login kon niet worden geladen');
+    }
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    return AuthConfig(
+      googleClientId: body['googleClientId']?.toString() ?? '',
+      googleEnabled: body['googleEnabled'] == true,
+    );
+  }
+
+  Future<void> loginWithGoogle(String idToken) async {
+    final response = await http
+        .post(
+          Uri.parse('/v1/auth/google'),
+          headers: const {'Content-Type': 'application/json'},
+          body: jsonEncode({'idToken': idToken}),
+        )
+        .timeout(const Duration(seconds: 20));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      var message = 'Google-login is geweigerd';
+      try {
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        message = body['message']?.toString() ?? message;
+      } catch (_) {}
+      throw ApiError(message);
+    }
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    final sessionToken = body['token']?.toString() ?? '';
+    if (sessionToken.isEmpty) {
+      throw const ApiError('De server gaf geen sessietoken terug');
+    }
+    saveToken(sessionToken);
+  }
+
   Future<void> download(String path, String filename, String mimeType) async {
     final response = await http
         .get(Uri.parse(path), headers: headers)
         .timeout(const Duration(seconds: 30));
-    if (response.statusCode < 200 || response.statusCode >= 300)
+    if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiError('Download antwoordde met HTTP ${response.statusCode}');
+    }
     BrowserPlatform.download(
       filename,
       mimeType,
@@ -60,10 +108,213 @@ class ApiClient {
   }
 }
 
+class AuthConfig {
+  final String googleClientId;
+  final bool googleEnabled;
+  const AuthConfig({required this.googleClientId, required this.googleEnabled});
+}
+
 class ApiError implements Exception {
   final String message;
   final bool unauthorized;
   const ApiError(this.message, {this.unauthorized = false});
+}
+
+class LoginDialog extends StatefulWidget {
+  final ApiClient api;
+  final bool allowCancel;
+  const LoginDialog({super.key, required this.api, required this.allowCancel});
+
+  @override
+  State<LoginDialog> createState() => _LoginDialogState();
+}
+
+class _LoginDialogState extends State<LoginDialog> {
+  final tokenController = TextEditingController();
+  GoogleSignIn? googleSignIn;
+  StreamSubscription<GoogleSignInAccount?>? authSubscription;
+  bool loading = true;
+  bool showTokenLogin = false;
+  String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    _initialize();
+  }
+
+  @override
+  void dispose() {
+    authSubscription?.cancel();
+    tokenController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _initialize() async {
+    try {
+      final config = await widget.api.authConfig();
+      if (!config.googleEnabled || config.googleClientId.isEmpty) {
+        throw const ApiError('Google-login is niet geconfigureerd');
+      }
+      final signIn = GoogleSignIn(
+        clientId: config.googleClientId,
+        scopes: const ['email'],
+      );
+      if (kIsWeb) {
+        authSubscription = signIn.onCurrentUserChanged.listen(_loginAccount);
+      }
+      if (!mounted) return;
+      setState(() {
+        googleSignIn = signIn;
+        loading = false;
+      });
+    } on ApiError catch (e) {
+      if (!mounted) return;
+      setState(() {
+        error = e.message;
+        loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        error = 'Google-login kon niet worden geladen';
+        loading = false;
+      });
+    }
+  }
+
+  Future<void> _startGoogleLogin() async {
+    final signIn = googleSignIn;
+    if (signIn == null || loading) return;
+    setState(() {
+      loading = true;
+      error = null;
+    });
+    try {
+      final account = await signIn.signIn();
+      if (account != null) await _loginAccount(account);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        error = 'Google-login is niet gelukt';
+        loading = false;
+      });
+    }
+  }
+
+  Future<void> _loginAccount(GoogleSignInAccount? account) async {
+    if (account == null) return;
+    if (mounted) {
+      setState(() {
+        loading = true;
+        error = null;
+      });
+    }
+    try {
+      final authentication = await account.authentication;
+      final idToken = authentication.idToken;
+      if (idToken == null) {
+        throw const ApiError('Google gaf geen ID-token terug');
+      }
+      await widget.api.loginWithGoogle(idToken);
+      if (mounted) Navigator.pop(context, true);
+    } on ApiError catch (e) {
+      await googleSignIn?.signOut().catchError((_) => null);
+      if (!mounted) return;
+      setState(() {
+        error = e.message;
+        loading = false;
+      });
+    } catch (_) {
+      await googleSignIn?.signOut().catchError((_) => null);
+      if (!mounted) return;
+      setState(() {
+        error = 'Google-login is niet gelukt';
+        loading = false;
+      });
+    }
+  }
+
+  void _loginWithToken() {
+    if (tokenController.text.trim().isEmpty) {
+      setState(() => error = 'Vul een beheertoken in');
+      return;
+    }
+    widget.api.saveToken(tokenController.text);
+    Navigator.pop(context, true);
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Inloggen bij Agent Runtime'),
+    content: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 420),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Gebruik je Google-account om de uitvoeringsmonitor te openen.',
+          ),
+          const SizedBox(height: 24),
+          if (loading)
+            const Center(child: CircularProgressIndicator())
+          else if (googleSignIn != null && kIsWeb)
+            Center(
+              child: SizedBox(
+                height: 40,
+                child: gis_button.renderGoogleButton(),
+              ),
+            )
+          else if (googleSignIn != null)
+            FilledButton.icon(
+              onPressed: _startGoogleLogin,
+              icon: const Icon(Icons.login),
+              label: const Text('Inloggen met Google'),
+            ),
+          if (error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(error!, style: const TextStyle(color: Colors.red)),
+            ),
+          const SizedBox(height: 16),
+          TextButton(
+            onPressed: () => setState(() => showTokenLogin = !showTokenLogin),
+            child: Text(
+              showTokenLogin
+                  ? 'Beheertoken verbergen'
+                  : 'Inloggen met een beheertoken',
+            ),
+          ),
+          if (showTokenLogin) ...[
+            const SizedBox(height: 8),
+            TextField(
+              controller: tokenController,
+              obscureText: true,
+              autofocus: true,
+              onSubmitted: (_) => _loginWithToken(),
+              decoration: const InputDecoration(
+                labelText: 'Beheertoken',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton(
+              onPressed: _loginWithToken,
+              child: const Text('Inloggen met beheertoken'),
+            ),
+          ],
+        ],
+      ),
+    ),
+    actions: [
+      if (widget.allowCancel)
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Annuleren'),
+        ),
+    ],
+  );
 }
 
 class MonitorShell extends StatefulWidget {
@@ -84,13 +335,15 @@ class _MonitorShellState extends State<MonitorShell> {
   String? cursor = Uri.base.queryParameters['cursor'];
   String? previousCursor;
   String? nextCursor;
+  bool loginOpen = false;
 
   @override
   void initState() {
     super.initState();
     timer = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (selected == ViewKind.active || selected == ViewKind.queue)
+      if (selected == ViewKind.active || selected == ViewKind.queue) {
         refresh(silent: true);
+      }
     });
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => api.token.isEmpty ? login() : refresh(),
@@ -104,33 +357,20 @@ class _MonitorShellState extends State<MonitorShell> {
   }
 
   Future<void> login() async {
-    final controller = TextEditingController(text: api.token);
-    final value = await showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text('Inloggen'),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: TextField(
-            controller: controller,
-            obscureText: true,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: 'Beheertoken'),
-          ),
-        ),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('Inloggen'),
-          ),
-        ],
-      ),
-    );
-    if (value != null) {
-      api.saveToken(value);
-      await refresh();
+    if (loginOpen || !mounted) return;
+    loginOpen = true;
+    final hadToken = api.token.isNotEmpty;
+    bool? loggedIn;
+    try {
+      loggedIn = await showDialog<bool>(
+        context: context,
+        barrierDismissible: hadToken,
+        builder: (context) => LoginDialog(api: api, allowCancel: hadToken),
+      );
+    } finally {
+      loginOpen = false;
     }
+    if (loggedIn == true) await refresh();
   }
 
   Future<void> refresh({bool silent = false}) async {
@@ -157,7 +397,10 @@ class _MonitorShellState extends State<MonitorShell> {
     } on ApiError catch (e) {
       if (!mounted) return;
       setState(() => error = e.message);
-      if (e.unauthorized) await login();
+      if (e.unauthorized) {
+        api.clearToken();
+        await login();
+      }
     } catch (_) {
       if (mounted) setState(() => error = 'Verbinding onderbroken');
     }
@@ -252,8 +495,9 @@ class _MonitorShellState extends State<MonitorShell> {
   }
 
   Widget _content() {
-    if (snapshot == null)
+    if (snapshot == null) {
       return const Center(child: CircularProgressIndicator());
+    }
     final items = (snapshot!['items'] as List? ?? const [])
         .cast<Map<String, dynamic>>();
     if (selected == ViewKind.completed) {
@@ -389,7 +633,7 @@ class JobList extends StatelessWidget {
   });
   @override
   Widget build(BuildContext context) {
-    if (items.isEmpty)
+    if (items.isEmpty) {
       return Center(
         child: Semantics(
           liveRegion: true,
@@ -399,9 +643,10 @@ class JobList extends StatelessWidget {
           ),
         ),
       );
+    }
     return ListView.separated(
       itemCount: items.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
       itemBuilder: (context, index) {
         final item = items[index];
         return Card(
@@ -443,11 +688,12 @@ class WorkerList extends StatelessWidget {
   const WorkerList({super.key, required this.items});
   @override
   Widget build(BuildContext context) {
-    if (items.isEmpty)
+    if (items.isEmpty) {
       return const Center(child: Text('Er zijn geen workers geregistreerd'));
+    }
     return ListView.separated(
       itemCount: items.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
       itemBuilder: (_, i) {
         final wrapper = items[i],
             worker = wrapper['worker'] as Map<String, dynamic>;
@@ -523,7 +769,7 @@ class _JobDetailState extends State<JobDetail> {
       );
       final incoming = (page['items'] as List? ?? [])
           .cast<Map<String, dynamic>>();
-      if (mounted)
+      if (mounted) {
         setState(() {
           final known = transcript.map((x) => x['partId']).toSet();
           transcript.addAll(
@@ -531,6 +777,7 @@ class _JobDetailState extends State<JobDetail> {
           );
           transcriptStatus = page['active'] == true ? 'Live' : 'Afgerond';
         });
+      }
     } catch (_) {
       if (mounted) setState(() => transcriptStatus = 'Verbinding onderbroken');
     }

@@ -47,7 +47,8 @@ java -jar agent-runtime-server/target/agent-runtime-server-0.1.0-SNAPSHOT.jar
 ```
 
 De lokale server gebruikt H2 en de expliciete `local-...`-tokens uit `application.yml`. Open daarna
-`http://localhost:8080`; de beheerweergave vraagt om `local-admin-token`.
+`http://localhost:8080`; kies in de beheerweergave de ingeklapte beheertoken-noodroute en gebruik
+`local-admin-token`. In productie is Google-login de standaardroute.
 
 Voor de worker:
 
