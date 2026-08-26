@@ -100,30 +100,37 @@ nooit committen, mailen of in een ticket plakken.
 
 ### 3. Worker configureren
 
-Maak in de root van deze repository een genegeerde `properties.env` met niet-geheime instellingen.
-De worker-ID moet per laptop uniek zijn.
+Een worker-only laptop gebruikt één lokaal configuratiebestand: `properties.env`. Kopieer het
+voorbeeld, vul het bestaande productieworkertoken en minimaal één providerpad in en kies een unieke
+worker-ID:
+
+```bash
+cp properties.worker.env.example properties.env
+chmod 600 properties.env
+```
+
+Het ingevulde bestand ziet er bijvoorbeeld zo uit:
 
 ```dotenv
 AR_SERVER_URL=https://agent-runtime.vdzonsoftware.nl
 AR_WORKER_ID=voornaam-macbook
 AR_WORK_ROOT=work/worker
-```
-
-Maak daarnaast een genegeerde `secrets.env`. Neem `AR_WORKER_TOKEN` veilig over van de bestaande
-Agent Runtime-productieconfiguratie; draai hiervoor **niet** `deploy/initialize-secrets.sh`, want dat
-genereert een nieuw token dat de bestaande server niet kent. Credentialmappen moeten absolute
-paden zijn: `~` en `$HOME` worden in deze env-bestanden niet uitgebreid.
-
-```dotenv
 AR_WORKER_TOKEN=<bestaand-worker-token>
 AR_CODEX_CREDENTIALS_DIR=/Users/<account>/.codex
 AR_CLAUDE_CREDENTIALS_DIR=/Users/<account>/.claude
 ```
 
-Eén provider is voldoende; laat de regel voor een niet-gebruikte provider weg. Beveilig het bestand:
+Neem `AR_WORKER_TOKEN` veilig over van de bestaande Agent Runtime-productieconfiguratie. Draai
+hiervoor **niet** `deploy/initialize-secrets.sh`: dat script beheert de OpenShift/serversecrets en
+kan een nieuw token genereren dat de bestaande server nog niet kent. Een worker-only laptop heeft
+geen `secrets.env` nodig. `properties.env` staat in `.gitignore` en moet vanwege het workertoken mode
+`0600` houden. Credentialmappen moeten absolute paden zijn; `~` en `$HOME` worden niet uitgebreid.
+Eén provider is voldoende, dus verwijder de regel voor een niet-gebruikte provider.
+
+Een bestaande installatie met de oude tweebestandsconfiguratie migreert eenmalig met:
 
 ```bash
-chmod 600 secrets.env
+./deploy/macos/install-worker-launch-agent.sh migrate
 ```
 
 Projectcredentials zijn optioneel. Maak pas wanneer een project ze nodig heeft een
@@ -141,20 +148,24 @@ HKH__ACCEPTANCE_PASSWORD=<wachtwoord>
 chmod 600 project-credentials.env
 ```
 
+Sla OpenShift-toegang per project als Base64-kubeconfig op. Daardoor kan een geselecteerde job de
+kubeconfig binnen zijn container materialiseren; een absoluut hostpad naar `~/.kube` zou daar niet
+bruikbaar zijn.
+
 ### 4. Worker bouwen en installeren
 
-Bouw de worker schoon en download het execution-image uit de effectieve lokale configuratie.
-`properties.env` mag daarbij de standaardwaarde overschrijven:
+Bouw alleen de worker-JAR; het execution-image wordt door GitHub gebouwd en hoeft lokaal niet te
+worden gebouwd of vooraf gedownload:
 
 ```bash
 export JAVA_HOME=$(/usr/libexec/java_home -v 21)
 mvn -B --no-transfer-progress clean package
-execution_image="$(awk -F= '$1 == "AR_EXECUTION_IMAGE" { image=$2 } END { print image }' properties.default.env properties.env)"
-docker pull --platform linux/amd64 "$execution_image"
 ```
 
-Het execution-image wordt momenteel als `linux/amd64` gepubliceerd. Docker Desktop voert dit op
-een Apple Silicon-Mac via emulatie uit.
+Na iedere succesvolle merge naar `main` publiceert GitHub Actions
+`ghcr.io/robbertvdzon/agent-runtime-execution:main` voor `linux/amd64` en `linux/arm64`. De worker
+gebruikt bij iedere nieuwe job `docker run --pull always`: Docker controleert de tag en downloadt
+alleen nieuwere lagen. `AR_EXECUTION_IMAGE` hoeft daarom niet in `properties.env` te staan.
 
 Controleer eerst alles zonder de bestaande macOS-service te wijzigen en installeer hem daarna:
 
@@ -163,8 +174,8 @@ Controleer eerst alles zonder de bestaande macOS-service te wijzigen en installe
 ./deploy/macos/install-worker-launch-agent.sh install
 ```
 
-De installer valideert Java, Docker, het execution-image, de worker-JAR, bestandsrechten en de
-providercredentialbestanden. Daarna rendert hij een plist met de absolute paden van deze checkout.
+De installer valideert Java, Docker, de worker-JAR, bestandsrechten en providercredentialbestanden.
+Daarna rendert hij een plist met de absolute paden van deze checkout.
 
 ### 5. Status en logging bekijken
 
@@ -179,9 +190,10 @@ en beschikbaar is; `1/1` betekent dat hij een job uitvoert.
 
 ### Beheer, updates en problemen
 
-Na een code-update: voer opnieuw de schone Maven-build en `docker pull` uit, en draai daarna
-`install` opnieuw. De installer vervangt dan de plist en herstart de service. Handmatig herstarten,
-stoppen of volledig verwijderen kan met:
+Na een worker-code-update: voer opnieuw de schone Maven-build uit en draai daarna `install` opnieuw.
+Een nieuwe execution-image vereist op de laptop geen handeling; de eerstvolgende job haalt hem op.
+De installer vervangt de plist en herstart de service. Handmatig herstarten, stoppen of volledig
+verwijderen kan met:
 
 ```bash
 launchctl kickstart -k gui/$(id -u)/nl.vdzon.agent-runtime.worker
@@ -191,7 +203,7 @@ launchctl bootout gui/$(id -u)/nl.vdzon.agent-runtime.worker
 
 Bij problemen zijn `work/logs/worker-error.log` en `launchctl print` de eerste controles. Controleer
 vervolgens of Docker Desktop draait, de Agent Runtime-URL bereikbaar is, de lokale agentlogin nog
-geldig is en `secrets.env` en `project-credentials.env` (indien aanwezig) mode `0600` hebben.
+geldig is en `properties.env` en `project-credentials.env` (indien aanwezig) mode `0600` hebben.
 
 Bij `AR_CLAUDE_CREDENTIALS_DIR=/Users/<account>/.claude` mount de worker daarnaast uitsluitend het
 reguliere, niet-symlinkende siblingbestand `/Users/<account>/.claude.json` read-only. Claude Code

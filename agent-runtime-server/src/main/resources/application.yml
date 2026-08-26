@@ -46,8 +46,8 @@ agent-runtime:
   max-attempts: ${AR_MAX_ATTEMPTS:3}
   default-priority: ${AR_DEFAULT_PRIORITY:50}
   max-output-attempts: ${AR_MAX_OUTPUT_ATTEMPTS:3}
-  product-factory-environment-prefixes: ${AR_PRODUCT_FACTORY_ENVIRONMENT_PREFIXES:PF,HKH}
-  software-factory-environment-prefixes: ${AR_SOFTWARE_FACTORY_ENVIRONMENT_PREFIXES:SF,PF,HKH}
+  product-factory-environment-prefixes: ${AR_PRODUCT_FACTORY_ENVIRONMENT_PREFIXES:PF,HKH,HKH_AUTOPILOT,PERSONAL_FEED,ROBBERTS_ASSISTENT,SF}
+  software-factory-environment-prefixes: ${AR_SOFTWARE_FACTORY_ENVIRONMENT_PREFIXES:SF,PF,HKH,HKH_AUTOPILOT,PERSONAL_FEED,ROBBERTS_ASSISTENT}
   product-factory-providers: ${AR_PRODUCT_FACTORY_PROVIDERS:CODEX,CLAUDE,MOCKED}
   software-factory-providers: ${AR_SOFTWARE_FACTORY_PROVIDERS:CODEX,CLAUDE,MOCKED}
   product-factory-models: ${AR_PRODUCT_FACTORY_MODELS:*}

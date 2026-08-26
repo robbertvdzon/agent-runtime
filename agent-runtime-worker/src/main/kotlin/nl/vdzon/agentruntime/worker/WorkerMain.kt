@@ -53,7 +53,7 @@ data class WorkerConfig(
                 required("AR_SERVER_URL").removeSuffix("/"), required("AR_WORKER_TOKEN"),
                 values["AR_WORKER_ID"]?.takeIf(String::isNotBlank) ?: InetAddress.getLocalHost().hostName,
                 Path.of(values["AR_WORK_ROOT"] ?: "work/worker").toAbsolutePath().normalize(),
-                values["AR_EXECUTION_IMAGE"] ?: "ghcr.io/robbertvdzon/agent-runtime-execution:sha-fb3a880fb267945249a8dd0151f286012108a8d0",
+                values["AR_EXECUTION_IMAGE"] ?: "ghcr.io/robbertvdzon/agent-runtime-execution:main",
                 values["AR_CODEX_CREDENTIALS_DIR"]?.takeIf(String::isNotBlank)?.let(Path::of),
                 values["AR_CLAUDE_CREDENTIALS_DIR"]?.takeIf(String::isNotBlank)?.let(Path::of),
                 aliases, root.resolve("project-credentials.env"), projectCredentials.toMutableMap(),
@@ -283,6 +283,10 @@ class JobExecutor(
             and writable output under `/job/output`. Never include secret values in a provider prompt,
             another AI request, transcript, result or artifact. Write the structured result to
             `/job/output/result.json` and evidence files directly to `/job/output/artifacts`.
+
+            A selected key ending in `__OPENSHIFT_KUBECONFIG_BASE64` contains a Base64-encoded
+            kubeconfig. Decode its value without printing it to a mode-0600 file under `/tmp`, set
+            `KUBECONFIG` to that file, and delete it when the OpenShift operation is complete.
         """.trimIndent())
         listOf(input, docs).forEach(::makeReadOnlyTree)
     }
@@ -291,7 +295,7 @@ class JobExecutor(
         val credentials = providerAdapter(claim.job.provider).credentials()
         val name = containerName(claim, outputAttemptNumber)
         val command = mutableListOf(
-            "docker", "run", "--rm", "--name", name,
+            "docker", "run", "--pull", "always", "--rm", "--name", name,
             "--label", "nl.vdzon.agent-runtime.worker=${config.workerId}",
             "--label", "nl.vdzon.agent-runtime.boot=$bootId",
             "--label", "nl.vdzon.agent-runtime.job=${claim.job.id}",
@@ -607,10 +611,13 @@ class RuntimeClient(private val config: WorkerConfig, private val mapper: Object
 object EnvFiles {
     fun load(root: Path): Map<String, String> {
         val result = linkedMapOf<String, String>()
-        listOf("properties.default.env", "properties.env", "secrets.env").map(root::resolve).filter(Path::exists).forEach { file ->
-            if (file.fileName.toString() == "secrets.env") SecureEnvFiles.requireOwnerOnly(file)
-            result.putAll(SecureEnvFiles.parse(file, Regex("[A-Z][A-Z0-9_]*")))
+        root.resolve("properties.default.env").takeIf(Path::exists)?.let {
+            result.putAll(SecureEnvFiles.parse(it, Regex("[A-Z][A-Z0-9_]*")))
         }
+        val local = root.resolve("properties.env")
+        require(local.exists()) { "$local is required for a laptop worker" }
+        SecureEnvFiles.requireOwnerOnly(local)
+        result.putAll(SecureEnvFiles.parse(local, Regex("[A-Z][A-Z0-9_]*")))
         result.putAll(System.getenv())
         return result
     }

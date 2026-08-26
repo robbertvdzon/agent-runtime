@@ -20,12 +20,31 @@ class WorkerSupportTest {
     @Test
     fun `environment files override defaults while process environment stays authoritative`(@TempDir root: Path) {
         root.resolve("properties.default.env").writeText("AR_SERVER_URL=http://default\nAR_WORKER_TOKEN=default\n")
-        root.resolve("properties.env").writeText("AR_SERVER_URL=http://properties\n")
-        root.resolve("secrets.env").writeText("AR_WORKER_TOKEN=secret\n")
-        runCatching { Files.setPosixFilePermissions(root.resolve("secrets.env"), setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)) }
+        root.resolve("properties.env").writeText("AR_SERVER_URL=http://properties\nAR_WORKER_TOKEN=secret\n")
+        root.resolve("secrets.env").writeText("AR_WORKER_TOKEN=legacy-value-that-must-be-ignored\n")
+        runCatching { Files.setPosixFilePermissions(root.resolve("properties.env"), setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)) }
         val values = EnvFiles.load(root)
         assertThat(values["AR_SERVER_URL"]).isEqualTo("http://properties")
         assertThat(values["AR_WORKER_TOKEN"]).isEqualTo("secret")
+    }
+
+    @Test
+    fun `worker properties must be an owner-only regular file`(@TempDir root: Path) {
+        val properties = root.resolve("properties.env")
+        properties.writeText("AR_WORKER_TOKEN=secret\n")
+        runCatching {
+            Files.setPosixFilePermissions(properties, setOf(
+                PosixFilePermission.OWNER_READ,
+                PosixFilePermission.OWNER_WRITE,
+                PosixFilePermission.GROUP_READ,
+            ))
+        }
+        assertThatThrownBy { EnvFiles.load(root) }.isInstanceOf(IllegalArgumentException::class.java)
+
+        properties.toFile().delete()
+        val target = root.resolve("target.env").also { it.writeText("AR_WORKER_TOKEN=secret\n") }
+        properties.createSymbolicLinkPointingTo(target)
+        assertThatThrownBy { EnvFiles.load(root) }.isInstanceOf(IllegalArgumentException::class.java)
     }
 
     @Test

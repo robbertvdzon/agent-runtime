@@ -54,10 +54,9 @@ weigert `MOCKED` en stelt de Test Control API niet bruikbaar beschikbaar.
 
 ## Secrets
 
-Het secretproces volgt dezelfde regels als Product Factory:
+Het serversecretproces volgt dezelfde regels als Product Factory:
 
-- prioriteit lokaal: `properties.default.env`, genegeerd `properties.env`, genegeerd `secrets.env`,
-  daarna procesenvironment;
+- de lokale bron voor te sealen OpenShift-serversecrets is het genegeerde `secrets.env`;
 - productie leest waarden uit één OpenShift Secret dat alleen als SealedSecret in Git staat;
 - secretwaarden komen nooit in prompts, payloads, foutmeldingen, Dockerlabels of logs;
 - `deploy/seal-secrets.sh` gebruikt alleen bestanden met mode `0600`, `mktemp` en een cleanuptrap;
@@ -65,11 +64,12 @@ Het secretproces volgt dezelfde regels als Product Factory:
   genereert onafhankelijke ontbrekende waarden;
 - een productieproces start niet met lege, korte of lokale standaardtokens.
 
-De lokale worker scheidt deze Runtime-secrets van
-`project-credentials.env`. Alleen namen uit dat tweede, eveneens gitignored en met `0600`
-beschermde bestand worden geregistreerd. Een job bevat uitsluitend namen; de worker maakt per
-attempt een tijdelijke subset. Het bronbestand zelf en alle `AR_*`-, provider- en
-Git-publicatiecredentials worden nooit gemount.
+Een worker-only laptop gebruikt geen `secrets.env`. Alle interne workerconfiguratie staat in één
+gitignored `properties.env` met mode `0600`; procesenvironmentwaarden mogen die instellingen
+overschrijven. De worker scheidt dit bestand van `project-credentials.env`. Alleen namen uit dat
+tweede, eveneens gitignored en met `0600` beschermde bestand worden geregistreerd. Een job bevat
+uitsluitend namen; de worker maakt per attempt een tijdelijke subset. De bronbestanden zelf en alle
+`AR_*`-, provider- en Git-publicatiecredentials worden nooit gemount.
 
 ## Execution-containers
 

@@ -21,13 +21,15 @@ Stand: 25 augustus 2026.
 ## Nog vereist voor release
 
 1. Meld de lokale Claude CLI opnieuw aan en herhaal de volledige Claude-smoke.
-2. Commit en publiceer dezelfde immutable server-, worker- en execution-imageversie.
-3. Werk de imagepin in de manifests bij vanaf de nu nog ingestelde oude
-   `sha-1a6a8699351f73da80ed1aac8f041900f7024e25`. De namespaces `agent-runtime-acceptance` en
-   `agent-runtime` bestaan en zijn actief; de huidige `oc`-identiteit is `system:admin`.
+2. Commit en publiceer de server- en workerwijzigingen en het multi-arch execution-image. Publiceer
+   dat execution-image onder zowel de immutable SHA-tag als de bewegende `main`-tag.
+3. Controleer dat `agent-runtime-execution:main` naar de zojuist gebouwde SHA-digest wijst. De
+   namespaces `agent-runtime-acceptance` en `agent-runtime` bestaan en zijn actief; de huidige
+   `oc`-identiteit is `system:admin`.
 4. Rol naar acceptatie uit en oefen contractafwijzingen, migratie vanaf Flyway v1, mocks, metrics,
    redactie en herstel vanaf databasebackup.
-5. Maak de productiebackup en rol exact dezelfde immutable artifacts naar productie uit.
+5. Maak de productiebackup, rol de immutable serverrelease uit en controleer dat laptopworkers bij
+   hun eerstvolgende job automatisch de actuele execution-image ophalen.
 
-Een productie-uitrol met de bestaande `main`-tags zou niet deze lokale wijziging bevatten en is
-daarom bewust niet uitgevoerd.
+Een productie-uitrol voordat de nieuwe `main`-tag gepubliceerd is zou niet deze lokale wijziging
+bevatten en is daarom bewust niet uitgevoerd.

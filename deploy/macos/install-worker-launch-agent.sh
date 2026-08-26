@@ -13,8 +13,9 @@ readonly STDOUT_PATH="$LOG_DIRECTORY/worker.log"
 readonly STDERR_PATH="$LOG_DIRECTORY/worker-error.log"
 
 usage() {
-    printf 'Gebruik: %s check|install|uninstall\n' "$0"
+    printf 'Gebruik: %s check|migrate|install|uninstall\n' "$0"
     printf '  check      controleert de configuratie zonder de actieve service te wijzigen\n'
+    printf '  migrate    migreert een bestaande worker eenmalig van secrets.env naar properties.env\n'
     printf '  install    installeert of vervangt de LaunchAgent en start de worker\n'
     printf '  uninstall  stopt de LaunchAgent en verwijdert alleen de geïnstalleerde plist\n'
 }
@@ -36,7 +37,7 @@ read_config_value() {
     local value=""
     local file raw_line line key candidate
 
-    for file in "$REPOSITORY_ROOT/properties.default.env" "$REPOSITORY_ROOT/properties.env" "$REPOSITORY_ROOT/secrets.env"; do
+    for file in "$REPOSITORY_ROOT/properties.default.env" "$REPOSITORY_ROOT/properties.env"; do
         [[ -f "$file" ]] || continue
         while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
             line="$(trim "$raw_line")"
@@ -102,7 +103,66 @@ validate_provider_credentials() {
         configured=1
     fi
 
-    [[ "$configured" -eq 1 ]] || fail "configureer ten minste AR_CODEX_CREDENTIALS_DIR of AR_CLAUDE_CREDENTIALS_DIR in secrets.env."
+    [[ "$configured" -eq 1 ]] || fail "configureer ten minste AR_CODEX_CREDENTIALS_DIR of AR_CLAUDE_CREDENTIALS_DIR in properties.env."
+}
+
+migrate_legacy_config() {
+    local properties="$REPOSITORY_ROOT/properties.env"
+    local legacy="$REPOSITORY_ROOT/secrets.env"
+    local temporary
+    [[ -f "$properties" && ! -L "$properties" ]] || fail "$properties moet vóór migratie een regulier bestand zijn."
+    require_owner_only_file "$legacy"
+    temporary="$(mktemp -t agent-runtime-properties.XXXXXX.env)"
+    trap 'rm -f "$temporary"' EXIT
+    chmod 600 "$temporary"
+    /usr/bin/awk '
+        function trimmed(value) {
+            sub(/^[[:space:]]+/, "", value)
+            sub(/[[:space:]]+$/, "", value)
+            return value
+        }
+        function config_key(line, separator, key) {
+            separator = index(line, "=")
+            if (separator == 0) return ""
+            key = trimmed(substr(line, 1, separator - 1))
+            return key
+        }
+        function config_value(line, separator, value) {
+            separator = index(line, "=")
+            value = trimmed(substr(line, separator + 1))
+            return value
+        }
+        FNR == NR {
+            key = config_key($0)
+            if (key == "AR_WORKER_TOKEN" || key == "AR_CODEX_CREDENTIALS_DIR" || key == "AR_CLAUDE_CREDENTIALS_DIR") {
+                legacy[key] = config_value($0)
+            }
+            next
+        }
+        {
+            key = config_key($0)
+            if (key == "AR_EXECUTION_IMAGE") next
+            if (key == "AR_WORKER_TOKEN" || key == "AR_CODEX_CREDENTIALS_DIR" || key == "AR_CLAUDE_CREDENTIALS_DIR") {
+                if (legacy[key] != "") print key "=" legacy[key]
+                else print $0
+                seen[key] = 1
+                next
+            }
+            print
+        }
+        END {
+            count = split("AR_WORKER_TOKEN AR_CODEX_CREDENTIALS_DIR AR_CLAUDE_CREDENTIALS_DIR", keys, " ")
+            for (loop_index = 1; loop_index <= count; loop_index++) {
+                key = keys[loop_index]
+                if (!seen[key] && legacy[key] != "") print key "=" legacy[key]
+            }
+        }
+    ' "$legacy" "$properties" > "$temporary"
+    install -m 0600 "$temporary" "$properties"
+    rm -f "$temporary"
+    trap - EXIT
+    printf 'Workerconfiguratie is zonder secretwaarden te tonen naar properties.env gemigreerd.\n'
+    printf 'secrets.env is niet verwijderd omdat dit bestand ook een lokale OpenShift-secretbron kan zijn.\n'
 }
 
 render_plist() {
@@ -122,13 +182,12 @@ preflight_and_render() {
     local destination="$1"
     [[ "$(uname -s)" == "Darwin" ]] || fail "deze installer is alleen voor macOS."
     [[ -f "$TEMPLATE" ]] || fail "plist-template ontbreekt: $TEMPLATE"
-    [[ -f "$REPOSITORY_ROOT/properties.env" ]] || fail "properties.env ontbreekt; configureer eerst server-URL en een unieke worker-ID."
-    require_owner_only_file "$REPOSITORY_ROOT/secrets.env"
+    require_owner_only_file "$REPOSITORY_ROOT/properties.env"
     if [[ -e "$REPOSITORY_ROOT/project-credentials.env" ]]; then
         require_owner_only_file "$REPOSITORY_ROOT/project-credentials.env"
     fi
     [[ -n "$(read_config_value AR_SERVER_URL)" ]] || fail "AR_SERVER_URL ontbreekt."
-    [[ -n "$(read_config_value AR_WORKER_TOKEN)" ]] || fail "AR_WORKER_TOKEN ontbreekt in secrets.env."
+    [[ -n "$(read_config_value AR_WORKER_TOKEN)" ]] || fail "AR_WORKER_TOKEN ontbreekt in properties.env."
     validate_provider_credentials
 
     command -v docker >/dev/null || fail "Docker ontbreekt. Installeer en start Docker Desktop."
@@ -136,7 +195,6 @@ preflight_and_render() {
     local execution_image
     execution_image="$(read_config_value AR_EXECUTION_IMAGE)"
     [[ -n "$execution_image" ]] || fail "AR_EXECUTION_IMAGE ontbreekt."
-    docker image inspect "$execution_image" >/dev/null 2>&1 || fail "execution-image ontbreekt lokaal. Voer op Apple Silicon uit: docker pull --platform linux/amd64 '$execution_image'"
 
     local java_home java_bin worker_jar
     java_home="$(/usr/libexec/java_home -v 21 2>/dev/null)" || fail "JDK 21 ontbreekt."
@@ -156,6 +214,10 @@ case "$action" in
         trap 'rm -f "$temporary_plist"' EXIT
         preflight_and_render "$temporary_plist"
         printf 'Configuratie is geldig. De actieve LaunchAgent is niet gewijzigd.\n'
+        ;;
+    migrate)
+        [[ "$(uname -s)" == "Darwin" ]] || fail "deze migratie is alleen voor macOS."
+        migrate_legacy_config
         ;;
     install)
         temporary_plist="$(mktemp -t agent-runtime-worker.XXXXXX.plist)"
