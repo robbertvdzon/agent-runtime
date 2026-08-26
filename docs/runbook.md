@@ -46,10 +46,11 @@ Flywaymigratie. Startup faalt bewust dicht.
 
 1. Maak lokaal een nieuwe sterke waarde.
 2. Werk de OpenShift-secretbron `secrets.env` bij zonder hem te tonen.
-3. seal en deploy beide omgevingen.
-4. werk `AR_WORKER_TOKEN` in de owner-only `properties.env` van iedere worker bij en herstart de
+3. Draai `./deploy/seal-secrets.sh`, commit de twee gewijzigde Sealed Secrets en push naar `main`.
+4. Wacht tot beide Argo CD Applications `Synced Healthy` zijn.
+5. Werk `AR_WORKER_TOKEN` in de owner-only `properties.env` van iedere worker bij en herstart de
    worker.
-5. controleer registratie en trek daarna de oude waarde definitief in.
+6. Controleer registratie in de monitor.
 
 ## Restore-oefening
 

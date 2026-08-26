@@ -1,17 +1,30 @@
-# agent_runtime_monitor
+# Agent Runtime-monitor
 
-A new Flutter project.
+Flutter Web-beheerinterface voor Agent Runtime. De monitor gebruikt de beveiligde
+`/v1/management`-API en wordt als statische webbuild in de server-JAR opgenomen.
 
-## Getting Started
+## Ontwikkelen
 
-This project is a starting point for a Flutter application.
+```bash
+flutter pub get
+flutter analyze
+flutter test
+flutter run -d chrome
+```
 
-A few resources to get you started if this is your first Flutter project:
+Een lokaal gestarte Runtime-server is bereikbaar op `http://localhost:8080`. De noodlogin gebruikt
+het lokale `local-admin-token`.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## Releasebuild
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```bash
+flutter build web --release
+cd ..
+rsync -a --delete monitor-ui/build/web/ agent-runtime-server/src/main/resources/static/
+```
+
+Commit zowel de Flutter-bron als de gesynchroniseerde serverassets. De repository-CI bouwt en test
+de monitor opnieuw en neemt de assets op in de servercontainer.
+
+De functionele beschrijving staat in
+[`../docs/beheerinterface.md`](../docs/beheerinterface.md).
