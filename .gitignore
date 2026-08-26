@@ -7,4 +7,5 @@ work/
 *.log
 properties.env
 secrets.env
+project-credentials.env
 deploy/secrets-cluster.env

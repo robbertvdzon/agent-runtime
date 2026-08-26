@@ -11,7 +11,7 @@ Acceptatie is resetbaar en staat `MOCKED` toe. Productie is duurzaam en weigert 
 Cloudflare beëindigt publieke HTTPS en bereikt de OpenShift-route via HTTP. De routes gebruiken
 daarom, net als Software Factory, `insecureEdgeTerminationPolicy: Allow`; `Redirect` zou achter
 deze proxy een redirectlus maken.
-Beide omgevingen gebruiken dezelfde serverartifact en dezelfde externe v1-contracten.
+Beide omgevingen gebruiken dezelfde serverartifact en hetzelfde externe contract.
 
 ## Secrets voorbereiden
 
@@ -20,13 +20,13 @@ Beide omgevingen gebruiken dezelfde serverartifact en dezelfde externe v1-contra
 ./deploy/seal-secrets.sh
 ```
 
-De eerste opdracht maakt alleen wanneer nodig het genegeerde `secrets.env`. Hij leest bestaande v1
+De eerste opdracht maakt alleen wanneer nodig het genegeerde `secrets.env`. Hij leest bestaande
 Factory-secretbronnen zonder waarden te tonen. De tweede opdracht maakt twee namespacegebonden,
 versleutelde manifests. Verwijder of commit `secrets.env` nooit.
 
 ## Bouwen en publiceren
 
-De CI verifieert Maven, Modulith, contracttests, Docker en beide Kustomize-overlays. Na een groene
+De CI verifieert Maven, Modulith, contracttests, Flutter, Docker en beide Kustomize-overlays. Na een groene
 mainbuild publiceert de imageworkflow:
 
 - `ghcr.io/robbertvdzon/agent-runtime-server:main`;
@@ -67,8 +67,13 @@ database is teruggezet en de Flyway- en functionele smokechecks slagen.
 
 ## Rollback
 
-1. Kies de vorige werkende immutable servertag.
-2. Pas alleen de image aan en wacht op readiness.
-3. Draai geen neerwaartse Flywaymigratie; migrations blijven voor ondersteunde rollbackversies
-   achterwaarts compatibel.
-4. Herstel de database uitsluitend bij aantoonbare datacorruptie en eerst naar een aparte database.
+Deze release verwijdert bewust ongebruikte contractkolommen. Een oude serverimage is na migratie
+niet compatibel met het nieuwe schema.
+
+1. Maak vóór productie een verifieerbare databasebackup en noteer de immutable server-, worker- en
+   execution-imagetags.
+2. Rol acceptatie uit, oefen de migratie en herstel de backup naar een aparte database.
+3. Bij een applicatiefout die geen schemaherstel vereist: herstel vooruit met een nieuwe image.
+4. Alleen wanneer terugkeer naar de oude server echt noodzakelijk is: stop writers, herstel de
+   pre-releasebackup naar een nieuwe database en koppel de oude immutable image daaraan.
+5. Draai nooit handmatig een neerwaartse Flywaymigratie op de actieve database.

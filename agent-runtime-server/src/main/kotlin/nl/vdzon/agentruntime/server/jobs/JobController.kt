@@ -40,8 +40,9 @@ class JobController(private val service: JobService, private val store: JobStore
 
     @PostMapping("/{id}/cancel")
     fun cancel(@PathVariable id: String, request: HttpServletRequest): JobView {
-        service.visibleJob(ApiSecurity.identity(request), id)
-        store.requestCancel(id)
+        val identity = ApiSecurity.identity(request)
+        service.visibleJob(identity, id)
+        store.requestCancel(id, identity.tenantId ?: "administrator")
         return store.find(id)!!.view
     }
 

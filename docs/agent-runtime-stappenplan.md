@@ -1,917 +1,653 @@
-# Stappenplan gedeelde Agent Runtime
+# Stappenplan Agent Runtime
 
-## Status en relatie tot andere plannen
+## Status
 
-Dit is een zelfstandig stappenplan voor een nieuwe gedeelde Agent Runtime. Product Factory en
-Software Factory zijn de eerste twee beoogde consumenten en bepalen samen de twee externe
-jobcontracten: applicatiewerk en repositorywerk. Hun domein- en orchestratieplannen blijven
-zelfstandig; alleen de technische agentuitvoering wordt gedeeld.
+Dit is het uitgevoerde vervolgplan voor Agent Runtime na de eerste platformrelease. De fasen 0 tot
+en met 8 en de bouw-, test-, documentatie- en observabilityonderdelen van fase 9 zijn op 25 augustus
+2026 geïmplementeerd en lokaal geverifieerd. De resterende releasehandelingen zijn extern: Claude
+opnieuw authenticeren, immutable images publiceren, een OpenShift-project selecteren, acceptatie
+uitrollen en controleren, een databasebackup maken en daarna productie uitrollen. De actuele
+verificatiestatus staat in [release-verificatie.md](release-verificatie.md).
 
-De eerste platformrelease is in deze repository uitgevoerd: contracten, control plane, centrale
-mock, lokale Codex/Claude-worker, versleuteld hersteljournal, repositorywerk, monitor, CI en beide
-OpenShift-overlays zijn aanwezig. De fases voor het omschakelen van Product Factory, Software
-Factory, Newsfeed en HKH blijven bewust migratiefases in hun eigen repositories; de Runtime-grens
-waarop zij aansluiten is nu inzetbaar.
+De eerste platformrelease
+bevat al het duurzame control plane, de lokale worker, Codex- en Claude-uitvoering,
+`REPOSITORY_WORK`, centrale mocks, OpenShift-deployment en een compacte technische monitor.
 
-Na deze release is voor `APPLICATION_WORK` een eenvoudiger v2-contract besloten. Eén complete
-`prompt` vervangt `instructions` plus `input`; domeincorrelatie en configuratieversies blijven bij
-de consument; projectcredentials worden lokaal door workers ontdekt en alleen bij naam gevraagd;
-kleine inputattachments worden Base64 aangeleverd; outputartifacts blijven bestanden; en iedere
-attempt krijgt een harde deadline. [Vereenvoudigd APPLICATION_WORK-contract v2](application-work-v2.md)
-is voor deze migratie leidend. De onderstaande v1-velden beschrijven de bestaande release en mogen
-niet als doelcontract voor de Product Factory-aansluiting worden gebruikt.
+Dit plan beschrijft alleen wijzigingen in deze repository. Werk in Product Factory, Software
+Factory, Newsfeed, HKH of een andere consument hoort in het stappenplan van die applicatie en staat
+hier niet meer tussen. Agent Runtime levert wel de generieke contracten en API's die zulke
+consumenten nodig hebben.
 
-Dit document is de enige bron voor deze roadmap. Het stond eerder tijdelijk in de Product Factory-repository (`docs/agent-runtime-stappenplan.md`); die kopie verwijst nu alleen nog hierheen.
+De uitgevoerde wijzigingen komen uit drie leidende specificaties:
 
-## Referentiemateriaal in andere repositories
+1. [Vereenvoudigd `APPLICATION_WORK`-contract](application-work.md);
+2. [Betrouwbare JSON-resultaten](implementatieplan-betrouwbare-json-resultaten.md);
+3. [Eenvoudige beheerinterface](beheerinterface.md).
 
-Deze repositories staan naast deze in `~/git/` en zijn de belangrijkste bronnen voor patronen en context. Lees er vrij in — er hoeft niets gewijzigd te worden om dit stappenplan te begrijpen of eraan te beginnen.
-
-- **Software Factory** — `/Users/robbertvdzon/git/softwarefactory` (GitHub: `robbertvdzon/software-factory`). Robbert's bestaande autonome multi-agent pipeline (planner/developer/reviewer/tester-agents, georkestreerd door een factory-loop) die tracker-stories omzet in gemergde, gedeployde pull requests. Dit is de volwassen functionele referentie voor hoe agents nu al draaien, en de nieuwe runtime hergebruikt de architectuur en lessen daarvan, niet de codebase. Concreet relevant:
-  - `Dockerfile.agent` en `runtime/docker/DockerAgentRuntime.kt` — één gedeeld agent-image met alle toolchains ingebakken (Playwright/Chromium voor browser-automation, Maven/Node/Flutter voor build/test, `oc`/`kubectl`, `psql`), en rol-gescopede credential-mounts (kubeconfig alleen voor tester/refiner, Docker-socket alleen voor build/testrollen).
-  - `.factory/verification.yaml` en `verification/TesterVerificationRunner.kt` — het patroon van een deterministische, niet-AI verificatierunner die agent-geclaimde build/testcommando's zelf nogmaals uitvoert en Git-toestand vóór/na vergelijkt, zodat een agent nooit ongecontroleerd "getest" kan claimen.
-  - `AgentWorkspace.kt` (`AGENT_ENV_DENYLIST`) — het huidige, bewust grovere denylist-model voor secrets; deze runtime kiest expliciet voor een allowlist per jobprofile in plaats daarvan (zie Beveiligingsgrenzen).
-  - `tools/sf-browser` — voorbeeld van een losstaand browser-automation-script (Playwright, persistente context) dat als los bestand in de container gemount wordt.
-  - Fase 3, 6 en 7 van dit stappenplan verwijzen expliciet naar deze patronen.
-- **Product Factory** — `/Users/robbertvdzon/git/product-factory` (GitHub: `robbertvdzon/product-factory`). De eerste consument van applicatiewerk. Product Factory levert complete, opaque AI-verzoeken met eigen instructies, input, provider, model en resultaatschema. De runtime kent geen agentrollen, epics, stories of andere Product Factory-entiteiten.
-
-## Aanleiding
-
-Verschillende applicaties hebben dezelfde lokale voorzieningen nodig:
-
-- AI-agents uitvoeren via accounts en abonnementen op de MacBook;
-- taken ontvangen van applicaties die op OpenShift draaien;
-- voor ontwikkeltaken repositories ophalen, branches maken en wijzigingen publiceren;
-- voor applicatietaken veilig met beperkte applicatiegegevens werken;
-- centraal kunnen zien wat draait, wacht, mislukt of voltooid is.
-
-Wanneer iedere applicatie hiervoor een eigen worker bouwt, ontstaan meerdere implementaties voor authenticatie, wachtrijen, Git, containers, logging, retries en beveiliging. Daarom maken we hiervan één apart platform.
+De huidige API heeft nog geen consumers. Het bestaande contract wordt daarom rechtstreeks breaking
+vereenvoudigd. Er komt geen parallel v2-contract, compatibiliteitsroute of overgangsmodel.
 
 ## Doel
 
-Een generieke Agent Runtime maken waarmee geautoriseerde applicaties op OpenShift betrouwbare AI-taken kunnen aanbieden aan één of meer lokale workers, zonder de MacBook vanaf internet bereikbaar te maken.
+Na uitvoering van dit plan kan Agent Runtime:
 
-De runtime ondersteunt vanaf het eerste versieerbare contract twee soorten werk:
+- een minimale `APPLICATION_WORK`-aanvraag met één complete prompt uitvoeren;
+- lokaal beschikbare projectcredentials uitsluitend bij naam ontdekken en per attempt begrensd
+  beschikbaar stellen;
+- kleine inputattachments veilig materialiseren en outputartifacts als bestanden verzamelen;
+- iedere echte attempt onafhankelijk op een harde deadline stoppen;
+- uitsluitend syntactisch en schema-geldige JSON als succesvol resultaat publiceren;
+- een model binnen dezelfde technische attempt maximaal drie gerichte outputpogingen geven;
+- hetzelfde gedrag deterministisch via de centrale mockexecutor testen;
+- actieve, wachtende en afgeronde jobs, workers, resultaten en zichtbare geredigeerde
+  AI-transcripten via een beveiligde Flutter Web-monitor tonen.
 
-1. **`APPLICATION_WORK`**: een complete, opaque AI-taak uitvoeren voor een aanvragende applicatie.
-   De taak mag optioneel een publieke repository op een exacte commit-SHA lezen, maar schrijft nooit
-   naar Git.
-2. **`REPOSITORY_WORK`**: een gecontroleerde Git-workspace voorbereiden, een agent code of
-   documenten laten wijzigen, valideren en het resultaat door de worker laten committen en
-   publiceren.
+## Buiten scope
 
-De eerste bruikbare versie bewijst de volledige applicatiewerkroute voor Product Factory: één
-OpenShift-server, een duurzame wachtrij, centrale mockuitvoering en één lokale worker voor Codex en
-Claude. Repositorywerk volgt daar direct op voor Software Factory; beide jobsoorten delen hetzelfde
-control plane, workerprotocol en operationele model.
+- Clients, outboxes, rolconfiguratie of domeinverwerking in consumerende applicaties bouwen.
+- Applicatiespecifieke agentrollen, prompttemplates, jobkeys of domeincorrelatie in Agent Runtime
+  opnemen.
+- Spring AI introduceren of Codex CLI en Claude Code vervangen.
+- Provider- of modelkeuze stilzwijgend wijzigen na een fout.
+- `REPOSITORY_WORK` opnieuw ontwerpen; alleen gedeelde infrastructuur mag daarvoor worden
+  uitgebreid.
+- Een agent Git-publicatiecredentials, Runtime-secrets of providercredentials geven.
+- Verborgen chain-of-thought verzamelen of reconstrueren.
+- Een configuratie- of bedieningsconsole bouwen. De nieuwe frontend is alleen een monitor.
+- Grote attachments, archiefuitpak of een objectstoremigratie toevoegen.
 
-## Niet het doel
+## Vaste architectuur- en veiligheidsgrenzen
 
-- De Agent Runtime wordt geen Product Factory of Software Factory. Hij voert werk uit, maar bepaalt niet welk product gebouwd moet worden.
-- De runtime bevat geen HKH-, Newsfeed- of Product Factory-domeinlogica.
-- Applicaties krijgen geen mogelijkheid om willekeurige shellcommando's op de MacBook uit te voeren.
-- AI-containers krijgen geen algemene GitHub-tokens, productiedatabasewachtwoorden of andere blijvende secrets.
-- Een lokale abonnementsworker is geen gegarandeerd altijd-beschikbare infrastructuur voor directe eindgebruikersvragen.
-- De bestaande workers worden pas verwijderd nadat hun vervanger aantoonbaar stabiel is.
-- De runtime beheert geen prompts, agentrollen of modelinstellingen namens een consument. Een
-  vertrouwde consument stelt een complete taak samen en blijft eigenaar van de domeinbetekenis.
+Deze regels gelden in iedere fase en worden niet per story opnieuw onderhandelbaar:
 
-## Uitgangspunten
+- De server is de enige eigenaar van jobs, planning, attempts, leases, fencing, retries, events,
+  transcriptdelen, resultaatacceptatie en artifactmetadata.
+- Alleen de server beslist of een AI-resultaat geldige JSON is en aan het bevroren schema voldoet.
+- De worker maakt uitsluitend uitgaande HTTPS-verbindingen en heeft geen directe
+  databaseverbinding.
+- Tenant, toegestane jobsoort, provider, model, tools, zichtbare projectprefixes, prioriteit,
+  retrybeleid en quota volgen uit het bearer-token en serverconfiguratie. Een payload verleent geen
+  rechten.
+- Runtime-, worker-, provider- en Git-publicatiecredentials blijven buiten de agentcontainer.
+- Alleen expliciet gevraagde waarden uit lokaal `project-credentials.env` mogen tijdelijk in een
+  agentcontainer worden gemount.
+- Prompt, transcript, diagnose, fout, resultaat en artifactmetadata zijn begrensd en worden vóór
+  duurzame opslag geredigeerd waar dat contractueel is toegestaan. Een JSON-resultaat wordt nooit
+  ongemerkt aangepast om redactie mogelijk te maken.
+- Iedere workeroperatie op een echte attempt vereist het actuele attempt-ID en fencing token.
+- Leases en herstelvensters kunnen een harde attemptdeadline nooit verlengen.
+- `MOCKED` is server-side, maakt geen workerattempt en is in productie niet beschikbaar.
+- Events, transcriptdelen en een succesvol eindresultaat zijn append-only respectievelijk
+  onveranderlijk.
+- `agent-runtime-contracts` bevat alleen versieerbare contractvormen. De servermodules blijven
+  acyclisch en de worker praat uitsluitend via het HTTPS-contract.
 
-- Een eigen repository en releasecyclus voor de Agent Runtime.
-- Kotlin en Spring Boot/Spring Modulith voor de server, aansluitend op de bestaande architectuur.
-- Een Kotlin-worker op macOS, zelfstandig te starten en via `launchd` op de achtergrond te draaien.
-- Alle verbindingen worden vanaf de worker naar OpenShift opgebouwd via beveiligde HTTPS long-polling requests, aangevuld met een korte periodieke poll als vangnet. Er wordt geen inkomende poort op de MacBook geopend.
-- Worker en server gebruiken geen WebSocket. Consumenten gebruiken eveneens gewone versieerbare
-  HTTPS-requests voor aanvragen en queries; eventuele UI-liveweergave is geen workertransport.
-- PostgreSQL is de bron voor jobs, statussen, leases, events en auditgegevens. Alleen de Agent Runtime Server heeft een databaseverbinding; de worker krijgt nooit rechtstreekse databasetoegang, ook niet wanneer de laptop zich in hetzelfde netwerk als OpenShift bevindt. Zo blijven autorisatie, contract en audit centraal bij de server.
-- Applicaties communiceren met een versieerbaar HTTP-contract; ze delen geen interne runtime-code of database.
-- Taken zijn asynchroon. Een applicatie maakt een job aan en leest later status en resultaat.
-- Het control plane is engine- en providerneutraal. Codex CLI en Claude Code zijn gelijkwaardige adapters; later kunnen lokale modellen achter dezelfde interface worden toegevoegd.
-- Een jobprofile bepaalt via een allowlist vooraf welke secrets, mounts en tools een job krijgt; er is geen standaardset die alleen door een denylist wordt beperkt. De aanvragende applicatie kan die grenzen niet tijdens de uitvoering verruimen.
-- Een vertrouwde applicatie mag binnen haar jobprofile exact provider en model aanvragen. De runtime
-  valideert die keuze en wacht zo nodig op een passende worker, maar vervangt haar niet stilzwijgend
-  door een ander model.
-- Alle jobsoorten draaien in hetzelfde brede, gedeelde execution-image met alle ondersteunde toolchains ingebakken (echte browser, build- en testtools, `oc`, databaseclients). Toegang wordt niet beperkt door tools uit het image weg te laten, maar door mounts en credentials per jobprofile te scopen.
-- Secrets worden nooit onderdeel van prompts, jobpayloads, resultaten of ongeredigeerde logs.
+## Uitvoeringsvolgorde
 
-## Beoogde architectuur
+De fasen worden in onderstaande volgorde uitgevoerd. Een fase mag technisch in meerdere pull
+requests worden verdeeld, maar haar Definition of Done is de poort naar de volgende fase.
 
-```mermaid
-flowchart LR
-    SF["Software Factory"] -->|"REPOSITORY_WORK"| ARS["Agent Runtime Server<br/>OpenShift"]
-    PF["Product Factory"] -->|"APPLICATION_WORK"| ARS
-    HKH["HKH"] -->|"job API"| ARS
-    NF["Newsfeed"] -->|"job API"| ARS
-
-    ARS --> DB[("PostgreSQL<br/>jobs, leases, events")]
-    ARS --> MOCK["Centrale mockexecutor<br/>test en acceptatie"]
-    UI["Monitor frontend"] --> ARS
-
-    MW["Lokale execution worker<br/>MacBook"] -->|"uitgaande HTTPS long-poll"| ARS
-    MW --> DOCKER["Geïsoleerde agentcontainer"]
-    MW --> GIT["Lokale Git-workspaces"]
-    DOCKER --> AI["Codex CLI, Claude Code<br/>of lokaal model"]
-    DOCKER --> TOOLS["Taakgebonden tools/API's"]
-```
-
-### Agent Runtime Server op OpenShift
-
-De server is het control plane en is verantwoordelijk voor:
-
-- authenticatie en autorisatie van aanvragende applicaties;
-- valideren en duurzaam opslaan van jobs;
-- prioriteiten, quota en eerlijke planning tussen applicaties;
-- workerregistratie, capabilities en heartbeats;
-- leases, time-outs, retries en annuleren;
-- jobevents, geredigeerde logs, zichtbare agenttranscriptdelen, resultaten en artefactmetadata;
-- deterministische mockuitvoering buiten productie;
-- monitor-API en live statusupdates;
-- audittrail van alle beslissingen en statusovergangen.
-
-De server voert zelf geen echte AI- of Git-uitvoering uit. Alleen de centrale mockexecutor mag een
-job zonder laptopworker afronden.
-
-### Lokale execution worker
-
-De worker is verantwoordelijk voor:
-
-- zelf een uitgaande verbinding met de server onderhouden;
-- alleen jobs accepteren waarvoor hij de juiste capability heeft;
-- een geïsoleerde tijdelijke uitvoeromgeving voorbereiden;
-- de gekozen AI-provider starten en bewaken;
-- bij repositorywerk de volledige Git-lifecycle uitvoeren;
-- toegestane validaties uitvoeren;
-- voortgang, geredigeerde zichtbare agenttranscriptdelen, logs en resultaten terugmelden;
-- bij herstart herkennen welke agentcontainers nog daadwerkelijk draaien en die aan de juiste job koppelen, zonder een taak dubbel uit te voeren;
-- lokale tijdelijke gegevens gecontroleerd opruimen.
-
-### Verantwoordelijkheidsgrens met consumenten
-
-Een consument is eigenaar van de aanleiding, instructies, input, provider- en modelkeuze en de
-domeinverwerking van het resultaat. Agent Runtime is de enige eigenaar van de technische jobqueue,
-workerselectie, attempts, leases, heartbeats, fencing, technische retries, veilige voortgang en het
-onveranderlijke technische resultaat.
-
-Product Factory bouwt daarom geen eigen laptopworker of tweede technische AI-queue. Haar interne
-AI-uitvoeringscapability is een clientfaçade: zij leest de eigen globale AI-instellingen, stelt het
-complete verzoek samen, vraagt één Runtime-job aan en bewaart het Runtime-job-ID bij de wachtende
-processessie of meeting. Een volgende procesrun leest status en resultaat via de Runtime-API. Alleen
-Product Factory beslist daarna of de uitkomst een epic, story, bug, verificatie of overleguitkomst
-mag worden.
-
-Software Factory blijft eigenaar van haar ontwikkelorkestratie en stuurt per uitvoeringsstap een
-`REPOSITORY_WORK`-job in. Alleen Agent Runtime beheert de tijdelijke workspace, agentcontainer en
-Git-publicatie voor die job. Twee technische retrylagen voor dezelfde uitvoering zijn verboden:
-een consument mag na een terminale Runtime-job bewust een nieuwe logische job aanvragen, maar
-herstart nooit zelf een nog actieve of herstelbare Runtime-attempt.
-
-### Monitor frontend
-
-De monitor toont minimaal:
-
-- online en offline workers en hun capabilities;
-- actieve jobs met actuele stap, looptijd, worker en provider/model;
-- de wachtrij met claimvolgorde en wachtreden;
-- de laatste 30 afgeronde jobs per pagina, server-side zoeken en cursorpaginering;
-- een jobdetail met schema-gevalideerd resultaat of veilige fout;
-- het volledige beschikbare, geredigeerde zichtbare agenttranscript, ook live tijdens uitvoering.
-
-Het transcript bevat geen verborgen chain-of-thought. Het bevat alleen de exacte prompt,
-provider-zichtbare agenttekst, zichtbare toolaanroepen en geredigeerde tooluitvoer die de adapter
-daadwerkelijk kan leveren. De beheerinterface biedt in de MVP geen annuleren, retry, mock- of
-configuratieacties.
-
-## Jobsoorten, configuratie en providers
-
-De runtime heeft slechts twee fundamenteel verschillende jobsoorten. Productnamen, agentrollen en
-domeinentiteiten komen niet in het runtimecontract voor.
-
-### `APPLICATION_WORK`
-
-- De aanvrager levert complete, versiegebonden instructies, alle benodigde input en eventueel een
-  JSON-resultaatschema. Agent Runtime beheert geen applicatiespecifieke prompttemplates.
-- De taak kan zonder tools draaien of vooraf toegestane browser-, web-, build-, test-,
-  beeldgeneratie- of applicatietools gebruiken.
-- Een optionele `RepositorySnapshot` bevat alleen een publieke HTTPS-Git-URL en een volledige,
-  bevroren commit-SHA. De worker mag die checkout lezen en lokaal tijdelijk beschrijven voor analyse
-  of tests, maar commit, pusht of publiceert nooit vanuit applicatiewerk.
-- Taakgebonden omgevingstoegang gebruikt alleen vooraf toegestane routes en lokale
-  secretreferenties. Plaintext secrets staan niet in het verzoek.
-- Product Factory gebruikt uitsluitend deze jobsoort voor Productontwerp, Productplanning,
-  Kwaliteitsbewaking en overlegagents.
-
-### `REPOSITORY_WORK`
-
-- De taak gebruikt één repository uit een server-side aliaslijst, nooit een vrije schrijf-URL.
-- De worker maakt een tijdelijke branch met een voorgeschreven prefix en een gecontroleerde
-  workspace.
-- De agentcontainer krijgt de workspace maar geen GitHub-credentials.
-- De worker verzorgt fetch, branch, validatie, commit, push en eventueel pull request.
-- De repositoryalias bepaalt repository, basisbranch, toegestane paden, validaties en
-  publicatiebeleid.
-- Software Factory gebruikt deze jobsoort en blijft zelf eigenaar van storykeuze, agentrollen,
-  werkvolgorde en beoordeling van het resultaat.
-
-### Gemeenschappelijk aanvraagcontract
-
-De volgende veldlijst beschrijft v1. Voor `APPLICATION_WORK` v2 vervallen `jobProfile`, `jobKey`,
-`configurationVersion`, `instructionVersion`, `resourceRequests` en `consumerContext`; `instructions`
-plus `input` worden één `prompt`. Zie het leidende [v2-contract](application-work-v2.md). V1 blijft
-tijdens de migratie beschikbaar voor bestaande consumenten.
-
-Het versieerbare OpenAPI-contract bevat voor beide jobsoorten minimaal:
-
-```text
-jobKind                   APPLICATION_WORK of REPOSITORY_WORK
-idempotencyKey            uniek binnen de aanvragende applicatie
-jobProfile                vooraf geregistreerde rechten en limieten
-jobKey                    opaque applicatiesleutel voor correlatie en audit
-provider                  CODEX, CLAUDE, MOCKED of latere toegestane provider
-model                     exact aangevraagd model
-configurationVersion      versie van de model-/providerkeuze bij de consument
-instructionVersion        versie van de instructies bij de consument
-instructions              complete vaste instructies
-input                     opaque JSON-momentopname
-responseSchema            optioneel JSON Schema
-attachments               begrensde invoerreferenties met hash
-repositorySnapshot        optioneel en read-only bij APPLICATION_WORK
-repositoryRequest         verplicht bij REPOSITORY_WORK
-resourceRequests          vooraf geregistreerde tool-, route- en secretRef-verzoeken
-executionTimeout          aangevraagd binnen de profielgrens
-maxAttempts               aangevraagd binnen de profielgrens
-priority                   aangevraagd binnen de profielgrens
-consumerContext            opaque product-, module-, sessie- of storycorrelatie zonder autoriteit
-```
-
-Tenant, applicatie-identiteit en toegestane jobprofielen volgen uit de geauthenticeerde
-serviceaccount en worden nooit vertrouwd vanuit vrije payloadvelden. De runtime bewaart instructies
-en input als opaque data en interpreteert geen `jobKey` of `consumerContext`. Een
-`resourceRequest` verwijst alleen naar vooraf in het jobprofile toegestane resources; een payload
-kan daarmee geen nieuw netwerkdoel, secret of tool introduceren. Resultaten bestaan uit één
-schema-gevalideerde JSON-uitkomst en optionele begrensde, gehashte artifacts.
-
-De consumenten-API bevat minimaal:
-
-```text
-POST /v1/jobs
-GET  /v1/jobs/{jobId}
-GET  /v1/jobs/{jobId}/result
-GET  /v1/jobs/{jobId}/events
-POST /v1/jobs/{jobId}/cancel
-GET  /v1/jobs
-```
-
-Alle mutaties zijn idempotent waar een netwerkretry mogelijk is. Een consument leest alleen eigen
-jobs; de monitor gebruikt een afzonderlijke beheerautorisatie.
-
-### Artifacts
-
-Screenshots, logs, traces, diffs en andere binaire resultaten staan nooit als Base64 in de
-jobpayload. Een echte worker uploadt een artifact via de worker-API met MIME-type, grootte en
-SHA-256-hash; een mockantwoord doorloopt dezelfde validatie. De server bewaart begrensde artifacts
-voor de MVP als onveranderlijke BLOB en retourneert alleen artifact-ID's en metadata in het
-jobresultaat. Eerste veilige limieten zijn 5 MB per artifact en 25 MB per job, begrensd aanpasbaar
-per jobprofile. Een latere objectstore verandert het consumentencontract niet.
-
-### Execution engines zijn geen jobsoort
-
-Codex CLI, Claude Code en eventuele toekomstige lokale modellen zijn worker-engines achter dezelfde
-jobsoorten. De enginekeuze verandert niet wat de taak functioneel mag doen.
-
-- `codex-cli` gebruikt een lokaal geauthenticeerde Codex-installatie.
-- `claude-code` gebruikt een lokaal geauthenticeerde Claude Code-installatie.
-- `local-model` wordt later een adapter voor een lokaal model of lokale modelserver.
-- Een cloud-API-adapter kan later als fallback worden toegevoegd voor tijdkritische of publieke interacties.
-- Een worker meldt per verbinding welke engines, versies en capabilities op dat moment beschikbaar zijn.
-- Een engine hoeft niet alle capabilities of modellen te ondersteunen.
-- Een vertrouwde consument vraagt provider en model exact aan. De runtime controleert beide tegen
-  serviceaccount, jobprofile, omgevingsbeleid en workercapabilities. Een niet-toegestane combinatie
-  wordt geweigerd; een tijdelijk niet-beschikbare combinatie blijft zichtbaar wachten.
-- Een latere expliciete fallbackpolicy mag meerdere toegestane combinaties bevatten, maar de
-  runtime wisselt nooit stilzwijgend van provider of model.
-- Engine-specifieke prompts, CLI-opties, authenticatie en outputvertaling blijven volledig binnen de adapter.
-- Alle adapters leveren dezelfde genormaliseerde voortgang, eindstatus en gebruiksmetadata terug.
-
-### Centrale mockexecutor
-
-`MOCKED` is een server-side uitvoeringsroute en wordt nooit door een laptopworker geclaimd. Iedere
-afnemer kan daardoor dezelfde echte jobopslag, API, schema-validatie en resultaatverwerking testen
-zonder AI-kosten of een beschikbare laptop.
-
-- Zowel `APPLICATION_WORK` als `REPOSITORY_WORK` kan worden gemockt. Een gemockte repositoryjob
-  levert een voorbereid genormaliseerd Git-resultaat maar maakt geen workspace, commit, push of pull
-  request.
-- Mockantwoorden worden per tenant, applicatie, jobprofile en optionele `jobKey` en
-  correlatiesleutel voorbereid; de meest specifieke match wint en gelijke matches zijn FIFO.
-- Een antwoord kan succes, veilige fout, time-out, vertraging, crashsimulatie, ongeldige output en
-  begrensde artifacts bevatten.
-- Ontbreekt een passend antwoord, dan eindigt de job zichtbaar en niet-retrybaar met
-  `NO_MOCK_RESPONSE_CONFIGURED`; er bestaat geen vriendelijke standaardrespons.
-- Een mockjob maakt geen workerattempt, lease, heartbeat, fencing token of Dockercontainer.
-- Integratie- en acceptatieomgevingen krijgen een beveiligde Test Control API voor voorbereiden,
-  bekijken en resetten van mocks. Productie registreert die API niet en weigert `MOCKED`.
-- Unit tests van consumenten mogen een kleine in-memory fake van de Runtime-client gebruiken;
-  integratie- en acceptatietests gebruiken de echte server en centrale mockexecutor.
-
-## Jobstatussen
-
-Het publieke contract houdt de stabiele hoofdstatus klein:
-
-1. `QUEUED`
-2. `WAITING_FOR_WORKER`
-3. `RUNNING`
-4. `SUCCEEDED`
-5. `FAILED`
-6. `CANCELLED`
-
-Een afzonderlijke actuele fase en de onveranderlijke jobevents geven meer detail, bijvoorbeeld
-`LEASED`, `PREPARING`, `EXECUTING`, `VALIDATING`, `COMMITTING`, `PUSHING`, `RETRY_WAIT` en
-`SUSPECTED`. Alleen repositorywerk gebruikt commit- en pushfasen. Consumenten hoeven hierdoor hun
-domeinmodel niet aan iedere nieuwe interne runtimefase aan te passen.
-
-## Repository-indeling
-
-```text
-agent-runtime/
-├── pom.xml
-├── agent-runtime-contracts/
-├── agent-runtime-server/
-├── agent-runtime-worker/
-├── execution-images/
-├── deploy/
-├── docs/
-└── .github/
-```
-
-- `agent-runtime-contracts`: OpenAPI- en JSON-schemabronnen; geen gedeelde domeinimplementatie.
-- `agent-runtime-server`: Spring Modulith control plane en monitor-backend.
-- `agent-runtime-worker`: lokale Kotlin-worker.
-- De compacte beheerinterface is als statische webapp in de serverartifact opgenomen. Daardoor
-  gebruikt monitor en API exact dezelfde route en release; zij kan later zonder contractwijziging
-  worden afgesplitst.
-- `execution-images`: gecontroleerde containerimages en versies voor agentuitvoering.
-- `deploy`: OpenShift-resources, sealed secrets en migrations.
-- `docs`: architectuurkeuzes, threat model, runbooks en dit stappenplan.
-
-## Fase 0 — Besluiten en repositorybasis
+## Fase 0 — Huidige contract direct vereenvoudigen
 
 ### Resultaat
 
-Een zelfstandige repository met een vastgelegd verantwoordelijkheidsgebied, basisbouw en belangrijke architectuurbesluiten.
+Eén klein huidig contract zonder legacyvelden of parallelle API-versie.
 
 ### Werk
 
-- Maven-multimodulebasis maken volgens de structuur van de Software Factory, zonder code te kopiëren.
-- Spring Modulith-basis voor de server toevoegen.
-- Kotlin command-linebasis voor de worker toevoegen.
-- Een kleine responsive webbasis voor de monitor toevoegen.
-- OpenAPI als bron voor het externe contract kiezen en vanaf het begin de gemeenschappelijke
-  jobvelden plus `APPLICATION_WORK` en `REPOSITORY_WORK` vastleggen.
-- Architectuurbesluiten vastleggen voor:
-  - control plane versus execution plane;
-  - asynchrone jobs;
-  - PostgreSQL als duurzame opslag;
-  - uitgaande workerverbinding;
-  - provideradapters;
-  - repositoryaliases en jobprofielen;
-  - provider- en modelselectie door vertrouwde consumenten;
-  - centrale mockuitvoering;
-  - secrets en lokale credentials.
-- Een threat model maken voor de MacBook, OpenShift, GitHub en applicatiegegevens.
-- CI toevoegen voor Kotlin-tests, Modulith-verificatie, webassets, containers en contractvalidatie.
-- De Agent Runtime als zelfstandig project aan de Software Factory toevoegen.
+- Pas de bestaande `/v1/jobs`-OpenAPI, Kotlin-contracttypen en implementatie rechtstreeks aan; voeg
+  geen `/v2` toe.
+- Gebruik als verplichte gemeenschappelijke requestvelden alleen `jobKind`, `idempotencyKey`,
+  `provider`, `model` en `prompt`.
+- Houd `responseSchema`, `executionTimeoutSeconds`, `repositorySnapshot` en de gecontroleerde
+  `repositoryRequest` optioneel of jobsoortafhankelijk.
+- Verwijder profiel, applicatiejobkey, configuratieversie, instructieversie, losse
+  instructies/input, vrije resourceaanvragen en consumercontext uit contract, database, mocks,
+  worker, monitor en tests.
+- Verwijder `priority` en `maxAttempts` uit de aanvraag. Bewaar technische retrylimiet en prioriteit
+  uitsluitend als interne, server-side configuratie en status.
+- Houd zowel `APPLICATION_WORK` als de bestaande gecontroleerde `REPOSITORY_WORK`-aanvraag op
+  dezelfde huidige API.
+- Bevries provider, model, prompt, responseschema, time-out, environmentkeynamen, attachments en
+  repositorysnapshot bij het aanmaken van de job.
+- Laat prioriteit, technische retries, maximale outputpogingen, quota, tools, netwerkbeleid,
+  attachmentlimieten, artifactlimieten en zichtbare projectprefixes uit serverpolicy per
+  geauthenticeerde consument volgen.
+- Maak foutresponses voor contract- en policyafwijzingen stabiel en versieerbaar.
+- Voeg een Flywaymigratie toe die de verwijderde job- en mockkolommen uit een bestaande database
+  verwijdert. Er hoeft geen oude request-JSON te worden gemigreerd.
+- Weiger onbekende JSON-requestvelden zodat legacyvelden niet stilzwijgend worden genegeerd.
+- Gebruik in de monitor een servergegenereerde technische naam op basis van applicatie,
+  jobsoort en verkort job-ID. Voeg geen vrij taaknaam- of correlatieveld toe om de verwijderde
+  domeincontext alsnog terug te brengen.
 
 ### Definition of Done
 
-- De hele repository bouwt lokaal en in CI.
-- Modules en afhankelijkheidsrichtingen zijn gedocumenteerd en automatisch gecontroleerd.
-- Contractfixtures bewijzen dat een Product Factory-applicatiejob en een Software
-  Factory-repositoryjob zonder domeinkennis valideerbaar zijn; echte koppelingen zijn nog niet nodig.
-- De gekozen veiligheidsgrenzen zijn schriftelijk geaccepteerd voordat uitvoering van echte agents wordt toegevoegd.
+- De gepubliceerde huidige OpenAPI beschrijft ieder veld, limiet, foutgeval en voorbeeld volledig.
+- Een aanvraag met een verwijderd of onbekend veld wordt als clientfout afgewezen.
+- Een verse database en een bestaande database op de vorige Flywayversie komen op hetzelfde nieuwe
+  schema uit.
+- Een payload kan geen provider, model, prefix, tool, retry, prioriteit of quotum buiten de
+  serverpolicy activeren.
 
-## Fase 1 — Duurzaam control plane
+## Fase 1 — Projectcredentials, catalogus en workerrouting
 
 ### Resultaat
 
-Een OpenShift-server die jobs betrouwbaar kan ontvangen, bewaren en volgen, nog zonder echte AI-worker.
+Projectcredentialwaarden blijven volledig lokaal, terwijl server en consumenten uitsluitend
+kunnen zien welke namen beschikbaar zijn en de scheduler een geschikte worker kan kiezen.
 
 ### Werk
 
-- Domeinmodules maken voor `jobs`, `workers`, `scheduling`, `tenants`, `audit` en `monitoring`.
-- PostgreSQL-schema en Flyway-migrations toevoegen.
-- API maken voor:
-  - job indienen met idempotency key;
-  - jobstatus, veilige voortgang, events en resultaat lezen;
-  - job annuleren;
-  - jobs per applicatie zoeken;
-  - worker registreren en heartbeat verwerken;
-  - lang-pollend de volgende beschikbare job claimen, met een korte time-out en een korte veilige
-    poll als vangnet. Het transportcontract laat een latere database-notificatie-optimalisatie toe.
-- Serviceaccount per aanvragende applicatie invoeren.
-- Autorisatie op tenant, jobtype en jobprofiel toevoegen.
-- Jobpayloads valideren tegen een versieerbaar schema.
-- Aangevraagde provider, model, jobsoort en limieten valideren tegen serviceaccount en jobprofile.
-- Een transactionele scheduler maken met prioriteit, `not-before` en capabilityselectie.
-- Lease, lease-time-out en retrybeleid modelleren.
-- Begrensde, gehashte artifactopslag en downloadautorisatie toevoegen; de MVP bewaart de inhoud als
-  BLOB in PostgreSQL.
-- De centrale mockexecutor en acceptance-only Test Control API implementeren. Mockjobs gebruiken
-  dezelfde opslag en resultaatvalidatie, maar geen workerattempt.
-- Een fake worker in integratietests gebruiken om de hele statusmachine te testen.
-- OpenShift-deployment, service, route, databaseconfiguratie en sealed secrets toevoegen.
-- Basis health-, readiness- en metrics-endpoints toevoegen.
-
-### Belangrijke regels
-
-- Aflevering is minimaal één keer; externe bijwerkingen moeten dus idempotent zijn.
-- Een dubbele aanvraag met dezelfde idempotency key maakt geen tweede job.
-- Een verlopen lease maakt een job pas opnieuw beschikbaar nadat de vorige uitvoering niet meer geldig kan afronden.
-- De server slaat geen credentials voor lokale AI-abonnementen op.
+- Splits de lokale configuratie in:
+  - `secrets.env` voor Runtime- en workerwerking;
+  - `project-credentials.env` voor projectgebonden waarden die een agentjob mag ontvangen.
+- Voeg beide echte bestanden toe aan `.gitignore` en `.dockerignore`; lever alleen waardevrije
+  `.example`-bestanden.
+- Vereis voor beide bestanden mode `0600`, een regulier bestand en geen symlink.
+- Bouw een strikte dotenv-parser die dubbele keys, ongeldige regels en onveilige namen weigert.
+- Accepteer projectkeys uitsluitend volgens
+  `[A-Z][A-Z0-9_]*__[A-Z][A-Z0-9_]*`.
+- Weiger `AR__`-namen en bekende Runtime-, provider- en Git-publicatiecredentials in
+  `project-credentials.env`.
+- Laat de worker bij registratie en iedere relevante wijziging alleen de beschikbare keynamen
+  melden, nooit waarden of hashes van waarden.
+- Bewaar per worker naam, laatst gezien tijdstip en actuele beschikbaarheid. Een offline worker
+  maakt een naam historisch bekend maar niet beschikbaar.
+- Voeg een beveiligde, op tokenpolicy gefilterde catalogusquery toe, conceptueel
+  `GET /v1/environment-keys?project=<PREFIX>`.
+- Retourneer per catalogusitem minimaal naam, projectprefix, beschikbaarheid, aantal passende
+  online workers en `lastSeenAt`.
+- Laat de scheduler alleen een worker selecteren die provider, model, jobsoort en alle gevraagde
+  environmentkeynamen ondersteunt.
+- Controleer in de worker na claim opnieuw of iedere naam aanwezig en voor de consument/prefix
+  toegestaan is.
+- Houd een job zichtbaar wachtend als een passende worker later beschikbaar kan komen. Eindig met
+  `REQUIRED_ENVIRONMENT_KEY_UNAVAILABLE` als de aanvraag volgens de actuele configuratie niet
+  uitvoerbaar kan worden.
+- Materialiseer per attempt uitsluitend de geselecteerde subset als tijdelijk bestand
+  `/job/secrets/secrets.env` met mode `0600`; mount het bronbestand nooit.
+- Verwijder de tijdelijke subset bij succes, fout, annulering, time-out, recovery en workerstartup.
+- Voeg centrale redactie toe op alle lokaal bekende credentialwaarden voordat workerlogs,
+  voortgang, transcriptdelen of diagnoses worden verstuurd.
 
 ### Definition of Done
 
-- Een job blijft na server- of podherstart bestaan.
-- Een voorbereide `MOCKED` applicatiejob kan zonder laptop schema-geldig slagen en alle ingestelde
-  foutscenario's zijn deterministisch reproduceerbaar.
-- Een voorbereide `MOCKED` repositoryjob levert zonder Git-bijwerking hetzelfde genormaliseerde
-  repositoryresultaatcontract dat fase 6 later echt uitvoert.
-- Een fake worker kan een job leasen, voortgang melden en afronden.
-- Verbroken leases en retries zijn automatisch getest.
-- Ongeautoriseerde applicaties kunnen geen jobs of resultaten van andere applicaties lezen.
+- Geen projectcredentialwaarde bereikt aanvraag, queue, database, catalogus, event, transcript,
+  resultaat, artifactmetadata of Dockerlabel.
+- De agentcontainer ziet precies de gevraagde subset en nooit `project-credentials.env` zelf.
+- Onveilige bestandsrechten, symlinks, dubbele keys en verboden namen laten de worker veilig dicht
+  falen.
+- Online-, stale- en offline-overgangen werken door in catalogus en claimselectie.
+- Fencing en tokenpolicy voorkomen dat een worker namen voor een andere identiteit misbruikt.
 
-## Fase 2 — Lokale worker en betrouwbare verbinding
+## Fase 2 — Vaste taakdirectory, inputattachments en outputartifacts
 
 ### Resultaat
 
-Een achtergrondworker op macOS die veilig verbinding maakt, een gecontroleerde testjob uitvoert en herstelt van netwerk- of procesuitval.
+Iedere echte attempt krijgt dezelfde begrensde bestandsinterface, ongeacht provider.
 
 ### Werk
 
-- Workeridentiteit en roteerbaar token invoeren.
-- Uitgaande HTTPS long-poll-loop toevoegen voor het claimen van nieuwe jobs, aangevuld met een korte
-  periodieke poll als vangnet bij een gemiste of verbroken long-poll. Actieve attempts gebruiken
-  afzonderlijke heartbeat- en voortgangscalls; het heartbeatantwoord kan annulering of fencing
-  teruggeven.
-- Capabilityregistratie en heartbeat implementeren.
-- Heartbeat en veilige inhoudelijke voortgang scheiden: heartbeat bewijst alleen dat attempt en
-  providerproces leven; voortgang bevat uitsluitend fase, optioneel percentage en een korte
-  geredigeerde melding, nooit chain-of-thought of ruwe provideroutput.
-- Naast voortgang een afzonderlijke duurzame transcriptstream toevoegen. Provideradapters leveren
-  de exacte prompt en alle beschikbare zichtbare agenttekst, toolaanroepen en tooluitvoer als
-  oplopende, idempotente delen aan; worker en server redigeren vóór opslag. Verborgen
-  chain-of-thought is nooit onderdeel van dit contract.
-- Lease ophalen, verlengen, voltooien en vrijgeven implementeren.
-- Begrensde artifacts met MIME-type, grootte en SHA-256 uploaden voordat het eindresultaat wordt
-  gemeld.
-- Een lokale werkmap per job maken met veilige naamgeving en limieten.
-- Logstreaming met redactiefilter en maximale omvang toevoegen.
-- Annuleringssignalen verwerken.
-- Crash recovery maken voor lokaal bekende actieve jobs. Iedere agentcontainer krijgt alleen labels
-  met workerbootsessie, job-ID en attempt-ID; een lease- of fencing token staat nooit in een
-  Dockerlabel. De worker bewaart het actuele fencing token versleuteld in een klein lokaal duurzaam
-  journal en reconcilieert dat bij iedere start met `docker ps` en de server voordat hij nieuw werk
-  claimt.
-- Een `launchd`-configuratie en beheercommando's toevoegen voor starten, stoppen, status en logs.
-- Schijfruimtebewaking en opruimbeleid voor oude jobs toevoegen.
+- Maak per echte attempt deze structuur:
+
+  ```text
+  /job/
+  ├── input/
+  │   ├── prompt.md
+  │   ├── response-schema.json
+  │   └── attachments/
+  ├── secrets/
+  │   └── secrets.env
+  ├── docs/
+  │   └── available-tools.md
+  └── output/
+      ├── result.json
+      └── artifacts/
+  ```
+
+- Mount `input`, `secrets` en `docs` read-only en alleen `output` schrijfbaar. Houd een eventuele
+  repositoryworktree afzonderlijk op `/work`.
+- Genereer `available-tools.md` vanuit de vaste execution-image- en serverpolicy. Beschrijf tools,
+  paden, outputafspraken en het gebruik van geselecteerde environmentvariabelen zonder waarden te
+  tonen. Leg expliciet vast dat secretwaarden nooit in een providerprompt, nieuwe AI-request,
+  transcript of output mogen worden opgenomen. Het document verleent zelf geen rechten en deze
+  instructie is geen vervanging voor mounts, netwerkbeleid en redactie.
+- Voeg aan de prompt één vaste technische slotinstructie toe over inputpaden, geheimhouding,
+  het verbod op doorsturen van secretwaarden, `/job/output/result.json` en
+  `/job/output/artifacts`.
+- Accepteer maximaal tien Base64-inputattachments, maximaal 2 MB gedecodeerd per bestand en 10 MB
+  gedecodeerd per job.
+- Valideer vóór opslag platte veilige bestandsnamen, unieke namen, Base64, gedeclareerd MIME-type,
+  magic bytes waar mogelijk, individuele en totale omvang. Sta geen paden, symlinks, apparaten,
+  executables of archiefuitpak toe.
+- Bewaar geaccepteerde input duurzaam met grootte en SHA-256 zodat queueherstel dezelfde bytes
+  oplevert.
+- Laat de worker hash, naam, type en limieten opnieuw controleren vóór materialisatie.
+- Voeg attachments niet automatisch aan modeltekst toe; de prompt verwijst expliciet naar de
+  bestandsnaam wanneer de agent hem moet gebruiken.
+- Scan na providerafronding alleen directe reguliere bestanden in `/job/output/artifacts`.
+- Weiger symlinks, subdirectories, apparaten, onveilige of dubbele namen, typeconflicten en
+  overschrijdingen.
+- Handhaaf maximaal 25 outputartifacts, 5 MB per bestand en 25 MB per job.
+- Bereken MIME-type, grootte en SHA-256 en upload elk bestand via de bestaande gefencete worker-API
+  voordat het eindresultaat wordt vastgelegd.
+- Koppel artifactmetadata onveranderlijk aan het geaccepteerde jobresultaat en bied gecontroleerde
+  downloads aan.
+- Ruim alle tijdelijke invoer, secrets en uitvoer op bij iedere terminale of herstelroute.
 
 ### Definition of Done
 
-- De worker start automatisch na inloggen of herstart van de MacBook.
-- Bij een offline worker blijft een job veilig wachten.
-- Na een verbroken verbinding hervat de worker zijn heartbeat en rapporteert hij de uitkomst zonder dubbele voltooiing.
-- Na een herstart herkent de worker een nog draaiende agentcontainer aan job- en attempt-ID, maar
-  hervat die alleen wanneer de server hetzelfde actuele attempt en fencing token bevestigt. Oude
-  containers worden gestopt en hun resultaat wordt geweigerd.
-- De server kan geen willekeurige commando's naar de worker sturen.
+- Dezelfde screenshot kan als Base64-input worden ingestuurd, als regulier bestand door beide
+  providers worden gelezen en als gecontroleerd outputartifact worden gedownload.
+- Path traversal, MIME-spoofing, corrupte Base64, symlinks en alle grensoverschrijdingen zijn
+  geautomatiseerd getest.
+- Het model hoeft nooit een outputbestand naar Base64 om te zetten.
+- Een retry kan geen artifact dubbel koppelen en een oud fencing token kan niets uploaden.
 
-## Fase 3 — Applicatiewerk met Codex en Claude
+## Fase 3 — Harde attemptdeadline
 
 ### Resultaat
 
-Een veilige `APPLICATION_WORK`-job kan via zowel de lokale Codex-installatie als Claude Code worden
-uitgevoerd. Een optionele publieke repositorysnapshot blijft read-only en het resultaat voldoet bij
-beide providers aan hetzelfde externe contract.
+Iedere echte execution-attempt stopt uiterlijk op de bij claimen bevroren deadline, ook bij slaap,
+leaseherstel of een defecte worker.
 
 ### Werk
 
-- Een engine-interface definiëren voor beschikbaarheid, starten, volgen, annuleren en gebruiksmetadata.
-- Adapter `codex-cli` toevoegen voor vertrouwde interne achtergrondtaken.
-- Adapter `claude-code` toevoegen voor dezelfde jobcontracten en veiligheidsgrenzen.
-- Engine-capabilities en geïnstalleerde versies door de worker laten publiceren.
-- Per jobprofile een provider-, model-, tool-, netwerk- en credentialallowlist configureren.
-- Een geïsoleerde credential-home per uitvoering gebruiken, gebaseerd op het volwassen patroon uit de Software Factory.
-- De agent uitvoeren in één breed gedeeld, versieerbaar execution-image met alle ondersteunde toolchains ingebakken: een echte browser (Playwright/Chromium) voor testen, klikken en screenshots, build- en testtools voor de te ondersteunen ecosystemen, `oc`/`kubectl` en databaseclients — naar het bewezen patroon uit de Software Factory. Aanwezigheid van een tool in het image geeft op zichzelf geen enkele extra rechten; alleen de credentials en mounts die het jobprofile toestaat bepalen wat een specifieke job daadwerkelijk kan.
-- Complete, versiegebonden instructies en opaque input van een geautoriseerde consument aan de
-  container doorgeven zonder de domeinbetekenis te interpreteren.
-- Optionele publieke HTTPS-repositories op exact de aangevraagde commit-SHA detached uitchecken,
-  zonder Git-schrijftoken of publicatieroute.
-- Browser, webonderzoek, builds, tests, begrensde artifacts en optionele beeldgeneratie als
-  jobprofilecapabilities ondersteunen.
-- Taakgebonden `secretRef`s alleen uit de lokale workerstore oplossen en nooit als plaintext naar de
-  server, prompt, log of resultaat sturen.
-- Maximale looptijd, outputomvang, aantal gelijktijdige jobs en dagquota instellen.
-- JSON-resultaatschema afdwingen en een gecontroleerde reparatiepoging toestaan.
-- Enginefouten onderscheiden van contract-, validatie- en infrastructuurfouten.
-- Voor beide engines dezelfde end-to-end contracttest uitvoeren: indienen, wachten, uitvoeren en resultaat lezen.
-- Vastleggen dat lokaal geauthenticeerde CLI-adapters alleen voor vertrouwde interne workloads worden gebruikt.
-
-### Abonnement en API
-
-- Lokale abonnementstoegang is geschikt voor interne coding-, research- en achtergrondjobs.
-- Directe publieke gebruikersvragen mogen niet uitsluitend afhankelijk zijn van een slapende of offline MacBook.
-- Voor zulke vragen volgt later eventueel een `openai-api`-provideradapter voor hetzelfde jobtype, of een expliciet asynchroon gebruikersmodel.
-- Quota voorkomen dat bulkwerk van bijvoorbeeld Newsfeed alle capaciteit voor ontwikkelwerk gebruikt.
+- Bereken bij claimen server-side
+  `attemptDeadline = claimedAt + executionTimeoutSeconds`.
+- Bewaar `claimedAt`, de bevroren timeout en `attemptDeadline` duurzaam bij de attempt.
+- Neem de server-authoritatieve deadline op in het claimantwoord en workerjournal.
+- Gebruik in de worker daarnaast een monotone lokale timer; de vroegste van serverdeadline en
+  lokale grens wint.
+- Stop eerst beheerst en daarna geforceerd de providercontainer en onderliggende processen.
+- Laat leases, heartbeats, `SUSPECTED`, slaap en recovery de deadline nooit aanpassen.
+- Fence de attempt server-side zodra de deadline verstrijkt en weiger daarna heartbeat, progress,
+  transcript, artifact en resultaat.
+- Registreer een onveranderlijk event en foutcode `EXECUTION_TIMEOUT`.
+- Laat uitsluitend de vaste server-side technische retrypolicy bepalen of een nieuwe attempt wordt
+  gepland.
+- Lees bij workerrestart de oorspronkelijke deadline uit het versleutelde journal; hervat nooit een
+  al verlopen attempt.
+- Tel queuewachttijd niet mee in deze attemptdeadline. Voeg in deze release geen tweede algemene
+  jobdeadline toe.
 
 ### Definition of Done
 
-- Een vaste voorbeeldtaak levert consequent een schema-geldig resultaat.
-- Credentials verschijnen niet in containerinspectie, prompts, logs of resultaten.
-- Time-out en annuleren stoppen ook het onderliggende proces.
-- Limieten van beide engines veroorzaken een herkenbare retry- of eindstatus.
-- Dezelfde fixture kan zonder wijziging van het jobcontract door Codex CLI en Claude Code worden uitgevoerd.
-- Een expliciet aangevraagde provider/modelcombinatie wordt gebruikt of zichtbaar geweigerd/wachtend
-  gemaakt; de runtime wisselt niet stilzwijgend naar de andere engine.
-- De container kan een publieke repositorysnapshot lezen maar niet committen, pushen of een pull
-  request openen.
+- Server en worker kunnen elk afzonderlijk een te lange attempt begrenzen.
+- Een laptop die voorbij de deadline slaapt kan na ontwaken geen laat resultaat of artifact meer
+  publiceren.
+- Een technische retry krijgt een nieuwe attempt en deadline zonder de historie van de oude poging
+  te wijzigen.
+- Deadline-, lease-, recovery-, annulering- en racecondities zijn met een bestuurbare klok getest.
 
-## Fase 4 — Minimale monitor en beheer
+## Fase 4 — Gezaghebbende JSON-schema-validatie
 
 ### Resultaat
 
-De runtime is zonder database- of clusterinspectie operationeel te volgen.
+Geen AI-job wordt `SUCCEEDED` tenzij de server het resultaat als geldige JSON en, indien aanwezig,
+tegen het bevroren responseschema heeft geaccepteerd.
 
 ### Werk
 
-- Google-authenticatie voor beheerders toevoegen.
-- Losse pagina's maken voor actieve jobs, wachtrij, de laatste 30 afgeronde jobs en workers.
-- Afgeronde jobs server-side doorzoekbaar en met cursor-gebaseerde volgende/vorige pagina tonen.
-- Jobdetail tonen met resultaat of veilige fout en het volledige beschikbare geredigeerde
-  agenttranscript.
-- Het transcript van een actieve job incrementeel bijwerken vanaf het laatst ontvangen
-  sequence-nummer, zonder scrollpositie of reeds geladen tekst te verliezen.
-- Prometheus-metrics en waarschuwingen toevoegen voor:
-  - geen worker online;
-  - oudste wachtende job;
-  - vastgelopen lease;
-  - snel oplopende foutpercentages;
-  - bijna volle lokale werkopslag.
-- Een runbook toevoegen voor veelvoorkomende storingen.
+- Vervang `SimpleJsonSchemaValidator` door een eigen `JsonResultValidator`-adapter rond een
+  vastgepinde, onderhouden Draft 2020-12-library, bij voorkeur
+  `com.networknt:json-schema-validator`.
+- Voeg geen Spring AI-afhankelijkheid toe en laat librarytypen niet uit de servermodule lekken.
+- Valideer een responseschema al bij het aanmaken van de job:
+  - geldige JSON en een rootobject;
+  - compileerbaar als Draft 2020-12;
+  - begrensde omvang;
+  - geen externe of netwerk-`$ref`;
+  - alleen het gedocumenteerde portable profiel dat door Codex en Claude wordt ondersteund.
+- Ondersteun minimaal rootobjecten, `properties`, `required`, `additionalProperties`, geneste
+  objecten, arrays met `items`/`minItems`/`maxItems`, ondersteunde primitieve types, `enum` en
+  gangbare string- en getalgrenzen.
+- Geef bij aanvragen stabiele fouten `RESPONSE_SCHEMA_INVALID`,
+  `RESPONSE_SCHEMA_UNSUPPORTED` en `RESPONSE_SCHEMA_TOO_LARGE`.
+- Laat de validator eigen veilige foutobjecten teruggeven met `path`, `keyword` en `message`.
+- Sorteer fouten deterministisch, begrens ze tot maximaal 25 en neem geen volledige invoerwaarden
+  in meldingen op.
+- Dien een AI-kandidaat als begrensde tekst in, niet als vooraf geparseerde `JsonNode`.
+- Handhaaf maximaal 5 MB vóór normalisatie en parsing.
+- Normaliseer server-side voor echte workers en mocks identiek:
+  1. probeer de volledige getrimde tekst;
+  2. accepteer één volledig `json`-codeblok met alleen witruimte of een korte bekende introductie
+     eromheen;
+  3. zoek niet willekeurig naar accolades in vrije tekst.
+- Laat `REPOSITORY_WORK` zijn deterministische resultaatroute behouden; een schema- of
+  programmeerfout mag nooit opnieuw Git-publicatie starten.
+- Houd de oude `/complete`-route compatibel en laat een afwijzing daar een echte stabiele foutcode
+  geven in plaats van `WORKER_ERROR`. Verander de actieve attempt daarbij pas wanneer vaststaat of
+  de oude caller nog kan corrigeren of terminal moet falen.
 
 ### Definition of Done
 
-- Een beheerder kan de oorzaak van een vastgelopen voorbeeldjob vanuit de monitor achterhalen.
-- Een beheerder kan het resultaat en volledige beschikbare transcript van een afgeronde job lezen.
-- Een open detail van een actieve job ontvangt nieuwe transcriptdelen zonder duplicaten.
-- Gevoelige payloadvelden en secrets worden nergens in de interface getoond.
+- Syntactisch ongeldige JSON, proza, verkeerd getypeerde velden en schema-afwijkingen kunnen nooit
+  als succesvol resultaat worden opgeslagen.
+- Codex, Claude en `MOCKED` komen uiteindelijk bij dezelfde servervalidator uit.
+- Zonder responseschema blijft syntactisch geldige JSON verplicht.
+- Validator-unittests dekken het volledige portable profiel, foutsortering, foutlimieten,
+  schemafouten en verboden refs.
 
-## Fase 5 — Product Factory als eerste consument
+## Fase 5 — Duurzame outputpogingen en self-correction
 
 ### Resultaat
 
-Alle echte AI-uitvoering van Product Factory loopt als `APPLICATION_WORK` via Agent Runtime. Er
-wordt geen nieuwe Product Factory-specifieke laptopworker, technische AI-queue of leaseadministratie
-gebouwd.
+Een model krijgt maximaal drie directe, gecontroleerde kansen op een volledig geldig JSON-resultaat
+zonder technische retries en outputpogingen door elkaar te halen.
 
 ### Werk
 
-- In Product Factory een dunne Agent Runtime-client achter de publieke AI-uitvoeringscapability
-  plaatsen.
-- De Product Factory-module haar globale `AiJobConfiguration` laten lezen en alleen provider, model,
-  één complete prompt, resultaatschema, harde time-out, inputattachments, repositorysnapshot en
-  afgeleide environmentkeynamen bevroren meesturen. Jobkey, configuratieversie,
-  prompttemplateversie en domeincorrelatie blijven lokaal.
-- Een lokale Product Factory-outbox plus Runtime-job-ID en idempotency key bij de wachtende
-  processessie of meeting bewaren.
-- Een volgende geplande of handmatige procesrun status en resultaat laten lezen zonder een thread of
-  HTTP-call open te houden.
-- Optionele publieke Gitcontext uitsluitend als URL plus volledige commit-SHA meesturen; er bestaat
-  geen `product-factory-workspace` en geen Git-publicatie vanuit Product Factory-jobs.
-- Product Factory-integratietests en acceptatie de centrale `MOCKED`-route en Test Control API laten
-  gebruiken. Unit tests mogen de Runtime-client faken.
-- De worker environmentkeynamen uit lokaal `project-credentials.env` laten registreren, de
-  gefilterde catalogus aan Product Factory aanbieden en alleen jobs claimen waarvoor alle gevraagde
-  namen beschikbaar zijn.
-- Product Factory per product zelf bekende keys aan agentrollen laten koppelen; Runtime kent deze
-  rollen niet en ontvangt nooit credentialwaarden.
-- Kleine Base64-inputattachments materialiseren en outputbestanden automatisch als artifacts
-  verzamelen.
-- De harde attemptdeadline in server en worker afdwingen; lease, slaap en recovery verlengen haar
-  nooit.
-- Veilige jobstatus, voortgang, fout en artifacts in de bestaande Product Factory-operatieweergave
-  projecteren; de gedeelde monitor blijft daarnaast beschikbaar voor technische diagnose.
-- Vastleggen dat alleen Product Factory de schema-geldige AI-uitkomst inhoudelijk valideert en
-  domeinobjecten publiceert.
-- De oude v1-worker uitsluitend als historische referentie gebruiken; geen v2-compatibiliteitslaag,
-  WebSocket of tijdelijke productspecifieke worker bouwen.
+- Voeg met Flyway een duurzame `runtime_output_attempt`-tabel toe met minimaal:
+  - ID, job-ID en execution-attempt-ID;
+  - oplopend outputpogingnummer;
+  - status `RESERVED`, `REJECTED`, `ACCEPTED` of `ABANDONED`;
+  - kandidaat-SHA-256, begrensde geredigeerde diagnose en validatiefouten;
+  - provider/modelmomentopname en start-/eindtijden.
+- Maak `(job_id, output_attempt_number)` uniek en reserveer een poging vóór iedere modelaanroep.
+- Gebruik standaard maximaal drie outputpogingen uit serverpolicy. Een crash na reservering
+  verbruikt de poging; een netwerkretry niet.
+- Voeg gefencete, idempotente interne workeroperaties toe om een outputpoging te reserveren en een
+  kandidaattekst in te dienen.
+- Retourneer `ACCEPTED`, `CORRECTION_REQUIRED` of `EXHAUSTED`, gestructureerde validatiefouten en
+  het resterende budget.
+- Neem begrensde providermetadata over gebruik en kosten optioneel bij de kandidaatinzending op,
+  zonder providercredentials of ruwe geheime waarden vast te leggen.
+- Sla van een afgewezen kandidaat alleen SHA-256, maximaal 2.000 geredigeerde diagnosetekens,
+  begrensde validatiefouten, provider/model en tijden op.
+- Voeg minimaal de events `OUTPUT_ATTEMPT_STARTED`, `OUTPUT_REJECTED_NOT_JSON`,
+  `OUTPUT_REJECTED_SCHEMA`, `OUTPUT_CORRECTION_REQUESTED`, `OUTPUT_ACCEPTED` en
+  `OUTPUT_ATTEMPTS_EXHAUSTED` toe.
+- Splits Codex- en Claude-aansturing in testbare provideradapters die één kandidaattekst leveren.
+- Houd voor Codex de native outputschema-optie en het laatste-antwoordbestand, maar behandel dat
+  bestand nog niet als geaccepteerd resultaat.
+- Houd voor Claude de native JSON-schema-optie; gebruik bij een provider-envelope eerst het echte
+  `structured_output`- of gedocumenteerde resultaatveld en anders de resultaattekst.
+- Laat adapters alleen ondubbelzinnige providertransporten uitpakken; algemene normalisatie blijft
+  op de server.
+- Pas de workerloop voor `APPLICATION_WORK` aan:
+  1. materialiseer input en schema eenmaal;
+  2. reserveer een outputpoging;
+  3. start een unieke providercontainer;
+  4. blijf heartbeat en deadline bewaken;
+  5. dien kandidaattekst in;
+  6. rond af bij `ACCEPTED`;
+  7. start direct een nieuwe providercontainer met correctieprompt bij
+     `CORRECTION_REQUIRED`;
+  8. ruim op wanneer de server `EXHAUSTED` heeft vastgelegd.
+- Neem outputpoging-ID en -nummer op in het versleutelde workerjournal en gebruik unieke
+  containernamen en resultaatpaden.
+- Bouw de correctieprompt uit de volledige oorspronkelijke prompt en het schema plus alleen de
+  gestructureerde foutfeedback. Vraag het volledige antwoord opnieuw, niet een patch. Neem de oude
+  kandidaattekst niet opnieuw op.
+- Gebruik geen back-off tussen outputpogingen. Providerstoringen, time-outs, leaseverlies en
+  workercrashes blijven via de bestaande technische retryroute lopen.
+- Eindig met `OUTPUT_ATTEMPTS_INTERRUPTED` wanneer het totale outputbudget uitsluitend door
+  afgebroken technische uitvoeringen is verbruikt; rapporteer dat niet als inhoudelijke
+  JSON-afwijzing.
+- Gebruik minimaal deze stabiele foutcodes:
+  - `MODEL_OUTPUT_NOT_JSON`;
+  - `MODEL_OUTPUT_SCHEMA_INVALID`;
+  - `MODEL_OUTPUT_RETRIES_EXHAUSTED`;
+  - `OUTPUT_ATTEMPTS_INTERRUPTED`;
+  - `RESULT_TOO_LARGE`;
+  - `ENGINE_FAILED`.
+- Laat de derde inhoudelijke afwijzing job en attempt terminal `FAILED` maken. Laat een handmatige
+  beheerretry, buiten de nieuwe monitor, een expliciete nieuwe uitvoering met gereset outputbudget
+  en behouden historie starten.
 
 ### Definition of Done
 
-- Productontwerp, Productplanning, Kwaliteitsbewaking en overleg kunnen hetzelfde generieke
-  Runtime-contract gebruiken zonder dat Agent Runtime hun rollen of entiteiten kent.
-- Een centrale mockjob en een echte Codex- of Claude-job doorlopen vanuit Product Factory dezelfde
-  asynchrone domeinflow.
-- Product Factory beheert geen workercredential, attempt, lease, heartbeat of technische retry.
-- Product Factory kan ontdekte environmentkeys aan rollen koppelen en een echte job ontvangt alleen
-  de backend-side afgeleide subset; databases bevatten nooit de waarden.
-- Een Runtime-fout laat de gekoppelde processessie zichtbaar wachten of blokkeren en veroorzaakt
-  geen dubbele AI-uitvoering of dubbele domeinpublicatie.
+- Eén technische attempt kan drie outputpogingen bevatten zonder lease- of retry-back-off tussen de
+  modelaanroepen.
+- Een crash, netwerkretry, oud fencing token of herhaald request kan geen gratis of dubbele poging
+  veroorzaken.
+- Correctiefeedback bevat concrete veilige fouten en nooit de volledige afgewezen uitvoer.
+- Een geldig resultaat is na acceptatie onveranderlijk.
+- `REPOSITORY_WORK` wordt niet opnieuw door een agent uitgevoerd vanwege resultaatvalidatie.
 
-## Fase 6 — Repository- en Git-uitvoering
+## Fase 6 — Centrale mocks en JSON-correctie
 
 ### Resultaat
 
-De runtime kan gecontroleerd `REPOSITORY_WORK` uitvoeren zonder Git-credentials aan de AI-agent te
-geven.
-
-### Git-lifecycle
-
-1. De aanvrager gebruikt een repositoryalias, nooit een willekeurige schrijf-URL.
-2. De worker haalt de repository op of actualiseert een lokale cache.
-3. De worker maakt een schone workspace en unieke tijdelijke branch.
-4. De agentcontainer krijgt alleen die workspace gemount.
-5. De agent wijzigt bestanden zonder toegang tot GitHub-credentials.
-6. De worker controleert gewijzigde paden, bestandsgrootten en verboden inhoud.
-7. De worker voert de vooraf geconfigureerde validaties uit.
-8. De worker commit met job-ID en auditmetadata.
-9. De worker pusht en maakt volgens het profiel eventueel een pull request.
-10. De job levert branch, commit-SHA, diffstatistieken, testresultaten en pull-request-URL terug.
+Alle nieuwe contract-, bestands-, timeout- en JSON-scenario's zijn zonder laptop of AI-kosten
+deterministisch te testen.
 
 ### Werk
 
-- Repositoryaliasconfiguratie en lokale Git-credentials per alias toevoegen.
-- Branchbeleid, toegestane basisbranches en padallowlists toevoegen.
-- Lokale clone-cache en geïsoleerde worktrees maken.
-- Commit- en push-idempotentie ontwerpen met job-ID-marker.
-- Alleen vooraf geregistreerde validatiecommando's toestaan.
-- Voor profielen die dat vereisen een deterministische, niet-AI verificatierunner toevoegen die
-  validaties herhaalt en de Git-toestand vóór en na vergelijkt.
-- Geheime bestanden, grote binaries en onverwachte symlinks blokkeren.
-- Een handmatige goedkeuringsgrens ondersteunen vóór push of pull request.
-- Opruimen van worktree en container na succes, fout of annulering testen.
+- Houd de eenvoudige voorbereide `result: JsonNode` naast de nieuwe kandidaatreeks beschikbaar.
+- Voeg een begrensde `outputSequence: List<String>` toe voor ruwe kandidaatreeksen.
+- Gebruik voor mockselectie een afzonderlijke beveiligde testcorrelatie buiten het minimale
+  productiecontract; voeg daarvoor geen applicatiejobkey aan iedere productiejob toe.
+- Laat de mockexecutor dezelfde servernormalisatie, schemavalidatie, outputpogingadministratie en
+  foutcodes gebruiken als echte `APPLICATION_WORK`-uitvoering.
+- Maak voor een mock geen workerattempt, taakdirectory, credentialselectie, deadlinelease of
+  container.
+- Ondersteun fixtures voor:
+  - direct geldige JSON;
+  - totaal ongeldige JSON en proza;
+  - een toegestaan JSON-codeblok;
+  - ontbrekende verplichte velden en verkeerde types;
+  - succes op poging twee of drie;
+  - drie afwijzingen en uitgeput budget;
+  - te grote kandidaat;
+  - schemafout vóór jobaanmaak;
+  - bestaande voorbereide mockresultaten.
+- Consumeer nooit kandidaten boven het maximumbudget. Laat een te korte reeks expliciet falen in
+  plaats van wachten.
+- Laat mockartifacts dezelfde naam-, type-, hash- en groottelimieten doorlopen als echte artifacts.
+- Houd Test Control API uitsluitend in acceptatie beschikbaar en laat productie bij startup en
+  aanvraagvalidatie dicht falen voor `MOCKED`.
 
 ### Definition of Done
 
-- Een testrepository kan end-to-end worden gewijzigd, gevalideerd, gecommit en gepusht.
-- De agentcontainer kan de GitHub-token niet lezen.
-- Een niet-toegestaan pad of commando stopt de job vóór publicatie.
-- Een technische retry leidt niet tot dubbele commits of pull requests.
-- `APPLICATION_WORK` blijft ongewijzigd werken en krijgt nooit per ongeluk Git-schrijfrechten.
+- Iedere foutcode en outputpogingsovergang kan met één deterministische fixture worden bewezen.
+- Mock- en echte kandidaatroutes delen validator- en resultaatcode; er bestaat geen tweede
+  mockvalidator.
+- Productie bevat geen bruikbare Test Control-route en accepteert geen mockprovider.
 
-## Fase 7 — Software Factory als repositoryconsument
-
-### Resultaat
-
-Software Factory gebruikt `REPOSITORY_WORK` voor lokale agent-, container- en Git-uitvoering,
-terwijl haar bestaande story- en rolorkestratie buiten Agent Runtime blijft.
-
-### Veilige volgorde
-
-1. Het bestaande Software Factory-proces als referentie en acceptatietest vastleggen.
-2. De gemeenschappelijke jobvelden en repositoryuitkomst aan de Software Factory-client koppelen.
-3. Alleen tegen een speciale testrepository shadowjobs zonder productiebijwerkingen uitvoeren.
-4. Workspacevoorbereiding, Dockeruitvoering, validatie, commit, push en cleanup vergelijken.
-5. Eén niet-kritieke uitvoeringsstap via feature flag migreren.
-6. Geleidelijk uitbreiden met meetbare fout- en terugvalgrenzen.
-7. De oude lokale uitvoerroute tijdelijk beschikbaar houden, maar nooit dezelfde schrijvende job
-   gelijktijdig via oud en nieuw uitvoeren.
-8. Pas na stabiliteit eventueel de Software Factory-orchestrator naar OpenShift verplaatsen.
-9. De oude lokale Factory-runtime verwijderen nadat rollback niet meer nodig is.
-
-### Extra aandacht
-
-- Testcontainers hebben mogelijk Docker-toegang nodig. Dat wordt een expliciet hoog-risicoprofiel en
-  geen standaardcapability.
-- De voorkeur gaat uit naar een geïsoleerde rootless- of DinD-oplossing; een algemene
-  Docker-socketmount wordt niet de standaard.
-- De bestaande Software Factory is de volwassen functionele referentie, maar de nieuwe runtime
-  hergebruikt architectuur en lessen, niet de codebase.
-
-### Definition of Done
-
-- Dezelfde teststory levert functioneel gelijkwaardig Git-resultaat op.
-- Fouten, annulering en cleanup zijn minstens even betrouwbaar als in de bestaande Factory.
-- De lokale MacBook draait alleen nog de gedeelde execution worker en noodzakelijke provider- en
-  Git-voorzieningen.
-- Product Factory-applicatiewerk en Software Factory-repositorywerk kunnen naast elkaar door
-  dezelfde server en worker worden gepland zonder elkaars rechten te erven.
-
-## Fase 8 — Newsfeed als applicatieconsument
+## Fase 7 — Duurzaam zichtbaar transcript en managementquery's
 
 ### Resultaat
 
-Een niet-kritieke asynchrone Newsfeed-AI-taak draait als `APPLICATION_WORK` met alleen de benodigde
-Newsfeed-tools.
+De server kan alle voor een beheerder beschikbare zichtbare providerinteractie veilig en
+incrementeel tonen, zonder verborgen redeneerstappen te verzinnen.
 
 ### Werk
 
-- Een geschikte achtergrondtaak kiezen, bijvoorbeeld verrijking of samenvatting die opnieuw
-  uitgevoerd kan worden.
-- Een taakgebonden Newsfeed-API aanbieden in plaats van databasecredentials.
-- Per job een kortlevend, beperkt token uitgeven.
-- Prioriteit en dagquota lager instellen dan interactief of ontwikkelwerk.
-- Kosten, wachttijd, kwaliteit en abonnementsverbruik vergelijken met de huidige API-route.
-- API-fallback behouden voor tijdkritische taken.
+- Voeg een append-only transcriptopslag toe met minimaal job-ID, attempt-ID, deel-ID, sequence,
+  tijdstip, kind, tekst en redactievlag.
+- Ondersteun kinds `PROMPT`, `AGENT_TEXT`, `TOOL_CALL`, `TOOL_OUTPUT`, `CORRECTION` en
+  `PROVIDER_RESULT`.
+- Laat alleen de actuele gefencete attempt transcriptdelen schrijven.
+- Maak ingest idempotent op deel-ID en sequence en behoud transcript van oudere attempts na een
+  technische retry.
+- Laat provideradapters uitsluitend werkelijk beschikbare zichtbare tekst en toolgebeurtenissen
+  vertalen. Vraag geen chain-of-thought op en reconstrueer niets dat de provider niet levert.
+- Redigeer in de worker en opnieuw op de server vóór opslag. Markeer redactie expliciet zodat de
+  frontend `Waarde door Agent Runtime afgeschermd` kan tonen.
+- Kap een transcript nooit stilzwijgend af. Maak het bereiken van een opslaglimiet een expliciete
+  technische fout en bewaar tot welk sequence-nummer opslag gelukt is.
+- Voeg beveiligde beheerquery's toe voor:
+  - actieve jobs;
+  - wachtrij in verwachte claimvolgorde met serverberekende wachtreden;
+  - afgeronde jobs met server-side zoekactie en cursorpaginering van maximaal 30;
+  - jobdetail en resultaat;
+  - transcript na sequence/cursor;
+  - workers.
+- Neem in iedere lijstresponse de servertijd op. Laat de transcriptresponse een volgende cursor en
+  actieve/terminale indicatie bevatten.
+- Maak lange transcripten in beide richtingen pagineerbaar zodat een beheerder altijd het eerste en
+  laatste bewaarde deel kan bereiken.
+- Zoek op job-ID, servergegenereerde technische naam en applicatie. Introduceer geen nieuwe
+  domeincorrelatie.
+- Geef workers als `ONLINE`, `STALE` of `OFFLINE` terug met laatste heartbeat, capaciteit,
+  providers, modellen, jobsoorten en actuele technische jobnaam.
+- Toon bij outputpogingen pogingnummer, maximum, provider/model, veilige foutcode en begrensde
+  validatiefouten; expose nooit volledige afgewezen uitvoer in lijsten. Een beheerderdetail mag
+  uitsluitend de geredigeerde diagnose-uitsnede tonen.
+- Beveilig alle query's met de bestaande adminidentiteit. Retourneer nooit credentials, lokale
+  paden of fencing tokens.
 
 ### Definition of Done
 
-- De worker heeft geen rechtstreekse toegang tot de Newsfeed-database.
-- Offline zijn van de MacBook beschadigt geen Newsfeed-proces.
-- Op basis van gemeten kosten en betrouwbaarheid is per jobKey vastgelegd welke providerroute wordt
-  gebruikt.
+- Een live transcript kan vanaf het laatst ontvangen sequence-nummer zonder duplicaten worden
+  bijgewerkt.
+- Meerdere technische attempts en outputpogingen blijven in de juiste onveranderlijke volgorde
+  zichtbaar.
+- Zoekactie, cursorpaginering, claimvolgorde en wachtreden worden volledig server-side bepaald.
+- Een provider zonder zichtbaar transcriptveld veroorzaakt geen verzonnen content.
+- Geheime testwaarden komen in geen enkele managementresponse voor.
 
-## Fase 9 — HKH als applicatieconsument
+## Fase 8 — Flutter Web-monitor
 
 ### Resultaat
 
-HKH kan `APPLICATION_WORK` gebruiken zonder Git- of algemene database-toegang te geven.
+Een beheerder kan actuele en afgeronde uitvoering volgen via één beveiligde, responsive monitor.
 
 ### Werk
 
-- Eerst één laag-risico achtergrondtaak kiezen, los van directe gebruikersvragen.
-- Een beperkte HKH-tool/API ontwerpen voor uitsluitend de benodigde historische gegevens.
-- Bronverwijzingen en provenance verplicht onderdeel van het resultaat maken.
-- Persoonsgegevens en auteursrechtelijk materiaal classificeren vóór verzending naar een provider.
-- Jobresultaten eerst als voorstel opslaan; publicatie blijft een afzonderlijke domeinactie.
-- Voor interactieve vragen kiezen tussen asynchroon antwoord, cloud-API-fallback of een hybride
-  route op basis van beschikbaarheid en budget.
+- Voeg een Flutter Web-app toe die vanuit dezelfde release als Agent Runtime wordt geleverd.
+- Maak vijf views:
+  - **Actieve jobs**;
+  - **Wachtrij**;
+  - **Afgeronde jobs**;
+  - **Workers**;
+  - **Jobdetail**.
+- Toon bij actieve jobs technische naam/verkort ID, applicatie, jobsoort, provider/model, worker,
+  fase, voortgang, starttijd en verstreken tijd.
+- Toon wachtrijitems in de servervolgorde met wachttijd en serverberekende reden.
+- Gebruik voor wachtredenen minimaal **klaar om te claimen**, **wacht op geschikte worker** en
+  **uitgesteld tot retrymoment**.
+- Toon afgeronde jobs nieuwste eerst, maximaal 30 per pagina, met zoekterm en cursor in de URL en
+  duidelijke vorige/volgende-acties. Neem alleen `SUCCEEDED`, `FAILED` en `CANCELLED` op.
+- Toon workerstatus, heartbeat, capaciteit, capabilities en actuele job zonder lokale secrets of
+  paden.
+- Toon in jobdetail metadata, schema-gevalideerd JSON-resultaat als tekst, gecontroleerde
+  artifactdownloads, veilige fout of annuleringsinformatie inclusief actor en tijdstip, en het
+  beschikbare transcript.
+- Render prompt, resultaat, fout en transcript nooit als HTML.
+- Poll actieve jobs en transcript incrementeel. Volg nieuwe tekst alleen automatisch als de
+  beheerder al onderaan staat en behoud de leespositie anders.
+- Toon transcriptstatus `Live`, `Verbinding onderbroken` of `Afgerond`.
+- Behoud de laatste succesvolle data bij een refreshfout en toon het tijdstip van die
+  momentopname.
+- Bied alleen **Verversen** als algemene actie. Voeg geen annuleren, retry, mockbeheer,
+  workerbediening, prioriteitswijziging of configuratie toe.
+- Toon duidelijke lege toestanden voor iedere lijst en onderscheid geen historie van geen
+- Gebruik daarbij de vastgelegde teksten **Er worden nu geen jobs uitgevoerd**, **De wachtrij is
+  leeg**, **Er zijn nog geen afgeronde jobs**, **Geen jobs gevonden voor deze zoekterm** en
+  **Er zijn geen workers geregistreerd**.
+- Gebruik de bestaande adminlogin en toon bovenin de servergeleverde omgeving `Acceptatie` of
+  `Productie`; dit label is geen schakelaar.
+- Geef `index.html` en versie-informatie `no-store`; geef inhoudsgehashte assets een lange cache.
+- Volg het UX-concept in `ux/index.html`: rustige donkergroene navigatie, lichte achtergrond,
+  witte kaarten, veel witruimte en tekstlabels naast statuskleur.
+- Maak alle functies toetsenbordbedienbaar, status niet alleen kleurafhankelijk, transcript
+  selecteerbaar, mobiel bruikbaar vanaf 320 CSS-pixels en bruikbaar bij 200% tekstvergroting.
+- Respecteer `prefers-reduced-motion`.
 
 ### Definition of Done
 
-- Een agent kan alleen de expliciet aangeboden HKH-tools aanroepen.
-- Resultaten zijn herleidbaar tot gebruikte bronnen en jobversie.
-- Geen agentresultaat wordt ongemerkt als historisch feit gepubliceerd.
+- De vijf views werken tegen de echte managementquery's en bevatten geen synthetische data.
+- Een actieve job vult zijn transcript aan zonder duplicaten of ongewenste scrollsprongen.
+- Resultaat, fout, artifacts, meerdere attempts en outputcorrecties zijn veilig leesbaar.
+- Lege toestand, zoekactie, paginering, refreshfout, verlopen sessie en onbereikbare backend zijn
+  getest.
+- Widget-, contract- en toegankelijkheidstests slagen op 320 pixels en 200% tekstvergroting.
 
-## Fase 10 — Productierijp maken
+## Fase 9 — Observability, systeemtests en release
 
 ### Resultaat
 
-De Agent Runtime is beheersbaar, herstelbaar en uitbreidbaar naar meerdere workers en providers.
+De drie wijzigingen zijn gezamenlijk herstelbaar, meetbaar en achterwaarts compatibel inzetbaar.
 
 ### Werk
 
-- Meerdere workers en capability-based routing ondersteunen.
-- Per applicatie fair scheduling, concurrency en budgetten instellen.
-- Adapter `local-model` toevoegen zodra een geschikt lokaal model of modelserver is gekozen.
-- Adapter `openai-api` of een andere cloudprovider toevoegen voor expliciete fallbackprofielen.
-- Expliciete fallbackpolicies toevoegen zonder de bestaande regel te breken dat een consument exact
-  weet welke provider en welk model een job gebruikt.
-- Databaseback-up en herstelprocedure implementeren en periodiek testen.
-- Audit- en jobretentie instelbaar maken; grote artefacten buiten PostgreSQL opslaan.
-- Contractcompatibiliteit en migratiebeleid publiceren.
-- Worker- en execution-image-upgrades gecontroleerd uitrollen.
-- Securityreview en periodieke credentialrotatie invoeren.
-- Disaster-recoveryoefening uitvoeren voor server, database en verlies van een lokale worker.
-- Capaciteitsmetingen en kostenrapportage per applicatie toevoegen.
+- Voeg metrics toe voor:
+  - acceptatie op outputpoging 1, 2 en 3;
+  - `MODEL_OUTPUT_NOT_JSON` en `MODEL_OUTPUT_SCHEMA_INVALID`;
+  - uitgeputte outputpogingen per provider/model;
+  - gemiddeld aantal outputpogingen per succesvolle job;
+  - wachtende jobs zonder passende environmentkeys;
+  - harde time-outs;
+  - transcriptingest- en redactiefouten;
+  - attachment- en artifactafwijzingen.
+- Toon technische attempts en outputpogingen als verschillende begrippen in metrics, events en
+  monitor.
+- Voeg unit-, serverintegratie-, worker-, mock- en end-to-endtests toe voor alle Definitions of
+  Done uit fase 0 tot en met 8.
+- Test expliciet idempotentie, fencing, oude attempts, server-/workerrestart, slaap voorbij de
+  deadline, leaseverlies, annulering en gelijktijdige timeout/resultaat-races.
+- Bouw het execution-image en voer, indien lokale accounts aanwezig zijn, één handmatige smokejob
+  per Codex en Claude uit met strikt schema, attachment, environmentkey en outputartifact.
+- Laat ontbrekende lokale provideraccounts de geautomatiseerde build niet laten falen.
+- Voer minimaal `mvn -B --no-transfer-progress verify`, containerbuilds, OpenAPI-validatie,
+  Modulith-/ArchUnitcontroles, Flutter-tests en beide Kustomize-validaties uit.
+- Werk README, architectuur, deploymentdocumentatie en runbook bij met het vereenvoudigde contract, credentialbestanden,
+  timeout, outputpogingen, transcript, monitor, foutcodes en herstelprocedures.
+- Rol eerst uit naar acceptatie en controleer contractafwijzingen, migratie, mocks, echte smokejobs,
+  metrics en redactie.
+- Maak vóór productie een databasebackup en rol daarna dezelfde immutable server-, worker- en
+  execution-imageversie uit. Deze release is bewust contract- en databaseschemabreking; een oude
+  serverversie is na de kolomverwijdering geen geldige applicatierollback.
 
 ### Definition of Done
 
-- Een tweede worker kan zonder applicatiewijziging jobs overnemen.
-- Databaseherstel en tokenrotatie zijn aantoonbaar geoefend.
-- Per applicatie zijn beschikbaarheid, wachttijd en kosten zichtbaar.
-- Een defecte engine- of provideradapter beïnvloedt andere engines en profielen niet.
+- Alle geautomatiseerde verificaties en beide provider-smokes slagen, of het ontbreken van een
+  lokaal provideraccount is expliciet vastgelegd zonder een test te faken.
+- De breaking database-upgrade en de herstelroute via backup zijn in acceptatie geoefend.
+- Runbookscenario's bestaan voor credentialbestand afgewezen, environmentkey niet beschikbaar,
+  JSON-pogingen uitgeput, harde time-out, transcriptopslag vol en mislukte artifactupload.
+- Productie weigert mocks, bewaart geen projectcredentialwaarden en accepteert geen laat of
+  schema-ongeldig resultaat.
 
 ## Eerste uitvoerbare stories
 
-Deze stories vormen de kleinste nuttige verticale doorsnede voor centraal applicatiewerk en bereiden
-repositorywerk direct voor.
+Deze stories vormen de aanbevolen pull-requestvolgorde:
 
-1. Maak de zelfstandige repository en multimodulebouw.
-2. Leg het gemeenschappelijke jobcontract v1 plus `APPLICATION_WORK` en `REPOSITORY_WORK`, de
-   statusmachine en idempotencyregels vast.
-3. Sla een job met Flyway en PostgreSQL duurzaam op.
-4. Bouw de beveiligde consumenten-API om jobs in te dienen, te volgen, te annuleren en resultaten te
-   lezen.
-5. Bouw de centrale mockexecutor, mockfixtures en acceptance-only Test Control API.
-6. Laat een technische fake worker een lease verkrijgen, veilige voortgang melden en een job
-   voltooien.
-7. Bouw de lokale worker met uitgaande HTTPS long-polling, heartbeat, fencingjournal en
-   reconciliatie.
-8. Voeg de geïsoleerde `codex-cli`-adapter toe.
-9. Voeg de geïsoleerde `claude-code`-adapter toe.
-10. Voer dezelfde `APPLICATION_WORK`-fixture via mock, Codex en Claude uit met hetzelfde
-    JSON-resultaatcontract.
-11. Test offline worker, slaap, server- en workerherstart, leaseverlies, fencing, annuleren, dubbele
-    aanvraag en uitgeputte retries.
-12. Koppel één Product Factory-jobKey en daarna alle Product Factory-AI-jobs.
-13. Toon workerstatus en jobtijdlijn in de minimale monitor.
-14. Implementeer `REPOSITORY_WORK`, repositoryaliases, validatie en idempotente Git-publicatie.
-15. Koppel één Software Factory-uitvoeringsstap en breid die na de pilot gecontroleerd uit.
+1. Vereenvoudig de huidige OpenAPI, Kotlin-contracten, opslag, worker, mocks en monitor breaking en
+   voeg strictness- en migratietests toe.
+2. Voeg serverpolicy voor provider, model, retry, prioriteit, tools en prefixes
+   toe.
+3. Splits lokale secretbestanden en bouw veilige parsing plus workerregistratie van alleen namen.
+4. Bouw environmentcatalogus en capability-/keygebaseerde schedulerselectie.
+5. Bouw de vaste taakdirectory en `available-tools.md`.
+6. Voeg duurzame Base64-inputattachments en veilige materialisatie toe.
+7. Verzamel, valideer en upload outputartifacts uit de taakdirectory.
+8. Voeg duurzame attemptdeadline en onafhankelijke server-/workerhandhaving toe.
+9. Vervang de eenvoudige JSON-schemavalidator en valideer schema's vóór jobaanmaak.
+10. Voeg duurzame outputpogingen en de gefencete worker-API toe.
+11. Splits provideradapters en bouw de directe self-correction-loop.
+12. Breid de centrale mock uit met ruwe kandidaatreeksen en contractfixtures.
+13. Voeg duurzame geredigeerde transcriptingest en managementquery's toe.
+14. Bouw de vijf Flutter-monitorviews tegen de echte API.
+15. Voeg volledige systeemtests, metrics, runbooks en acceptatie-/productierelease toe.
 
-Na story 12 bestaat de applicatiewerk-MVP en heeft Product Factory geen eigen laptopworker nodig.
-Na story 15 ondersteunt dezelfde runtime ook Software Factory. Lokale modellen, Newsfeed en HKH zijn
-vervolgstappen.
+Iedere story bevat eigen migratie- en contracttests. Een story wordt niet als afgerond gemarkeerd
+wanneer alleen het happy path werkt.
 
-## Prioriteiten en quota
+## Specificatiedekking
 
-Een eerste beleidsvoorstel:
-
-1. Storingsherstel en expliciet handmatig werk.
-2. Software Factory-ontwikkeljobs.
-3. Product Factory-onderzoek en productwerk.
-4. HKH-achtergrondverwerking.
-5. Newsfeed-bulkverwerking.
-
-Per applicatie komen minimaal limieten voor gelijktijdige jobs, maximale looptijd, jobs per dag en maximale output. Ongebruikte lage-prioriteitscapaciteit mag worden benut, maar bulkjobs mogen hogere prioriteiten niet blokkeren.
-
-## Beveiligingsgrenzen
-
-- Iedere applicatie krijgt een eigen serviceaccount en server-side policy. V1 gebruikt toegestane
-  profielen; `APPLICATION_WORK` v2 leidt rechten af zonder vrij `jobProfile`-veld.
-- Iedere worker heeft een eigen roteerbare identiteit.
-- Provider, model en opgegeven limieten worden altijd tegen serviceaccount en serverpolicy
-  gevalideerd; payloadvelden verlenen zelf geen rechten.
-- V1-jobprofielen blijven geldig tijdens migratie. `APPLICATION_WORK` v2 gebruikt een vaste toolset
-  per consument en selecteert alleen geregistreerde environmentkeynamen uit zichtbare
-  projectprefixes. `REPOSITORY_WORK` behoudt zijn strengere repositoryprofielen.
-- Repository's worden via aliases en allowlists geselecteerd.
-- Een `APPLICATION_WORK`-repositorysnapshot mag alleen een toegestane publieke HTTPS-URL en exacte
-  commit-SHA bevatten en heeft nooit een schrijfcredential.
-- Branchprefix, basisbranch, toegestane paden en validaties horen bij het profiel.
-- De agent krijgt geen GitHub-credential; de worker voert Git-publicatie uit.
-- Applicatieagents krijgen alleen de door de consumentrol geselecteerde lokale credentialsubset.
-  Voor deze persoonlijke projecten kunnen daarin bewust database-URL's of testaccounts staan; het
-  volledige bronbestand en Runtime-/providercredentials blijven buiten de container.
-- Execution images staan op een allowlist en zijn met versie of digest vastgezet.
-- Vrije shellcommando's in een jobpayload zijn verboden.
-- Prompt, log, result en foutdetails gaan door redactieregels en groottelimieten.
-- Complete consumentinstructies worden als vaste instructie behandeld; repository-, story-,
-  meeting- en webinhoud blijft onvertrouwde data en kan het jobprofile niet verruimen.
-- Productie weigert `MOCKED` en registreert geen Test Control API.
-- Docker-toegang is standaard afwezig en alleen beschikbaar in een apart risicoprofiel.
-- Publieke of onbetrouwbare input wordt nooit rechtstreeks een instructie voor Codex CLI, Claude Code of een lokaal model met lokale systeemtoegang.
-
-## Betrouwbaarheid en herstel
-
-- De server gebruikt PostgreSQL als waarheid; long-poll-berichten zijn alleen transport.
-- Iedere job heeft een idempotency key vanuit de aanvrager.
-- Iedere echte uitvoeringspoging heeft een attempt-ID en een eenmalig fencing token. De server
-  bewaart alleen de tokenhash; de worker bewaart het actuele token versleuteld in zijn journal.
-- Als eerste veilige standaard stuurt de worker iedere 30 seconden heartbeat, verloopt de lease na
-  2 minuten en volgt daarna 30 minuten hersteltermijn voordat een nieuwe poging mag starten. Deze
-  waarden zijn per profiel begrensd configureerbaar.
-- Een gemiste heartbeat maakt een poging eerst `SUSPECTED`. Herstelt dezelfde worker binnen de
-  hersteltermijn, dan hervat hij hetzelfde attempt; een nieuwere of gefencete poging kan nooit meer
-  afronden.
-- De server accepteert voortgang en eindresultaat alleen met job-ID, attempt-ID en geldig fencing
-  token.
-- Iedere echte attempt heeft daarnaast een bij claimen bevroren harde deadline. Server en worker
-  dwingen haar onafhankelijk af; heartbeat, slaap, lease en recovery kunnen haar niet verlengen en
-  ieder laat bericht wordt gefencet.
-- Retries krijgen een maximum en een expliciete back-off.
-- Git- en publicatiebijwerkingen gebruiken job-ID's om dubbele acties te herkennen.
-- Een worker reconcilieert journal en Dockercontainers vóór hij nieuwe jobs claimt. Dockerlabels
-  bevatten nooit tokens of andere secrets.
-- Onvolledige workspaces worden in quarantaine gezet of gecontroleerd opgeruimd.
-- Een dead-letter- of definitief mislukte status vereist zichtbare diagnose, geen eindeloze retry.
-- Alleen Agent Runtime voert technische retries van een attempt uit. Een consument mag pas na een
-  terminale job bewust een nieuwe logische job aanvragen.
-- `MOCKED` gebruikt dezelfde duurzame job en resultaatvalidatie maar geen attempt, lease of
-  heartbeat.
-
-## Uitrol- en rollbackstrategie
-
-- Iedere bestaande consument krijgt een feature flag per jobKey of uitvoeringsstap.
-- Nieuwe routes beginnen met fixturejobs en daarna shadow jobs tegen niet-productiedata.
-- Oud en nieuw mogen tijdelijk naast elkaar bestaan, maar nooit dezelfde side-effectjob gelijktijdig uitvoeren.
-- Migratiecriteria worden vooraf meetbaar gemaakt: succespercentage, dubbele uitvoering, wachttijd, kosten en handmatige interventies.
-- Bij overschrijding van een foutgrens gaat het jobtype terug naar de oude route.
-- Database- en contractmigraties blijven achterwaarts compatibel zolang een rollbackversie ondersteund wordt.
-- Bestaande workers en credentials worden pas verwijderd na een afgesproken stabiliteitsperiode.
-- Product Factory v2 bouwt geen tijdelijke eigen worker: acceptatie gebruikt eerst de centrale mock
-  en echte AI-uitvoering wordt actief zodra de applicatiewerkroute en gedeelde worker gereed zijn.
-
-## Beslismomenten voor de eigenaar
-
-Deze keuzes hoeven de eerste technische stories niet allemaal te blokkeren, maar zijn vóór de genoemde fase nodig:
-
-- Definitieve OpenShift-hostnaam en namespace — vóór fase 1-deployment.
-- Google OAuth-client en toegestane beheerders — vóór fase 4.
-- Welke repositories en GitHub-identiteiten toegestaan zijn — vóór fase 6.
-- Of pull requests automatisch of pas na menselijke goedkeuring worden geopend — vóór de eerste echte repositorypilot.
-- Welke Newsfeed- en HKH-data een lokale of externe provider mag verwerken — vóór fase 8 en 9.
-- Of directe gebruikersvragen een betaalde API-fallback krijgen — vóór interactieve inzet.
-- Of de MacBook voldoende beschikbaar is of later een aparte altijd-aan worker nodig is — vóór het afspreken van beschikbaarheidsdoelen.
-
-## Vervolgkeuzes
-
-- Wanneer wordt de huidige ingebedde webmonitor groot genoeg om als zelfstandige frontend te
-  worden afgesplitst?
-- Worden jobevents alleen als relationele auditrecords opgeslagen of als volledige event-sourced aggregate?
-- Welke objectopslag gebruiken we later voor grote logs, diffs en artefacten?
-- Hoe worden taakgebonden applicatietools technisch aangeboden: HTTP, MCP of beide?
-- Welke execution-profielen hebben werkelijk Docker-in-Docker nodig?
-- Welke cloudprovideradapter is de eerste fallback naast de lokale Codex- en Claude Code-installaties?
-- Welke lokale modelserver en welk model worden als eerste door `local-model` ondersteund?
-- Wanneer is een tweede worker nuttiger dan verdere beschikbaarheidslogica rond één MacBook?
-
-Deze vragen worden als expliciete architectuurbesluiten behandeld. Ze worden niet impliciet opgelost in losse implementatiestories.
+| Specificatieonderdeel | Fase |
+|---|---|
+| Minimale huidige aanvraag, verwijderde legacyvelden en serverpolicy | 0 |
+| `secrets.env`, `project-credentials.env`, catalogus en claimselectie | 1 |
+| Taakdirectory, `available-tools.md`, Base64-input en file-based output | 2 |
+| Harde uitvoeringstime-out en recovery | 3 |
+| Volledige JSON Schema-validatie en centrale normalisatie | 4 |
+| Duurzame outputpogingen, provideradapters en self-correction | 5 |
+| Centrale mocks en Test Control | 6 |
+| Zichtbaar geredigeerd transcript en management-API | 7 |
+| Actief, wachtrij, afgerond, workers en jobdetail in Flutter | 8 |
+| Metrics, tests, documentatie, rollout en rollback | 9 |
 
 ## Eindbeeld
 
-Na afronding draait op OpenShift één duurzaam en observeerbaar control plane. Product Factory dient
-complete `APPLICATION_WORK`-jobs in en Software Factory gecontroleerde `REPOSITORY_WORK`-jobs. De
-centrale mockexecutor maakt dezelfde contracten testbaar zonder laptop; de MacBook of een andere
-execution host haalt echte jobs via uitgaande HTTPS-long-polling op en meldt heartbeat, veilige
-voortgang en resultaat terug. Alle consumenten houden hun eigen domein- en ontwikkelorkestratie. De
-gedeelde runtime doet uitsluitend veilige, betrouwbare technische uitvoering.
+Agent Runtime blijft een generiek technisch uitvoeringsplatform. Een consumerende applicatie stuurt
+een complete taak en bewaart zelf alle domeincontext. De Runtime plant een passende worker, stelt
+alleen de toegestane lokale credentialsubset en bestanden beschikbaar, begrenst de attempt hard,
+accepteert alleen betrouwbare JSON en bewaart een veilig zichtbaar transcript en gecontroleerde
+artifacts. Beheerders kunnen dit volgen in één kleine monitor; geen enkele consumerimplementatie is
+onderdeel van dit repositoryplan.

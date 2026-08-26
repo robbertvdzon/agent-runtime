@@ -20,6 +20,8 @@ data class StoredJob(
     val usage: JsonNode?,
     val completedAt: Instant?,
     val cancelRequested: Boolean,
+    val cancelledAt: Instant?,
+    val cancelledBy: String?,
 )
 
 @Repository
@@ -29,17 +31,17 @@ class JobStore(
 ) {
     private val rowMapper = RowMapper<StoredJob> { rs, _ -> mapJob(rs) }
 
-    fun insert(tenantId: String, request: CreateJobRequest): StoredJob {
+    fun insert(tenantId: String, request: CreateJobRequest, maxAttempts: Int, priority: Int): StoredJob {
         val now = Instant.now()
         val id = UUID.randomUUID().toString()
         jdbc.update(
             """INSERT INTO runtime_job
-               (id, tenant_id, idempotency_key, job_kind, job_profile, job_key, provider, model,
+               (id, tenant_id, idempotency_key, job_kind, provider, model,
                 request_json, response_schema_json, status, phase, max_attempts, priority, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', 'QUEUED', ?, ?, ?, ?)""",
-            id, tenantId, request.idempotencyKey, request.jobKind.name, request.jobProfile, request.jobKey,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', 'QUEUED', ?, ?, ?, ?)""",
+            id, tenantId, request.idempotencyKey, request.jobKind.name,
             request.provider.name, request.model, mapper.writeValueAsString(request), request.responseSchema?.toString(),
-            request.maxAttempts, request.priority, now.atOffset(ZoneOffset.UTC), now.atOffset(ZoneOffset.UTC),
+            maxAttempts, priority, now.atOffset(ZoneOffset.UTC), now.atOffset(ZoneOffset.UTC),
         )
         addEvent(id, "JOB_CREATED", "QUEUED", "Job accepted for durable processing.")
         return find(id)!!
@@ -57,7 +59,7 @@ class JobStore(
         if (tenantId != null) { clauses += "tenant_id = ?"; args += tenantId }
         if (status != null) { clauses += "status = ?"; args += status.name }
         val where = if (clauses.isEmpty()) "" else " WHERE ${clauses.joinToString(" AND ")}"
-        args += limit.coerceIn(1, 500)
+        args += limit.coerceIn(1, 5_000)
         return jdbc.query("SELECT * FROM runtime_job$where ORDER BY created_at DESC LIMIT ?", rowMapper, *args.toTypedArray())
     }
 
@@ -141,11 +143,11 @@ class JobStore(
         addEvent(jobId, "RETRY_SCHEDULED", "RETRY_WAIT", "Retry is available at $notBefore after $code.")
     }
 
-    fun requestCancel(jobId: String) {
+    fun requestCancel(jobId: String, actor: String) {
         val stored = find(jobId) ?: return
         val now = Instant.now().atOffset(ZoneOffset.UTC)
         if (stored.view.status == JobStatus.QUEUED || stored.view.status == JobStatus.WAITING_FOR_WORKER) {
-            jdbc.update("UPDATE runtime_job SET status='CANCELLED', phase='CANCELLED', cancel_requested=TRUE, completed_at=?, updated_at=? WHERE id=?", now, now, jobId)
+            jdbc.update("UPDATE runtime_job SET status='CANCELLED', phase='CANCELLED', cancel_requested=TRUE, cancelled_at=?, cancelled_by=?, completed_at=?, updated_at=? WHERE id=?", now, actor.take(160), now, now, jobId)
             addEvent(jobId, "JOB_CANCELLED", "CANCELLED", "Job cancelled before execution.")
         } else if (stored.view.status == JobStatus.RUNNING) {
             jdbc.update("UPDATE runtime_job SET cancel_requested=TRUE, updated_at=? WHERE id=?", now, jobId)
@@ -153,9 +155,9 @@ class JobStore(
         }
     }
 
-    fun markCancelled(jobId: String, message: String) {
+    fun markCancelled(jobId: String, message: String, actor: String) {
         val now = Instant.now().atOffset(ZoneOffset.UTC)
-        jdbc.update("UPDATE runtime_job SET status='CANCELLED', phase='CANCELLED', completed_at=?, updated_at=? WHERE id=?", now, now, jobId)
+        jdbc.update("UPDATE runtime_job SET status='CANCELLED', phase='CANCELLED', cancelled_at=?, cancelled_by=?, completed_at=?, updated_at=? WHERE id=?", now, actor.take(160), now, now, jobId)
         addEvent(jobId, "JOB_CANCELLED", "CANCELLED", message)
     }
 
@@ -163,7 +165,7 @@ class JobStore(
         jdbc.update(
             """UPDATE runtime_job SET status='QUEUED', phase='QUEUED', attempt_count=0, cancel_requested=FALSE,
                result_json=NULL, usage_json=NULL, error_code=NULL, error_message=NULL, completed_at=NULL,
-               not_before=NULL, updated_at=? WHERE id=? AND status IN ('FAILED','CANCELLED')""",
+               cancelled_at=NULL, cancelled_by=NULL, not_before=NULL, updated_at=? WHERE id=? AND status IN ('FAILED','CANCELLED')""",
             Instant.now().atOffset(ZoneOffset.UTC), jobId,
         )
         addEvent(jobId, "ADMIN_RETRY", "QUEUED", "Administrator requested a new execution cycle.")
@@ -191,6 +193,12 @@ class JobStore(
     ) ?: 0
 
     fun insertArtifact(jobId: String, filename: String, mimeType: String, sha256: String, content: ByteArray): ArtifactView {
+        artifactByName(jobId, filename)?.let { existing ->
+            if (existing.sha256 != sha256 || existing.sizeBytes != content.size.toLong() || existing.mimeType != mimeType) {
+                throw nl.vdzon.agentruntime.server.config.ApiException("ARTIFACT_IDEMPOTENCY_CONFLICT", "Artifact filename already has different immutable content.", org.springframework.http.HttpStatus.CONFLICT)
+            }
+            return existing
+        }
         val id = UUID.randomUUID().toString()
         val now = Instant.now().atOffset(ZoneOffset.UTC)
         jdbc.update(
@@ -201,6 +209,12 @@ class JobStore(
         return artifact(id)!!
     }
 
+    private fun artifactByName(jobId: String, filename: String): ArtifactView? = jdbc.query(
+        "SELECT id, job_id, filename, mime_type, size_bytes, sha256, created_at FROM runtime_artifact WHERE job_id=? AND filename=?",
+        { rs, _ -> ArtifactView(rs.getString("id"), rs.getString("job_id"), rs.getString("filename"), rs.getString("mime_type"), rs.getLong("size_bytes"), rs.getString("sha256"), instant(rs, "created_at")!!) },
+        jobId, filename,
+    ).firstOrNull()
+
     private fun one(sql: String, vararg args: Any): StoredJob? = try {
         jdbc.queryForObject(sql, rowMapper, *args)
     } catch (_: EmptyResultDataAccessException) { null }
@@ -210,7 +224,6 @@ class JobStore(
         val view = JobView(
             id = rs.getString("id"), tenantId = rs.getString("tenant_id"),
             jobKind = JobKind.valueOf(rs.getString("job_kind")), idempotencyKey = rs.getString("idempotency_key"),
-            jobProfile = rs.getString("job_profile"), jobKey = rs.getString("job_key"),
             provider = Provider.valueOf(rs.getString("provider")), model = rs.getString("model"),
             status = JobStatus.valueOf(rs.getString("status")), phase = rs.getString("phase"),
             attemptCount = rs.getInt("attempt_count"), maxAttempts = rs.getInt("max_attempts"),
@@ -221,7 +234,8 @@ class JobStore(
         )
         return StoredJob(
             view, request, rs.getString("result_json")?.let(mapper::readTree),
-            rs.getString("usage_json")?.let(mapper::readTree), instant(rs, "completed_at"), rs.getBoolean("cancel_requested")
+            rs.getString("usage_json")?.let(mapper::readTree), instant(rs, "completed_at"), rs.getBoolean("cancel_requested"),
+            instant(rs, "cancelled_at"), rs.getString("cancelled_by")
         )
     }
 

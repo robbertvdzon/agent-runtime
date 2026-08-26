@@ -5,11 +5,12 @@ Gedeeld platform waarmee geautoriseerde applicaties op OpenShift (Software Facto
 ## Begin hier
 
 Lees eerst [`README.md`](README.md) en daarna [`docs/agent-runtime-stappenplan.md`](docs/agent-runtime-stappenplan.md).
-De repository bevat een werkende eerste platformrelease. Verander het externe contract alleen
-achterwaarts compatibel en pas contract, tests en documentatie samen aan.
+De repository bevat een werkende eerste platformrelease, maar nog geen actieve API-consumers. De
+huidige contractvorm mag daarom bewust breaking worden vereenvoudigd; pas contract, implementatie,
+tests en documentatie altijd samen aan. Bouw geen parallelle compatibiliteits-API.
 Lees voor nieuw `APPLICATION_WORK` ook
-[`docs/application-work-v2.md`](docs/application-work-v2.md); dit is het leidende doelcontract voor
-de Product Factory-migratie en wordt naast v1 ingevoerd.
+[`docs/application-work.md`](docs/application-work.md); dit is het leidende contract voor de huidige
+API.
 
 Kernbeslissingen om in het achterhoofd te houden (staan uitgewerkt in het stappenplan):
 
@@ -25,13 +26,15 @@ Kernbeslissingen om in het achterhoofd te houden (staan uitgewerkt in het stappe
 - **Centrale mocks**: `MOCKED` wordt server-side afgehandeld met dezelfde jobopslag,
   schema-validatie en resultaten, maar zonder worker, lease of Dockercontainer. Productie weigert
   deze route.
-- **Provider en model**: een vertrouwde consument vraagt beide exact aan binnen haar jobprofile; de
-  runtime valideert de keuze en wisselt nooit stilzwijgend van model.
-- **Credentialmodel**: v1 en `REPOSITORY_WORK` gebruiken jobprofielen; `APPLICATION_WORK` v2 leidt
-  de vaste policy uit de consumentidentiteit af en vraagt alleen namen die een worker lokaal uit
+- **Provider en model**: een vertrouwde consument vraagt beide exact aan; de runtime valideert de
+  keuze tegen serverpolicy en wisselt nooit stilzwijgend van model.
+- **Credentialmodel**: de vaste policy volgt uit de consumentidentiteit. `APPLICATION_WORK` vraagt
+  alleen namen die een worker lokaal uit
   `project-credentials.env` ontdekt. Runtime- en providercredentials blijven altijd buiten de
   agentcontainer.
-- **Eén breed gedeeld execution-image**, niet per-profiel images: browser (Playwright/Chromium), build/test-toolchains, `oc`/`kubectl` en databaseclients zitten er allemaal in. Aanwezigheid van een tool geeft geen rechten; alleen de credentials/mounts die het jobprofile toestaat bepalen wat een job echt kan.
+- **Eén breed gedeeld execution-image**: browser (Playwright/Chromium), build/test-toolchains,
+  `oc`/`kubectl` en databaseclients zitten er allemaal in. Aanwezigheid van een tool geeft geen
+  rechten; alleen serverpolicy en de geselecteerde credentials/mounts bepalen wat een job kan.
 - **Deterministische verificatierunner**: repositoryprofielen die dit vereisen laten build- en
   testcommando's door een aparte, niet-AI component herhalen en vergelijken de Git-toestand vóór en
   na.
@@ -41,4 +44,6 @@ Kernbeslissingen om in het achterhoofd te houden (staan uitgewerkt in het stappe
 Beide staan naast deze repo in `~/git/` en mogen vrij gelezen worden voor context — er hoeft niets in gewijzigd te worden.
 
 - **Software Factory** — `/Users/robbertvdzon/git/softwarefactory` (GitHub: `robbertvdzon/software-factory`). Robbert's bestaande autonome multi-agent pipeline (planner/developer/reviewer/tester-agents) die tracker-stories omzet in gemergde PR's. De volwassen referentie voor hoe agents nu al in Docker draaien, browser-automation, build/test-toolchains, `oc`-toegang en de verificatierunner werken — deze runtime hergebruikt de architectuur en lessen daarvan, niet de code. Zie de sectie "Referentiemateriaal in andere repositories" in het stappenplan voor concrete bestandsverwijzingen (`Dockerfile.agent`, `DockerAgentRuntime.kt`, `TesterVerificationRunner.kt`, `.factory/verification.yaml`, `AgentWorkspace.kt`).
-- **Product Factory** — `/Users/robbertvdzon/git/product-factory` (GitHub: `robbertvdzon/product-factory`). Eerste consument van `APPLICATION_WORK` in fase 5. Product Factory bouwt geen nieuwe eigen laptopworker.
+- **Product Factory** — `/Users/robbertvdzon/git/product-factory` (GitHub:
+  `robbertvdzon/product-factory`). Referentie voor een toekomstige `APPLICATION_WORK`-consumer;
+  implementatiewerk in die repository staat niet in het Runtime-stappenplan.

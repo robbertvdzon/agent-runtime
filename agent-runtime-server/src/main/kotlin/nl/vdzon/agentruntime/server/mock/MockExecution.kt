@@ -10,6 +10,7 @@ import nl.vdzon.agentruntime.server.config.*
 import nl.vdzon.agentruntime.server.jobs.JobService
 import nl.vdzon.agentruntime.server.jobs.JobStore
 import nl.vdzon.agentruntime.server.jobs.StoredJob
+import nl.vdzon.agentruntime.server.workers.OutputAttemptService
 import org.springframework.http.HttpStatus
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.scheduling.annotation.Scheduled
@@ -25,9 +26,9 @@ import java.util.UUID
 data class MockResponseView(
     val id: String,
     val tenantId: String?,
-    val jobProfile: String?,
-    val jobKey: String?,
+    val idempotencyKey: String?,
     val result: JsonNode?,
+    val outputSequence: List<String>,
     val errorCode: String?,
     val errorMessage: String?,
     val delayMillis: Long,
@@ -37,12 +38,19 @@ data class MockResponseView(
 @Repository
 class MockResponseStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMapper) {
     fun insert(request: PrepareMockResponseRequest): MockResponseView {
-        require((request.result != null) xor (request.errorCode != null)) { "Exactly one of result or errorCode is required." }
+        if (listOf(request.result != null, request.outputSequence.isNotEmpty(), request.errorCode != null).count { it } != 1) {
+            throw ApiException(
+                "INVALID_MOCK_FIXTURE",
+                "Exactly one of result, outputSequence or errorCode is required.",
+                HttpStatus.BAD_REQUEST,
+            )
+        }
         val id = UUID.randomUUID().toString()
         jdbc.update(
-            """INSERT INTO runtime_mock_response(id,tenant_id,job_profile,job_key,consumer_correlation,result_json,error_code,error_message,delay_millis,created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            id, request.tenantId, request.jobProfile, request.jobKey, request.consumerCorrelation, request.result?.toString(),
+            """INSERT INTO runtime_mock_response(id,tenant_id,idempotency_key,result_json,output_sequence_json,error_code,error_message,delay_millis,created_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            id, request.tenantId, request.idempotencyKey, request.result?.toString(),
+            request.outputSequence.takeIf(List<String>::isNotEmpty)?.let(mapper::writeValueAsString),
             request.errorCode, request.errorMessage, request.delayMillis, Instant.now().atOffset(ZoneOffset.UTC),
         )
         return list().first { it.id == id }
@@ -52,14 +60,17 @@ class MockResponseStore(private val jdbc: JdbcTemplate, private val mapper: Obje
         "SELECT * FROM runtime_mock_response WHERE consumed_by_job_id IS NULL ORDER BY created_at, id"
     ) { rs, _ ->
         MockResponseView(
-            rs.getString("id"), rs.getString("tenant_id"), rs.getString("job_profile"), rs.getString("job_key"),
-            rs.getString("result_json")?.let(mapper::readTree), rs.getString("error_code"), rs.getString("error_message"),
+            rs.getString("id"), rs.getString("tenant_id"), rs.getString("idempotency_key"),
+            rs.getString("result_json")?.let(mapper::readTree),
+            rs.getString("output_sequence_json")?.let { mapper.readValue(it, mapper.typeFactory.constructCollectionType(List::class.java, String::class.java)) } ?: emptyList(),
+            rs.getString("error_code"), rs.getString("error_message"),
             rs.getLong("delay_millis"), rs.getObject("created_at", OffsetDateTime::class.java).toInstant(),
         )
     }
 
     fun matching(job: StoredJob): MockResponseView? = list()
-        .filter { (it.tenantId == null || it.tenantId == job.view.tenantId) && (it.jobProfile == null || it.jobProfile == job.view.jobProfile) && (it.jobKey == null || it.jobKey == job.view.jobKey) }
+        .filter { it.tenantId == null || it.tenantId == job.view.tenantId }
+        .filter { it.idempotencyKey == null || it.idempotencyKey == job.view.idempotencyKey }
         .maxWithOrNull(compareBy<MockResponseView> { specificity(it) }.thenByDescending { -it.createdAt.toEpochMilli() })
 
     fun consume(id: String, jobId: String): Boolean = jdbc.update(
@@ -70,7 +81,7 @@ class MockResponseStore(private val jdbc: JdbcTemplate, private val mapper: Obje
     fun delete(id: String) = jdbc.update("DELETE FROM runtime_mock_response WHERE id=? AND consumed_by_job_id IS NULL", id)
     fun clear() = jdbc.update("DELETE FROM runtime_mock_response WHERE consumed_by_job_id IS NULL")
 
-    private fun specificity(item: MockResponseView) = listOf(item.tenantId, item.jobProfile, item.jobKey).count { it != null }
+    private fun specificity(item: MockResponseView) = (if (item.tenantId == null) 0 else 1) + (if (item.idempotencyKey == null) 0 else 2)
 }
 
 @Service
@@ -78,7 +89,8 @@ class MockExecutor(
     private val properties: RuntimeProperties,
     private val jobs: JobStore,
     private val responses: MockResponseStore,
-    private val service: JobService,
+    private val outputs: OutputAttemptService,
+    private val mapper: ObjectMapper,
 ) {
     @Scheduled(fixedDelay = 500)
     @Transactional
@@ -95,11 +107,9 @@ class MockExecutor(
         }
         if (!responses.consume(response.id, job.view.id)) return
         if (response.delayMillis > 0) Thread.sleep(response.delayMillis)
-        if (response.result != null) {
-            runCatching { service.validateResult(job, response.result) }
-                .onSuccess { jobs.completeMock(job.view.id, response.result) }
-                .onFailure { jobs.fail(job.view.id, "MOCK_RESULT_SCHEMA_INVALID", it.message.orEmpty()) }
-        } else jobs.fail(job.view.id, response.errorCode ?: "MOCK_FAILED", response.errorMessage ?: "Prepared mock failure.")
+        val candidates = if (response.outputSequence.isNotEmpty()) response.outputSequence else response.result?.let { listOf(mapper.writeValueAsString(it)) }
+        if (candidates != null) outputs.executeMock(job, candidates)
+        else jobs.fail(job.view.id, response.errorCode ?: "MOCK_FAILED", response.errorMessage ?: "Prepared mock failure.")
     }
 }
 

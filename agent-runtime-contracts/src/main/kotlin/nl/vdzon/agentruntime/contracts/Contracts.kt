@@ -26,29 +26,24 @@ data class RepositoryRequest(
     val publish: Boolean = true,
 )
 
-data class ResourceRequest(
-    @field:NotBlank @field:Size(max = 100) val key: String,
+data class InputAttachmentRequest(
+    @field:NotBlank @field:Size(max = 255) val filename: String,
+    @field:NotBlank @field:Size(max = 160) val mimeType: String,
+    @field:NotBlank @field:Size(max = 2_800_000) val contentBase64: String,
 )
 
 data class CreateJobRequest(
     @field:NotNull val jobKind: JobKind,
     @field:NotBlank @field:Size(max = 160) val idempotencyKey: String,
-    @field:NotBlank @field:Size(max = 100) val jobProfile: String,
-    @field:NotBlank @field:Size(max = 160) val jobKey: String,
     @field:NotNull val provider: Provider,
     @field:NotBlank @field:Size(max = 100) val model: String,
-    @field:NotBlank @field:Size(max = 80) val configurationVersion: String,
-    @field:NotBlank @field:Size(max = 80) val instructionVersion: String,
-    @field:NotBlank @field:Size(max = 200_000) val instructions: String,
-    @field:NotNull val input: JsonNode,
+    @field:NotBlank @field:Size(max = 200_000) val prompt: String,
     val responseSchema: JsonNode? = null,
     @field:Valid val repositorySnapshot: RepositorySnapshot? = null,
     @field:Valid val repositoryRequest: RepositoryRequest? = null,
-    @field:Valid @field:Size(max = 20) val resourceRequests: List<ResourceRequest> = emptyList(),
+    @field:Size(max = 50) val environmentKeys: List<String> = emptyList(),
+    @field:Valid @field:Size(max = 10) val attachments: List<InputAttachmentRequest> = emptyList(),
     @field:Min(30) @field:Max(86_400) val executionTimeoutSeconds: Int = 3_600,
-    @field:Min(1) @field:Max(10) val maxAttempts: Int = 3,
-    @field:Min(0) @field:Max(100) val priority: Int = 50,
-    val consumerContext: JsonNode? = null,
 )
 
 data class JobView(
@@ -56,8 +51,6 @@ data class JobView(
     val tenantId: String,
     val jobKind: JobKind,
     val idempotencyKey: String,
-    val jobProfile: String,
-    val jobKey: String,
     val provider: Provider,
     val model: String,
     val status: JobStatus,
@@ -107,6 +100,8 @@ data class WorkerRegistrationRequest(
     @field:Size(max = 20) val capabilities: Set<String>,
     @field:Size(max = 10) val providers: Set<Provider>,
     @field:Size(max = 30) val models: Set<String>,
+    @field:Size(max = 1_000) val availableEnvironmentKeys: Set<String> = emptySet(),
+    @field:Min(1) @field:Max(32) val maxConcurrency: Int = 1,
     val versions: Map<String, String> = emptyMap(),
 )
 
@@ -117,7 +112,17 @@ data class WorkerView(
     val capabilities: Set<String>,
     val providers: Set<Provider>,
     val models: Set<String>,
+    val availableEnvironmentKeys: Set<String>,
+    val maxConcurrency: Int,
     val lastHeartbeatAt: Instant,
+)
+
+data class EnvironmentKeyView(
+    val name: String,
+    val projectPrefix: String,
+    val available: Boolean,
+    val matchingOnlineWorkers: Int,
+    val lastSeenAt: Instant,
 )
 
 data class ClaimRequest(
@@ -133,6 +138,7 @@ data class ClaimedJob(
     val attemptId: String,
     val fencingToken: String,
     val leaseUntil: Instant,
+    val attemptDeadline: Instant,
     val request: CreateJobRequest,
 )
 
@@ -169,6 +175,76 @@ data class CompleteAttemptRequest(
     val usage: JsonNode? = null,
 )
 
+data class StartOutputAttemptRequest(
+    @field:NotBlank val attemptId: String,
+    @field:NotBlank val fencingToken: String,
+    @field:NotBlank @field:Size(max = 160) val idempotencyKey: String,
+)
+
+data class JsonValidationError(
+    val path: String,
+    val keyword: String,
+    val message: String,
+)
+
+data class OutputAttemptView(
+    val outputAttemptId: String,
+    val outputAttemptNumber: Int,
+    val maxOutputAttempts: Int,
+    val correctionErrors: List<JsonValidationError> = emptyList(),
+)
+
+data class SubmitOutputCandidateRequest(
+    @field:NotBlank val attemptId: String,
+    @field:NotBlank val fencingToken: String,
+    @field:NotBlank val outputAttemptId: String,
+    @field:Size(min = 1, max = 5 * 1024 * 1024) val candidateText: String,
+    val usage: JsonNode? = null,
+)
+
+enum class OutputCandidateStatus { ACCEPTED, CORRECTION_REQUIRED, EXHAUSTED }
+
+data class SubmitOutputCandidateResponse(
+    val status: OutputCandidateStatus,
+    val errorCode: String? = null,
+    val validationErrors: List<JsonValidationError> = emptyList(),
+    val outputAttemptsRemaining: Int,
+)
+
+data class FinalizeAcceptedOutputRequest(
+    @field:NotBlank val attemptId: String,
+    @field:NotBlank val fencingToken: String,
+    @field:NotBlank val outputAttemptId: String,
+)
+
+enum class TranscriptKind { PROMPT, AGENT_TEXT, TOOL_CALL, TOOL_OUTPUT, CORRECTION, PROVIDER_RESULT }
+
+data class AppendTranscriptRequest(
+    @field:NotBlank val attemptId: String,
+    @field:NotBlank val fencingToken: String,
+    @field:NotBlank @field:Size(max = 100) val partId: String,
+    @field:Min(1) val sequence: Long,
+    @field:NotNull val kind: TranscriptKind,
+    @field:NotBlank @field:Size(max = 100_000) val text: String,
+)
+
+data class TranscriptPartView(
+    val jobId: String,
+    val attemptId: String,
+    val partId: String,
+    val sequence: Long,
+    val createdAt: Instant,
+    val kind: TranscriptKind,
+    val text: String,
+    val redacted: Boolean,
+)
+
+data class TranscriptPage(
+    val items: List<TranscriptPartView>,
+    val nextSequence: Long?,
+    val active: Boolean,
+)
+
 data class FailAttemptRequest(
     @field:NotBlank val attemptId: String,
     @field:NotBlank val fencingToken: String,
@@ -179,10 +255,9 @@ data class FailAttemptRequest(
 
 data class PrepareMockResponseRequest(
     @field:Size(max = 100) val tenantId: String? = null,
-    @field:Size(max = 100) val jobProfile: String? = null,
-    @field:Size(max = 160) val jobKey: String? = null,
-    val consumerCorrelation: String? = null,
+    @field:Size(max = 160) val idempotencyKey: String? = null,
     val result: JsonNode? = null,
+    @field:Size(max = 3) val outputSequence: List<String> = emptyList(),
     val errorCode: String? = null,
     val errorMessage: String? = null,
     @field:Min(0) @field:Max(60_000) val delayMillis: Long = 0,

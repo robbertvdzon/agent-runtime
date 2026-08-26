@@ -1,5 +1,6 @@
 package nl.vdzon.agentruntime.server.workers
 
+import io.micrometer.core.instrument.MeterRegistry
 import nl.vdzon.agentruntime.contracts.*
 import nl.vdzon.agentruntime.server.config.ApiException
 import nl.vdzon.agentruntime.server.config.RuntimeProperties
@@ -19,7 +20,10 @@ class ExecutionService(
     private val jobs: JobStore,
     private val workers: WorkerStore,
     private val jobService: JobService,
+    private val outputAttempts: OutputAttemptService,
+    private val transcriptService: TranscriptService,
     private val properties: RuntimeProperties,
+    private val metrics: MeterRegistry,
     transactionManager: org.springframework.transaction.PlatformTransactionManager,
 ) {
     private val random = SecureRandom()
@@ -42,20 +46,26 @@ class ExecutionService(
 
     @Synchronized
     fun claimNow(workerId: String, request: ClaimRequest): ClaimedJob? = transactions.execute {
+        val registered = workers.listWorkers().firstOrNull { it.workerId == workerId && it.bootId == request.bootId }
+            ?: return@execute null
+        if (workers.activeCount(workerId) >= registered.maxConcurrency) return@execute null
         val candidate = jobs.queued().firstOrNull { job ->
             job.view.provider != Provider.MOCKED &&
                 job.view.provider in request.providers &&
                 (request.models.isEmpty() || job.view.model in request.models) &&
-                requiredCapability(job.view.jobKind) in request.capabilities
+                requiredCapability(job.view.jobKind) in request.capabilities &&
+                job.request.environmentKeys.all { it in registered.availableEnvironmentKeys }
         }
         jobs.queued().filter { it.view.provider != Provider.MOCKED }.forEach { jobs.markWaiting(it.view.id) }
         candidate ?: return@execute null
         val token = ByteArray(32).also(random::nextBytes).let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
-        val leaseUntil = Instant.now().plusSeconds(properties.leaseSeconds)
+        val claimedAt = Instant.now()
+        val attemptDeadline = claimedAt.plusSeconds(candidate.request.executionTimeoutSeconds.toLong())
+        val leaseUntil = claimedAt.plusSeconds(properties.leaseSeconds).coerceAtMost(attemptDeadline)
         val number = candidate.view.attemptCount + 1
-        val attempt = workers.createAttempt(candidate.view.id, workerId, request.bootId, number, token, leaseUntil)
+        val attempt = workers.createAttempt(candidate.view.id, workerId, request.bootId, number, token, leaseUntil, attemptDeadline)
         jobs.markRunning(candidate.view.id, number)
-        ClaimedJob(jobs.find(candidate.view.id)!!.view, attempt.id, token, leaseUntil, candidate.request)
+        ClaimedJob(jobs.find(candidate.view.id)!!.view, attempt.id, token, leaseUntil, attemptDeadline, candidate.request)
     }
 
     fun heartbeat(jobId: String, workerId: String, request: HeartbeatRequest): HeartbeatResponse {
@@ -66,7 +76,7 @@ class ExecutionService(
         if (attempt.status == "SUSPECTED" && attempt.recoveryUntil?.isBefore(Instant.now()) == true) {
             return HeartbeatResponse(false, job.cancelRequested, true, null)
         }
-        val leaseUntil = Instant.now().plusSeconds(properties.leaseSeconds)
+        val leaseUntil = Instant.now().plusSeconds(properties.leaseSeconds).coerceAtMost(attempt.attemptDeadline)
         workers.renew(attempt.id, leaseUntil)
         return HeartbeatResponse(true, job.cancelRequested, false, leaseUntil)
     }
@@ -76,13 +86,33 @@ class ExecutionService(
         jobs.progress(jobId, request.phase, request.percent, Redactor.clean(request.message))
     }
 
+    fun appendTranscript(jobId: String, workerId: String, request: AppendTranscriptRequest): TranscriptPartView {
+        val attempt = authenticatedAttempt(jobId, request.attemptId, request.fencingToken, workerId)
+        return transcriptService.append(jobId, attempt.id, request)
+    }
+
+    fun startOutputAttempt(jobId: String, workerId: String, request: StartOutputAttemptRequest): OutputAttemptView {
+        val attempt = authenticatedAttempt(jobId, request.attemptId, request.fencingToken, workerId)
+        return outputAttempts.start(jobId, attempt, request)
+    }
+
+    fun submitOutputCandidate(jobId: String, workerId: String, request: SubmitOutputCandidateRequest): SubmitOutputCandidateResponse {
+        val attempt = authenticatedAttempt(jobId, request.attemptId, request.fencingToken, workerId)
+        return outputAttempts.submit(jobId, attempt, request)
+    }
+
+    fun finalizeAcceptedOutput(jobId: String, workerId: String, request: FinalizeAcceptedOutputRequest) {
+        val attempt = authenticatedAttempt(jobId, request.attemptId, request.fencingToken, workerId)
+        outputAttempts.finalize(jobId, attempt, request)
+    }
+
     @Transactional
     fun complete(jobId: String, workerId: String, request: CompleteAttemptRequest) {
         val attempt = authenticatedAttempt(jobId, request.attemptId, request.fencingToken, workerId)
         val job = jobs.find(jobId) ?: throw ApiException("JOB_NOT_FOUND", "Job not found.", HttpStatus.NOT_FOUND)
         if (job.cancelRequested) {
             workers.finish(attempt.id, "CANCELLED")
-            jobs.markCancelled(jobId, "Worker acknowledged cancellation.")
+            jobs.markCancelled(jobId, "Worker acknowledged cancellation.", "worker:$workerId")
             return
         }
         jobService.validateResult(job, request.result)
@@ -94,9 +124,10 @@ class ExecutionService(
     fun fail(jobId: String, workerId: String, request: FailAttemptRequest) {
         val attempt = authenticatedAttempt(jobId, request.attemptId, request.fencingToken, workerId)
         val job = jobs.find(jobId) ?: throw ApiException("JOB_NOT_FOUND", "Job not found.", HttpStatus.NOT_FOUND)
+        outputAttempts.abandon(attempt.id)
         workers.finish(attempt.id, "FAILED")
         val message = Redactor.clean(request.message).orEmpty()
-        if (job.cancelRequested) jobs.markCancelled(jobId, "Worker stopped after cancellation.")
+        if (job.cancelRequested) jobs.markCancelled(jobId, "Worker stopped after cancellation.", "worker:$workerId")
         else if (request.retryable && job.view.attemptCount < job.view.maxAttempts) {
             jobs.retry(jobId, request.errorCode, message, retryAt(job.view.attemptCount))
         } else jobs.fail(jobId, request.errorCode, message)
@@ -108,6 +139,7 @@ class ExecutionService(
 
     @Scheduled(fixedDelay = 15_000)
     fun reconcileLeases() {
+        workers.expiredDeadlines().forEach(::expireAttempt)
         val recoveryUntil = Instant.now().plusSeconds(properties.recoverySeconds)
         workers.markExpiredActive(recoveryUntil).forEach {
             jobs.addEvent(it.jobId, "ATTEMPT_SUSPECTED", "SUSPECTED", "Heartbeat expired; the same worker may recover until $recoveryUntil.")
@@ -127,7 +159,22 @@ class ExecutionService(
         if (attempt.jobId != jobId || attempt.workerId != workerId || !workers.validToken(attempt, token) || attempt.status !in setOf("ACTIVE", "SUSPECTED")) {
             throw ApiException("ATTEMPT_FENCED", "Attempt is not the current authorized execution.", HttpStatus.CONFLICT)
         }
+        if (!Instant.now().isBefore(attempt.attemptDeadline)) {
+            expireAttempt(attempt)
+            throw ApiException("EXECUTION_TIMEOUT", "The hard execution deadline has expired.", HttpStatus.CONFLICT)
+        }
         return attempt
+    }
+
+    private fun expireAttempt(attempt: AttemptRecord) {
+        outputAttempts.abandon(attempt.id)
+        workers.finish(attempt.id, "TIMED_OUT")
+        val job = jobs.find(attempt.jobId) ?: return
+        metrics.counter("agent_runtime_execution_timeouts", "provider", job.view.provider.name, "model", job.view.model).increment()
+        if (job.view.status != JobStatus.RUNNING) return
+        if (job.view.attemptCount < job.view.maxAttempts) {
+            jobs.retry(job.view.id, "EXECUTION_TIMEOUT", "The hard execution deadline expired.", retryAt(job.view.attemptCount))
+        } else jobs.fail(job.view.id, "EXECUTION_TIMEOUT", "The hard execution deadline expired and all attempts are exhausted.")
     }
 
     private fun requiredCapability(kind: JobKind) = when (kind) {
@@ -144,5 +191,5 @@ class ExecutionService(
 object Redactor {
     private val bearer = Regex("(?i)bearer\\s+[a-z0-9._~+/-]+=*")
     private val keyValue = Regex("(?i)(password|token|secret|api[_-]?key)\\s*[:=]\\s*[^\\s,;]+")
-    fun clean(value: String?): String? = value?.replace(bearer, "Bearer [REDACTED]")?.replace(keyValue, "$1=[REDACTED]")?.take(1000)
+    fun clean(value: String?, maxLength: Int = 1000): String? = value?.replace(bearer, "Bearer [REDACTED]")?.replace(keyValue, "$1=[REDACTED]")?.take(maxLength)
 }
