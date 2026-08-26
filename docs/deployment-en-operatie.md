@@ -32,8 +32,14 @@ mainbuild publiceert de imageworkflow:
 - `ghcr.io/robbertvdzon/agent-runtime-server:main`;
 - `ghcr.io/robbertvdzon/agent-runtime-execution:main`.
 
-Een release gebruikt een immutable `sha-...`-tag. De serveroverlay en lokale workerdefault worden
-samen op dezelfde gevalideerde release-SHA vastgezet. Voor een eerste handmatige rollout:
+Een release gebruikt een immutable `sha-...`-tag. Na een geslaagde `main`-build bouwt de
+imageworkflow eerst de server- en execution-images. Pas wanneer beide publicaties geslaagd zijn,
+zet dezelfde workflow de serveroverlay met een `[skip ci]`-systeemcommit vast op die gevalideerde
+release-SHA. Deze systeemcommit veroorzaakt geen nieuwe buildlus. Argo CD ziet de gewijzigde pin en
+rolt acceptatie en productie daarna automatisch uit. Laptopworkers gebruiken de bewegende
+multi-arch `agent-runtime-execution:main`-tag en controleren die voor iedere job met `--pull always`.
+
+Voor een eerste handmatige rollout of herstel wanneer Argo CD niet beschikbaar is:
 
 ```bash
 oc apply -k deploy/acceptance

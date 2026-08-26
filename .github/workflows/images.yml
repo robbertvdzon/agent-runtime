@@ -3,6 +3,9 @@ on:
   workflow_run: {workflows: [Repository verification], types: [completed]}
   workflow_dispatch:
 permissions: {contents: read, packages: write}
+concurrency:
+  group: runtime-images-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: true
 jobs:
   images:
     if: >-
@@ -30,3 +33,36 @@ jobs:
           tags: |
             ghcr.io/robbertvdzon/${{ matrix.image }}:main
             ghcr.io/robbertvdzon/${{ matrix.image }}:sha-${{ github.event.workflow_run.head_sha || github.sha }}
+
+  pin-release:
+    needs: images
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions: {contents: write}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: "${{ github.event.workflow_run.head_sha || github.sha }}"}
+      - name: Pin the verified release for Argo CD
+        env:
+          RELEASE_SHA: "${{ github.event.workflow_run.head_sha || github.sha }}"
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin main
+          if [[ "$(git rev-parse FETCH_HEAD)" != "$RELEASE_SHA" ]]; then
+            echo "A newer main commit exists; its workflow will publish and deploy that release."
+            exit 0
+          fi
+          sed -i -E "s#newTag: sha-[0-9a-f]{40}#newTag: sha-$RELEASE_SHA#" deploy/base/kustomization.yaml
+          grep -qx "    newTag: sha-$RELEASE_SHA" deploy/base/kustomization.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- deploy/base/kustomization.yaml
+          if git diff --cached --quiet; then
+            echo "Release $RELEASE_SHA is already pinned."
+            exit 0
+          fi
+          git commit -m "deploy: pin runtime release ${RELEASE_SHA:0:7} [skip ci]"
+          git push origin HEAD:main
