@@ -20,14 +20,10 @@ if [[ -f "$target" ]]; then
   google_client="$(value_for "$sf_source" SF_GOOGLE_CLIENT_ID)"
   admin_emails="$(value_for "$sf_source" SF_ALLOWED_EMAILS)"
   session_secret="$(value_for "$sf_source" SF_DASHBOARD_REMEMBER_SECRET)"
-  codex_credentials="$(value_for "$sf_source" SF_CODEX_CREDENTIALS_DIR)"
-  claude_credentials="$(value_for "$sf_source" SF_AI_CREDENTIALS_DIR)"
   tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT; chmod 600 "$tmp"; cp "$target" "$tmp"
   [[ -n "$(value_for "$target" AR_GOOGLE_CLIENT_ID)" ]] || printf 'AR_GOOGLE_CLIENT_ID=%s\n' "$google_client" >> "$tmp"
   [[ -n "$(value_for "$target" AR_ADMIN_EMAILS)" ]] || printf 'AR_ADMIN_EMAILS=%s\n' "$admin_emails" >> "$tmp"
   [[ -n "$(value_for "$target" AR_SESSION_SIGNING_SECRET)" ]] || printf 'AR_SESSION_SIGNING_SECRET=%s\n' "$session_secret" >> "$tmp"
-  [[ -n "$(value_for "$target" AR_CODEX_CREDENTIALS_DIR)" || -z "$codex_credentials" ]] || printf 'AR_CODEX_CREDENTIALS_DIR=%s\n' "$codex_credentials" >> "$tmp"
-  [[ -n "$(value_for "$target" AR_CLAUDE_CREDENTIALS_DIR)" || -z "$claude_credentials" ]] || printf 'AR_CLAUDE_CREDENTIALS_DIR=%s\n' "$claude_credentials" >> "$tmp"
   mv "$tmp" "$target"; chmod 600 "$target"; trap - EXIT
   echo "Bestaande secrets.env behouden en ontbrekende Google-beheerinstellingen zonder weergave aangevuld." >&2
   exit 0
@@ -38,8 +34,6 @@ sf_token="$(value_for "$sf_source" SF_PRODUCT_FACTORY_TOKEN)"
 google_client="$(value_for "$sf_source" SF_GOOGLE_CLIENT_ID)"
 admin_emails="$(value_for "$sf_source" SF_ALLOWED_EMAILS)"
 session_secret="$(value_for "$sf_source" SF_DASHBOARD_REMEMBER_SECRET)"
-codex_credentials="$(value_for "$sf_source" SF_CODEX_CREDENTIALS_DIR)"
-claude_credentials="$(value_for "$sf_source" SF_AI_CREDENTIALS_DIR)"
 [[ -n "$pf_token" && -n "$sf_token" && -n "$google_client" && -n "$admin_emails" && -n "$session_secret" ]] || { echo "De herbruikbare v1-servicetokens of beheerinstellingen ontbreken." >&2; exit 1; }
 
 tmp="$(mktemp)"
@@ -53,8 +47,6 @@ chmod 600 "$tmp"
   printf 'AR_GOOGLE_CLIENT_ID=%s\n' "$google_client"
   printf 'AR_ADMIN_EMAILS=%s\n' "$admin_emails"
   printf 'AR_SESSION_SIGNING_SECRET=%s\n' "$session_secret"
-  [[ -z "$codex_credentials" ]] || printf 'AR_CODEX_CREDENTIALS_DIR=%s\n' "$codex_credentials"
-  [[ -z "$claude_credentials" ]] || printf 'AR_CLAUDE_CREDENTIALS_DIR=%s\n' "$claude_credentials"
   printf 'AR_DB_USERNAME=agent_runtime\n'
   printf 'AR_DB_PASSWORD=%s\n' "$(random_secret)"
   printf 'AR_DB_URL=jdbc:postgresql://agent-runtime-postgresql:5432/agent_runtime\n'

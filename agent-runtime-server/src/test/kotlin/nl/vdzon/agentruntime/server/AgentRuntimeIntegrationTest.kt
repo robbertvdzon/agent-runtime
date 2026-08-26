@@ -175,11 +175,14 @@ class AgentRuntimeIntegrationTest(
     fun `attachments and environment catalog are bounded and values never appear`() {
         val workerId = "catalog-${UUID.randomUUID()}"; val bootId = UUID.randomUUID().toString()
         postJson("/v1/workers/register", WORKER_TOKEN, WorkerRegistrationRequest(
-            workerId, bootId, setOf("application-work"), setOf(Provider.CODEX), emptySet(), setOf("HKH__SCREENSHOT_USER"), 1,
+            workerId, bootId, setOf("application-work"), setOf(Provider.CODEX), emptySet(),
+            setOf("HKH__SCREENSHOT_USER", "ROBBERTS_ASSISTENT__TEST_USER"), 1,
         ))
         val catalog = getJson("/v1/environment-keys?project=HKH", PRODUCT_TOKEN)
         assertThat(catalog.single().path("name").asText()).isEqualTo("HKH__SCREENSHOT_USER")
         assertThat(catalog.toString()).doesNotContain("password", "secret-value")
+        val assistantCatalog = getJson("/v1/environment-keys?project=ROBBERTS_ASSISTENT", PRODUCT_TOKEN)
+        assertThat(assistantCatalog.single().path("name").asText()).isEqualTo("ROBBERTS_ASSISTENT__TEST_USER")
 
         val png = byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10, 0)
         val valid = applicationRequest(UUID.randomUUID().toString(), Provider.CODEX).copy(

@@ -89,13 +89,16 @@ opgeleverd en welke instellingen- en prompttemplateversies zijn gebruikt.
 De lokale worker gebruikt twee strikt gescheiden bestanden:
 
 ```text
-secrets.env
+properties.env
 project-credentials.env
 ```
 
-`secrets.env` bevat alleen credentials waarmee de Runtime en worker zelf functioneren, zoals het
-workertoken, de server-URL en paden naar Codex- of Claude-credentials. Deze waarden zijn nooit
-selecteerbaar door een job en worden nooit in een agentcontainer gemount.
+`properties.env` bevat alle interne workerconfiguratie, zoals het workertoken, de server-URL en
+paden naar Codex- of Claude-credentials. Het bestand staat in `.gitignore`, heeft verplicht mode
+`0600` en is het enige configuratiebestand dat een worker-only laptop nodig heeft. Deze waarden zijn
+nooit selecteerbaar door een job en worden nooit in een agentcontainer gemount. Het gelijknamige
+`secrets.env` in een deploymentcheckout is uitsluitend een lokale bron voor OpenShift-serversecrets
+en wordt niet door de laptopworker gelezen.
 
 `project-credentials.env` bevat projectgebonden configuratie en credentials die een agentjob mag
 ontvangen:

@@ -140,9 +140,9 @@ kunnen zien welke namen beschikbaar zijn en de scheduler een geschikte worker ka
 ### Werk
 
 - Splits de lokale configuratie in:
-  - `secrets.env` voor Runtime- en workerwerking;
+  - één owner-only `properties.env` voor alle interne instellingen van de laptopworker;
   - `project-credentials.env` voor projectgebonden waarden die een agentjob mag ontvangen.
-- Voeg beide echte bestanden toe aan `.gitignore` en `.dockerignore`; lever alleen waardevrije
+- Voeg beide echte workerbestanden toe aan `.gitignore` en `.dockerignore`; lever alleen waardevrije
   `.example`-bestanden.
 - Vereis voor beide bestanden mode `0600`, een regulier bestand en geen symlink.
 - Bouw een strikte dotenv-parser die dubbele keys, ongeldige regels en onveilige namen weigert.
@@ -591,8 +591,10 @@ De drie wijzigingen zijn gezamenlijk herstelbaar, meetbaar en achterwaarts compa
   timeout, outputpogingen, transcript, monitor, foutcodes en herstelprocedures.
 - Rol eerst uit naar acceptatie en controleer contractafwijzingen, migratie, mocks, echte smokejobs,
   metrics en redactie.
-- Maak vóór productie een databasebackup en rol daarna dezelfde immutable server-, worker- en
-  execution-imageversie uit. Deze release is bewust contract- en databaseschemabreking; een oude
+- Maak vóór productie een databasebackup en rol daarna de immutable serverrelease uit. Publiceer
+  het multi-arch execution-image tegelijk onder een SHA-tag en de bewegende `main`-tag. Laptopworkers
+  gebruiken standaard `main` met `docker run --pull always`; de SHA-tag blijft beschikbaar voor een
+  expliciete rollback. Deze release is bewust contract- en databaseschemabreking; een oude
   serverversie is na de kolomverwijdering geen geldige applicatierollback.
 
 ### Definition of Done

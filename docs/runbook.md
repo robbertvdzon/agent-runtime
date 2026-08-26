@@ -45,9 +45,10 @@ Flywaymigratie. Startup faalt bewust dicht.
 ## Workercredential roteren
 
 1. Maak lokaal een nieuwe sterke waarde.
-2. Werk `secrets.env` bij zonder hem te tonen.
+2. Werk de OpenShift-secretbron `secrets.env` bij zonder hem te tonen.
 3. seal en deploy beide omgevingen.
-4. update de lokale workerconfig en herstart de worker.
+4. werk `AR_WORKER_TOKEN` in de owner-only `properties.env` van iedere worker bij en herstart de
+   worker.
 5. controleer registratie en trek daarna de oude waarde definitief in.
 
 ## Restore-oefening
@@ -58,17 +59,17 @@ Overschrijf nooit rechtstreeks de actieve productie-PVC tijdens een oefening.
 
 ## Credentialbestand afgewezen
 
-De worker faalt dicht wanneer `secrets.env` of `project-credentials.env` geen regulier bestand is,
+De worker faalt dicht wanneer `properties.env` of `project-credentials.env` geen regulier bestand is,
 een symlink is, groeps-/wereldrechten heeft, dubbele keys bevat of een verboden key gebruikt.
 Controleer alleen bestandsnaam, eigenaar en mode; toon de inhoud nooit:
 
 ```bash
-ls -l secrets.env project-credentials.env
-chmod 600 secrets.env project-credentials.env
+ls -l properties.env project-credentials.env
+chmod 600 properties.env project-credentials.env
 ```
 
-Projectkeys volgen `PROJECT__NAME`. Runtime-, provider- en Gitcredentials horen uitsluitend in
-`secrets.env` of hun eigen read-only credentialdirectory.
+Projectkeys volgen `PROJECT__NAME`. Runtime-, provider- en Gitcredentials horen uitsluitend in de
+worker-`properties.env` of hun eigen read-only credentialdirectory.
 
 ## Claude meldt verlopen OAuth
 
