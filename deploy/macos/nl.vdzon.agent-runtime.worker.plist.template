@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>nl.vdzon.agent-runtime.worker</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__JAVA_BIN__</string>
+        <string>-jar</string>
+        <string>__WORKER_JAR__</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPOSITORY_ROOT__</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__STDOUT_PATH__</string>
+    <key>StandardErrorPath</key>
+    <string>__STDERR_PATH__</string>
+</dict>
+</plist>
