@@ -49,8 +49,17 @@ class WorkerSupportTest {
 
     @Test
     fun `safe messages redact credential shaped values`() {
-        assertThat(safe("Bearer abc.def token=very-secret password: nope"))
-            .doesNotContain("abc.def", "very-secret", "nope")
+        SecretRedactor.configure(listOf("subscription-oauth-value"))
+        assertThat(safe("Bearer abc.def token=very-secret password: nope subscription-oauth-value"))
+            .doesNotContain("abc.def", "very-secret", "nope", "subscription-oauth-value")
+        SecretRedactor.configure(emptyList())
+    }
+
+    @Test
+    fun `claude subscription token does not require a credential directory`() {
+        assertThat(ClaudeProviderAdapter(null, "subscription-oauth-value").credentials()).isNull()
+        assertThatThrownBy { ClaudeProviderAdapter(null, null).credentials() }
+            .isInstanceOf(JobFailure::class.java)
     }
 
     @Test
@@ -86,6 +95,9 @@ class WorkerSupportTest {
     fun `startup cleanup removes only orphan attempt directories`(@TempDir root: Path) {
         val active = root.resolve("active").also(Files::createDirectories)
         val orphan = root.resolve("orphan").also(Files::createDirectories)
+        val readOnly = orphan.resolve("readonly").also(Files::createDirectories)
+        readOnly.resolve("prompt.md").writeText("temporary input")
+        runCatching { Files.setPosixFilePermissions(readOnly, setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_EXECUTE)) }
         root.resolve("journal").also(Files::createDirectories)
         cleanupOrphanAttempts(root, setOf("active"))
         assertThat(active.exists()).isTrue()

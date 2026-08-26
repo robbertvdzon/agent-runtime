@@ -76,20 +76,29 @@ Clone deze repository op een vaste plek. De LaunchAgent bewaart absolute paden n
 
 ### Providercredentials
 
-Meld Codex en/of Claude lokaal aan:
+Meld Codex lokaal aan wanneer deze worker Codex aanbiedt:
 
 ```bash
 codex login
 codex login status
+```
 
+Maak voor Claude een langlevende OAuth-token vanuit het Claude-abonnement:
+
+```bash
 claude auth login
 claude auth status
+claude setup-token
 ```
 
 Codex gebruikt in de container `~/.codex/auth.json`. Zet daarom
 `cli_auth_credentials_store = "file"` in `~/.codex/config.toml` wanneer de CLI anders alleen de
-macOS-keychain gebruikt. Claude gebruikt `~/.claude` en het siblingbestand `~/.claude.json`.
-Behandel deze bestanden als wachtwoorden en commit ze nooit.
+macOS-keychain gebruikt. Zet de uitvoer van `claude setup-token` als `AR_CLAUDE_OAUTH_TOKEN` in
+`properties.env`. Dit is een OAuth-token van het Claude-abonnement en geen Anthropic API-key.
+Een map via `AR_CLAUDE_CREDENTIALS_DIR` blijft beschikbaar als fallback op systemen waar de
+Claude-login daadwerkelijk in bestanden staat. Alleen `~/.claude` mounten werkt op macOS niet
+betrouwbaar, omdat de actuele login normaal in de Keychain staat. Behandel tokens en bestanden als
+wachtwoorden en commit ze nooit.
 
 ### `properties.env`
 
@@ -106,12 +115,13 @@ AR_WORKER_ID=voornaam-macbook
 AR_WORK_ROOT=work/worker
 AR_WORKER_TOKEN=<productieworkertoken>
 AR_CODEX_CREDENTIALS_DIR=/Users/<account>/.codex
-AR_CLAUDE_CREDENTIALS_DIR=/Users/<account>/.claude
+AR_CLAUDE_OAUTH_TOKEN=<uitvoer-van-claude-setup-token>
 ```
 
 `properties.env` staat in `.gitignore`, is een regulier bestand met mode `0600` en bevat ook alle
 eventuele `AR_REPOSITORY_<ALIAS>_URL`-instellingen. Paden zijn absoluut; `~` en `$HOME` worden niet
-uitgebreid. Verwijder de providerregel voor een provider die deze worker niet aanbiedt.
+uitgebreid. De Claude OAuth-token heeft voorrang op `AR_CLAUDE_CREDENTIALS_DIR`. Verwijder de
+providerregel voor een provider die deze worker niet aanbiedt.
 
 `AR_EXECUTION_IMAGE` hoeft niet te worden ingesteld. De standaard is
 `ghcr.io/robbertvdzon/agent-runtime-execution:main`; de worker gebruikt bij iedere job

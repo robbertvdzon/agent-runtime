@@ -83,9 +83,10 @@ find_worker_jar() {
 
 validate_provider_credentials() {
     local configured=0
-    local codex_directory claude_directory claude_state
+    local codex_directory claude_directory claude_oauth_token claude_state
     codex_directory="$(read_config_value AR_CODEX_CREDENTIALS_DIR)"
     claude_directory="$(read_config_value AR_CLAUDE_CREDENTIALS_DIR)"
+    claude_oauth_token="$(read_config_value AR_CLAUDE_OAUTH_TOKEN)"
 
     if [[ -n "$codex_directory" ]]; then
         [[ "$codex_directory" == /* ]] || fail "AR_CODEX_CREDENTIALS_DIR moet een absoluut pad zijn; gebruik geen ~ of \$HOME."
@@ -94,7 +95,9 @@ validate_provider_credentials() {
         configured=1
     fi
 
-    if [[ -n "$claude_directory" ]]; then
+    if [[ -n "$claude_oauth_token" ]]; then
+        configured=1
+    elif [[ -n "$claude_directory" ]]; then
         [[ "$claude_directory" == /* ]] || fail "AR_CLAUDE_CREDENTIALS_DIR moet een absoluut pad zijn; gebruik geen ~ of \$HOME."
         [[ -d "$claude_directory" ]] || fail "Claude-credentialmap bestaat niet: $claude_directory"
         require_owner_only_file "$claude_directory/.credentials.json"
@@ -103,7 +106,7 @@ validate_provider_credentials() {
         configured=1
     fi
 
-    [[ "$configured" -eq 1 ]] || fail "configureer ten minste AR_CODEX_CREDENTIALS_DIR of AR_CLAUDE_CREDENTIALS_DIR in properties.env."
+    [[ "$configured" -eq 1 ]] || fail "configureer ten minste AR_CODEX_CREDENTIALS_DIR, AR_CLAUDE_OAUTH_TOKEN of AR_CLAUDE_CREDENTIALS_DIR in properties.env."
 }
 
 migrate_legacy_config() {
@@ -134,7 +137,7 @@ migrate_legacy_config() {
         }
         FNR == NR {
             key = config_key($0)
-            if (key == "AR_WORKER_TOKEN" || key == "AR_CODEX_CREDENTIALS_DIR" || key == "AR_CLAUDE_CREDENTIALS_DIR") {
+            if (key == "AR_WORKER_TOKEN" || key == "AR_CODEX_CREDENTIALS_DIR" || key == "AR_CLAUDE_OAUTH_TOKEN" || key == "AR_CLAUDE_CREDENTIALS_DIR") {
                 legacy[key] = config_value($0)
             }
             next
@@ -142,7 +145,7 @@ migrate_legacy_config() {
         {
             key = config_key($0)
             if (key == "AR_EXECUTION_IMAGE") next
-            if (key == "AR_WORKER_TOKEN" || key == "AR_CODEX_CREDENTIALS_DIR" || key == "AR_CLAUDE_CREDENTIALS_DIR") {
+            if (key == "AR_WORKER_TOKEN" || key == "AR_CODEX_CREDENTIALS_DIR" || key == "AR_CLAUDE_OAUTH_TOKEN" || key == "AR_CLAUDE_CREDENTIALS_DIR") {
                 if (legacy[key] != "") print key "=" legacy[key]
                 else print $0
                 seen[key] = 1
@@ -151,7 +154,7 @@ migrate_legacy_config() {
             print
         }
         END {
-            count = split("AR_WORKER_TOKEN AR_CODEX_CREDENTIALS_DIR AR_CLAUDE_CREDENTIALS_DIR", keys, " ")
+            count = split("AR_WORKER_TOKEN AR_CODEX_CREDENTIALS_DIR AR_CLAUDE_OAUTH_TOKEN AR_CLAUDE_CREDENTIALS_DIR", keys, " ")
             for (loop_index = 1; loop_index <= count; loop_index++) {
                 key = keys[loop_index]
                 if (!seen[key] && legacy[key] != "") print key "=" legacy[key]
@@ -170,8 +173,7 @@ render_plist() {
     local java_bin="$2"
     local worker_jar="$3"
     cp "$TEMPLATE" "$destination"
-    /usr/bin/plutil -replace ProgramArguments.0 -string "$java_bin" "$destination"
-    /usr/bin/plutil -replace ProgramArguments.2 -string "$worker_jar" "$destination"
+    /usr/bin/plutil -replace ProgramArguments -json "[\"$java_bin\",\"-jar\",\"$worker_jar\"]" "$destination"
     /usr/bin/plutil -replace WorkingDirectory -string "$REPOSITORY_ROOT" "$destination"
     /usr/bin/plutil -replace StandardOutPath -string "$STDOUT_PATH" "$destination"
     /usr/bin/plutil -replace StandardErrorPath -string "$STDERR_PATH" "$destination"
@@ -226,6 +228,11 @@ case "$action" in
         mkdir -p "$(dirname -- "$TARGET")"
         if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
             launchctl bootout "$DOMAIN/$LABEL"
+            for wait_attempt in {1..50}; do
+                launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 || break
+                sleep 0.1
+            done
+            launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 && fail "bestaande LaunchAgent stopte niet binnen vijf seconden."
         fi
         install -m 0644 "$temporary_plist" "$TARGET"
         launchctl bootstrap "$DOMAIN" "$TARGET"

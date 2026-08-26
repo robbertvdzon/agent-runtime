@@ -37,6 +37,7 @@ data class WorkerConfig(
     val executionImage: String,
     val codexCredentials: Path?,
     val claudeCredentials: Path?,
+    val claudeOauthToken: String?,
     val repositoryAliases: Map<String, String>,
     val projectCredentialsPath: Path,
     val projectCredentials: MutableMap<String, String>,
@@ -56,6 +57,7 @@ data class WorkerConfig(
                 values["AR_EXECUTION_IMAGE"] ?: "ghcr.io/robbertvdzon/agent-runtime-execution:main",
                 values["AR_CODEX_CREDENTIALS_DIR"]?.takeIf(String::isNotBlank)?.let(Path::of),
                 values["AR_CLAUDE_CREDENTIALS_DIR"]?.takeIf(String::isNotBlank)?.let(Path::of),
+                values["AR_CLAUDE_OAUTH_TOKEN"]?.takeIf(String::isNotBlank),
                 aliases, root.resolve("project-credentials.env"), projectCredentials.toMutableMap(),
             )
         }
@@ -64,14 +66,14 @@ data class WorkerConfig(
 
 fun main(args: Array<String>) {
     val config = WorkerConfig.load()
-    SecretRedactor.configure(config.projectCredentials.values)
+    SecretRedactor.configure(config.projectCredentials.values + listOfNotNull(config.claudeOauthToken))
     config.workRoot.createDirectories()
     val mapper = jacksonObjectMapper().registerModule(JavaTimeModule())
     val client = RuntimeClient(config, mapper)
     val bootId = UUID.randomUUID().toString()
     val providers = buildSet {
         if (config.codexCredentials?.exists() == true) add(Provider.CODEX)
-        if (config.claudeCredentials?.exists() == true) add(Provider.CLAUDE)
+        if (!config.claudeOauthToken.isNullOrBlank() || config.claudeCredentials?.exists() == true) add(Provider.CLAUDE)
     }
     require(providers.isNotEmpty()) { "No provider credential directory configured." }
     val capabilities = buildSet { add("application-work"); if (config.repositoryAliases.isNotEmpty()) add("repository-work") }
@@ -89,14 +91,14 @@ fun main(args: Array<String>) {
             val refreshed = try { ProjectCredentials.load(config.projectCredentialsPath) } catch (error: Exception) {
                 val hadKeys = config.projectCredentials.isNotEmpty()
                 config.projectCredentials.clear()
-                SecretRedactor.configure(emptyList())
+                SecretRedactor.configure(listOfNotNull(config.claudeOauthToken))
                 if (hadKeys) register()
                 throw error
             }
             if (refreshed != config.projectCredentials) {
                 val keysChanged = refreshed.keys != config.projectCredentials.keys
                 config.projectCredentials.clear(); config.projectCredentials.putAll(refreshed)
-                SecretRedactor.configure(refreshed.values)
+                SecretRedactor.configure(refreshed.values + listOfNotNull(config.claudeOauthToken))
                 if (keysChanged) register()
             }
             val claimed = client.claim(ClaimRequest(bootId, capabilities, providers, emptySet(), 20))
@@ -179,6 +181,7 @@ class JobExecutor(
         } catch (failure: JobFailure) {
             client.fail(claim, failure.code, failure.message.orEmpty(), failure.retryable)
         } catch (error: Exception) {
+            System.err.println("Worker execution error ${error::class.qualifiedName}: ${safe(error.message)} at ${safeStack(error)}")
             client.fail(claim, "WORKER_ERROR", safe(error.message), true)
         } finally {
             journal.remove(claim.job.id)
@@ -306,20 +309,31 @@ class JobExecutor(
             "-v", "${taskRoot.resolve("secrets")}:/job/secrets:ro",
             "-v", "${taskRoot.resolve("docs")}:/job/docs:ro",
             "-v", "${taskRoot.resolve("output")}:/job/output",
-            "-v", "${credentials.toAbsolutePath()}:/credential-source:ro",
         )
         if (claim.job.provider == Provider.CLAUDE) {
-            val claudeConfig = credentials.toAbsolutePath().parent.resolve(".claude.json")
-            if (!claudeConfig.isSymbolicLink() && claudeConfig.isRegularFile()) {
-                command += listOf("-v", "$claudeConfig:/credential-config.json:ro")
+            if (credentials != null) {
+                command += listOf("-v", "${credentials.toAbsolutePath()}:/credential-source:ro")
+                val claudeConfig = credentials.toAbsolutePath().parent.resolve(".claude.json")
+                if (!claudeConfig.isSymbolicLink() && claudeConfig.isRegularFile()) {
+                    command += listOf("-v", "$claudeConfig:/credential-config.json:ro")
+                }
             }
+            if (!config.claudeOauthToken.isNullOrBlank()) {
+                command += listOf("-e", "CLAUDE_CODE_OAUTH_TOKEN")
+            }
+        } else if (credentials != null) {
+            command += listOf("-v", "${credentials.toAbsolutePath()}:/credential-source:ro")
         }
         command += listOf(
             "-e", "AR_ENGINE=${claim.job.provider.name}", "-e", "AR_MODEL=${claim.job.model}", "-e", "AR_JOB_KIND=${claim.job.jobKind.name}",
             "-e", "AR_OUTPUT_ATTEMPT=$outputAttemptNumber", "-e", "AR_RESULT_FILE=/job/output/${resultPath.fileName}",
             config.executionImage,
         )
-        val process = ProcessBuilder(command).inheritIO().start()
+        val processBuilder = ProcessBuilder(command).inheritIO()
+        if (claim.job.provider == Provider.CLAUDE && !config.claudeOauthToken.isNullOrBlank()) {
+            processBuilder.environment()["CLAUDE_CODE_OAUTH_TOKEN"] = config.claudeOauthToken
+        }
+        val process = processBuilder.start()
         while (!process.waitFor(1, TimeUnit.SECONDS)) {
             val timedOut = !Instant.now().isBefore(claim.attemptDeadline)
             if (timedOut || heartbeat()) {
@@ -435,7 +449,7 @@ class JobExecutor(
 
     private fun providerAdapter(provider: Provider): ProviderAdapter = when (provider) {
         Provider.CODEX -> CodexProviderAdapter(config.codexCredentials)
-        Provider.CLAUDE -> ClaudeProviderAdapter(config.claudeCredentials)
+        Provider.CLAUDE -> ClaudeProviderAdapter(config.claudeCredentials, config.claudeOauthToken)
         Provider.MOCKED -> throw JobFailure("PROVIDER_UNAVAILABLE", "MOCKED never runs on a worker.", false)
     }
 
@@ -495,7 +509,7 @@ class JobExecutor(
 }
 
 interface ProviderAdapter {
-    fun credentials(): Path
+    fun credentials(): Path?
     fun candidate(resultPath: Path): String
 }
 
@@ -506,9 +520,13 @@ class CodexProviderAdapter(private val credentialPath: Path?) : ProviderAdapter 
     override fun candidate(resultPath: Path): String = resultPath.readText()
 }
 
-class ClaudeProviderAdapter(private val credentialPath: Path?) : ProviderAdapter {
-    override fun credentials(): Path = credentialPath
-        ?: throw JobFailure("PROVIDER_UNAVAILABLE", "Credentials for CLAUDE are not configured.", true)
+class ClaudeProviderAdapter(private val credentialPath: Path?, private val oauthToken: String?) : ProviderAdapter {
+    override fun credentials(): Path? {
+        if (credentialPath == null && oauthToken.isNullOrBlank()) {
+            throw JobFailure("PROVIDER_UNAVAILABLE", "Credentials for CLAUDE are not configured.", true)
+        }
+        return credentialPath
+    }
 
     override fun candidate(resultPath: Path): String = resultPath.readText()
 }
@@ -690,8 +708,20 @@ fun safe(value: String?): String = redact(value, 2_000)
 
 fun deleteTree(path: Path) {
     if (!path.exists()) return
+    Files.walk(path).use { paths -> paths.forEach { candidate ->
+        if (!candidate.isSymbolicLink() && candidate.isDirectory()) {
+            runCatching {
+                val permissions = Files.getPosixFilePermissions(candidate).toMutableSet()
+                permissions += setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE)
+                Files.setPosixFilePermissions(candidate, permissions)
+            }
+        }
+    } }
     Files.walk(path).use { it.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
 }
+
+fun safeStack(error: Throwable): String = error.stackTrace.take(8)
+    .joinToString(" <- ") { frame -> "${frame.className}.${frame.methodName}(${frame.fileName}:${frame.lineNumber})" }
 
 fun cleanupOrphanAttempts(workRoot: Path, activeJobIds: Set<String>) {
     if (!workRoot.exists()) return
