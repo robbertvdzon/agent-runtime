@@ -192,6 +192,10 @@ class JobStore(
         "SELECT COALESCE(SUM(size_bytes),0) FROM runtime_artifact WHERE job_id=?", Long::class.java, jobId
     ) ?: 0
 
+    fun artifactCount(jobId: String): Int = jdbc.queryForObject(
+        "SELECT COUNT(*) FROM runtime_artifact WHERE job_id=?", Int::class.java, jobId
+    ) ?: 0
+
     fun insertArtifact(jobId: String, filename: String, mimeType: String, sha256: String, content: ByteArray): ArtifactView {
         artifactByName(jobId, filename)?.let { existing ->
             if (existing.sha256 != sha256 || existing.sizeBytes != content.size.toLong() || existing.mimeType != mimeType) {

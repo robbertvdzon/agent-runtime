@@ -5,7 +5,11 @@ import nl.vdzon.agentruntime.contracts.*
 import nl.vdzon.agentruntime.server.config.*
 import nl.vdzon.agentruntime.server.jobs.*
 import nl.vdzon.agentruntime.server.workers.*
+import org.springframework.core.io.ByteArrayResource
+import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
+import org.springframework.http.MediaType
+import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import java.nio.charset.StandardCharsets
 import java.time.Instant
@@ -15,6 +19,7 @@ data class ManagementJobItem(
     val id: String, val technicalName: String, val application: String, val jobKind: JobKind,
     val provider: Provider, val model: String, val status: JobStatus, val phase: String,
     val workerId: String?, val progressPercent: Int?, val progressMessage: String?, val waitingReason: String?,
+    val promptPreview: String, val outputPreview: String?, val inputAttachmentCount: Int, val artifactCount: Int,
     val createdAt: Instant, val updatedAt: Instant, val completedAt: Instant?,
 )
 data class ManagementList<T>(val serverTime: Instant, val items: List<T>, val nextCursor: String? = null, val previousCursor: String? = null)
@@ -25,8 +30,13 @@ data class ManagementOutputAttempt(
     val validationErrors: List<JsonValidationError>, val diagnosticExcerpt: String?,
     val startedAt: Instant, val completedAt: Instant?,
 )
+data class ManagementInputAttachment(
+    val id: String, val filename: String, val mimeType: String, val sizeBytes: Long,
+    val sha256: String, val createdAt: Instant,
+)
 data class ManagementJobDetail(
-    val serverTime: Instant, val job: ManagementJobItem, val responseSchema: com.fasterxml.jackson.databind.JsonNode?,
+    val serverTime: Instant, val job: ManagementJobItem, val prompt: String,
+    val inputAttachments: List<ManagementInputAttachment>, val responseSchema: com.fasterxml.jackson.databind.JsonNode?,
     val result: JobResultView?, val errorCode: String?, val errorMessage: String?, val events: List<JobEventView>,
     val attempts: List<AttemptSummary>, val outputAttempts: List<ManagementOutputAttempt>,
     val cancelledAt: Instant?, val cancelledBy: String?,
@@ -39,6 +49,7 @@ class AdminController(
     private val workers: WorkerStore,
     private val outputs: OutputAttemptService,
     private val transcripts: TranscriptStore,
+    private val attachments: InputAttachmentStore,
     private val properties: RuntimeProperties,
 ) {
     @GetMapping("/environment")
@@ -91,11 +102,28 @@ class AdminController(
         val job = jobs.find(id) ?: throw ApiException("JOB_NOT_FOUND", "Job not found.", HttpStatus.NOT_FOUND)
         val result = job.result?.let { JobResultView(id, it, job.usage, jobs.artifacts(id), job.completedAt ?: job.view.updatedAt) }
         return ManagementJobDetail(
-            Instant.now(), item(job), job.request.responseSchema, result, job.view.errorCode, job.view.errorMessage,
+            Instant.now(), item(job), job.request.prompt, attachments.list(id).map(::attachmentItem), job.request.responseSchema,
+            result, job.view.errorCode, job.view.errorMessage,
             jobs.events(id), workers.attemptsForJob(id), outputs.list(id).map {
                 ManagementOutputAttempt(it.id, it.number, it.status, it.provider, it.model, it.validationErrors, it.diagnosticExcerpt, it.startedAt, it.completedAt)
             }, job.cancelledAt, job.cancelledBy,
         )
+    }
+
+    @GetMapping("/jobs/{jobId}/attachments/{attachmentId}")
+    fun attachment(
+        @PathVariable jobId: String,
+        @PathVariable attachmentId: String,
+        request: HttpServletRequest,
+    ): ResponseEntity<ByteArrayResource> {
+        admin(request)
+        jobs.find(jobId) ?: throw ApiException("JOB_NOT_FOUND", "Job not found.", HttpStatus.NOT_FOUND)
+        val attachment = attachments.find(attachmentId)?.takeIf { it.jobId == jobId }
+            ?: throw ApiException("ATTACHMENT_NOT_FOUND", "Attachment not found.", HttpStatus.NOT_FOUND)
+        return ResponseEntity.ok()
+            .contentType(MediaType.parseMediaType(attachment.mimeType))
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"${attachment.filename.replace("\"", "")}\"")
+            .body(ByteArrayResource(attachment.content))
     }
 
     @GetMapping("/jobs/{id}/result")
@@ -152,9 +180,17 @@ class AdminController(
         return ManagementJobItem(
             job.view.id, technicalName(job), job.view.tenantId, job.view.jobKind, job.view.provider, job.view.model,
             job.view.status, job.view.phase, active?.workerId, job.view.progressPercent, job.view.progressMessage,
-            waitingReason, job.view.createdAt, job.view.updatedAt, job.completedAt,
+            waitingReason, preview(job.request.prompt), job.result?.toString()?.let(::preview),
+            attachments.count(job.view.id), jobs.artifactCount(job.view.id),
+            job.view.createdAt, job.view.updatedAt, job.completedAt,
         )
     }
+
+    private fun attachmentItem(value: StoredInputAttachment) = ManagementInputAttachment(
+        value.id, value.filename, value.mimeType, value.sizeBytes, value.sha256, value.createdAt,
+    )
+
+    private fun preview(value: String): String = value.replace(Regex("\\s+"), " ").trim().take(PREVIEW_CHARACTERS)
 
     private fun waitReason(job: StoredJob, online: List<WorkerView>): String = when {
         job.view.notBefore?.isAfter(Instant.now()) == true -> "uitgesteld tot retrymoment"
@@ -173,6 +209,8 @@ class AdminController(
     private fun admin(request: HttpServletRequest) {
         if (ApiSecurity.identity(request).role != PrincipalRole.ADMIN) throw ApiException("FORBIDDEN", "Administrator required.", HttpStatus.FORBIDDEN)
     }
+
+    companion object { const val PREVIEW_CHARACTERS = 240 }
 }
 
 @RestController
