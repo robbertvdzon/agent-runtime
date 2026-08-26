@@ -224,6 +224,16 @@ paths:
       responses: {'200': {description: Incremental transcript page}, '404': {$ref: '#/components/responses/NotFound'}}
   /management/jobs/{jobId}/result:
     get: {operationId: managementJobResult, summary: Get an immutable result as administrator, parameters: [{$ref: '#/components/parameters/JobId'}], responses: {'200': {description: Immutable result, content: {application/json: {schema: {$ref: '#/components/schemas/JobResultView'}}}}, '409': {$ref: '#/components/responses/Conflict'}}}
+  /management/jobs/{jobId}/attachments/{attachmentId}:
+    get:
+      operationId: managementDownloadInputAttachment
+      summary: Download one input attachment as administrator; list and detail responses expose metadata only
+      parameters:
+        - {$ref: '#/components/parameters/JobId'}
+        - {in: path, name: attachmentId, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: Input attachment bytes, content: {application/octet-stream: {schema: {type: string, format: binary}}}}
+        '404': {$ref: '#/components/responses/NotFound'}
   /management/jobs/{jobId}/retry:
     post: {operationId: managementRetryJob, summary: Explicitly requeue a failed or cancelled job, parameters: [{$ref: '#/components/parameters/JobId'}], responses: {'204': {description: Job requeued}, '409': {$ref: '#/components/responses/Conflict'}}}
   /management/workers:

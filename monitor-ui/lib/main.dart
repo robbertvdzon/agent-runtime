@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -16,17 +17,48 @@ void main() => runApp(const RuntimeMonitor());
 class RuntimeMonitor extends StatelessWidget {
   const RuntimeMonitor({super.key});
   @override
-  Widget build(BuildContext context) => MaterialApp(
-    title: 'Agent Runtime',
-    debugShowCheckedModeBanner: false,
-    theme: ThemeData(
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff08755d)),
-      scaffoldBackgroundColor: const Color(0xfff4f7f4),
-      cardTheme: const CardThemeData(margin: EdgeInsets.zero, elevation: 0),
-      useMaterial3: true,
-    ),
-    home: const MonitorShell(),
-  );
+  Widget build(BuildContext context) {
+    final colors =
+        ColorScheme.fromSeed(
+          seedColor: const Color(0xff007b62),
+          brightness: Brightness.light,
+        ).copyWith(
+          primary: const Color(0xff006b55),
+          onPrimary: Colors.white,
+          surface: Colors.white,
+          onSurface: const Color(0xff10211c),
+          outline: const Color(0xff60736c),
+        );
+    return MaterialApp(
+      title: 'Agent Runtime',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorScheme: colors,
+        scaffoldBackgroundColor: const Color(0xfff7faf8),
+        cardTheme: const CardThemeData(
+          margin: EdgeInsets.zero,
+          elevation: 0,
+          color: Colors.white,
+          shape: RoundedRectangleBorder(
+            side: BorderSide(color: Color(0xffc7d4cf)),
+            borderRadius: BorderRadius.all(Radius.circular(14)),
+          ),
+        ),
+        navigationBarTheme: const NavigationBarThemeData(
+          backgroundColor: Color(0xffeef8f4),
+          indicatorColor: Color(0xffbde8db),
+          labelTextStyle: WidgetStatePropertyAll(
+            TextStyle(color: Color(0xff10211c), fontWeight: FontWeight.w600),
+          ),
+          iconTheme: WidgetStatePropertyAll(
+            IconThemeData(color: Color(0xff17483d)),
+          ),
+        ),
+        useMaterial3: true,
+      ),
+      home: const MonitorShell(),
+    );
+  }
 }
 
 enum ViewKind { active, queue, completed, workers }
@@ -94,17 +126,21 @@ class ApiClient {
   }
 
   Future<void> download(String path, String filename, String mimeType) async {
+    final bytes = await getBytes(path);
+    BrowserPlatform.download(filename, mimeType, base64Encode(bytes));
+  }
+
+  Future<Uint8List> getBytes(String path) async {
     final response = await http
         .get(Uri.parse(path), headers: headers)
         .timeout(const Duration(seconds: 30));
+    if (response.statusCode == 401) {
+      throw const ApiError('Sessie verlopen', unauthorized: true);
+    }
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiError('Download antwoordde met HTTP ${response.statusCode}');
     }
-    BrowserPlatform.download(
-      filename,
-      mimeType,
-      base64Encode(response.bodyBytes),
-    );
+    return response.bodyBytes;
   }
 }
 
@@ -464,7 +500,24 @@ class _MonitorShellState extends State<MonitorShell> {
       body: Row(
         children: [
           NavigationRail(
-            backgroundColor: const Color(0xff0b3533),
+            backgroundColor: const Color(0xffeef8f4),
+            indicatorColor: const Color(0xffbde8db),
+            selectedIconTheme: const IconThemeData(
+              color: Color(0xff004f3f),
+              size: 30,
+            ),
+            unselectedIconTheme: const IconThemeData(
+              color: Color(0xff245348),
+              size: 28,
+            ),
+            selectedLabelTextStyle: const TextStyle(
+              color: Color(0xff003d31),
+              fontWeight: FontWeight.w800,
+            ),
+            unselectedLabelTextStyle: const TextStyle(
+              color: Color(0xff173f36),
+              fontWeight: FontWeight.w600,
+            ),
             selectedIndex: selected.index,
             onDestinationSelected: (i) => choose(ViewKind.values[i]),
             labelType: NavigationRailLabelType.all,
@@ -650,30 +703,85 @@ class JobList extends StatelessWidget {
       itemBuilder: (context, index) {
         final item = items[index];
         return Card(
-          child: ListTile(
-            contentPadding: const EdgeInsets.all(16),
-            title: Text(
-              item['technicalName']?.toString() ?? item['id'].toString(),
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-            subtitle: Text(
-              [
-                item['application'],
-                item['jobKind'],
-                '${item['provider']} · ${item['model']}',
-                item['waitingReason'],
-                item['progressMessage'],
-              ].where((x) => x != null && x.toString().isNotEmpty).join('\n'),
-            ),
-            trailing: StatusLabel(
-              item['status']?.toString() ??
-                  item['phase']?.toString() ??
-                  'ONBEKEND',
-            ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
                 builder: (_) => JobDetail(api: api, id: item['id'].toString()),
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item['technicalName']?.toString() ??
+                            item['id'].toString(),
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      StatusLabel(
+                        item['status']?.toString() ??
+                            item['phase']?.toString() ??
+                            'ONBEKEND',
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    [
+                          item['application'],
+                          item['jobKind'],
+                          '${item['provider']} · ${item['model']}',
+                          item['waitingReason'],
+                          item['progressMessage'],
+                        ]
+                        .where(
+                          (value) =>
+                              value != null && value.toString().isNotEmpty,
+                        )
+                        .join(' · '),
+                  ),
+                  const SizedBox(height: 12),
+                  _ListPreview(
+                    label: 'Prompt · eerste 240 tekens',
+                    value: item['promptPreview']?.toString() ?? '',
+                  ),
+                  if ((item['outputPreview']?.toString() ?? '').isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    _ListPreview(
+                      label: 'Output · eerste 240 tekens',
+                      value: item['outputPreview'].toString(),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      FileCountLabel(
+                        icon: Icons.attach_file,
+                        count: item['inputAttachmentCount'] as int? ?? 0,
+                        singular: 'attachment',
+                        plural: 'attachments',
+                      ),
+                      FileCountLabel(
+                        icon: Icons.image_outlined,
+                        count: item['artifactCount'] as int? ?? 0,
+                        singular: 'artifact',
+                        plural: 'artifacts',
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
           ),
@@ -681,6 +789,75 @@ class JobList extends StatelessWidget {
       },
     );
   }
+}
+
+class _ListPreview extends StatelessWidget {
+  final String label;
+  final String value;
+  const _ListPreview({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: const Color(0xfff0f6f3),
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: Color(0xff31564c),
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(value, maxLines: 3, overflow: TextOverflow.ellipsis),
+      ],
+    ),
+  );
+}
+
+class FileCountLabel extends StatelessWidget {
+  final IconData icon;
+  final int count;
+  final String singular;
+  final String plural;
+  const FileCountLabel({
+    super.key,
+    required this.icon,
+    required this.count,
+    required this.singular,
+    required this.plural,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    decoration: BoxDecoration(
+      color: count > 0 ? const Color(0xffd7f1e8) : const Color(0xffedf1ef),
+      border: Border.all(
+        color: count > 0 ? const Color(0xff5c9d89) : const Color(0xffb8c2be),
+      ),
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 6,
+      runSpacing: 2,
+      children: [
+        Icon(icon, size: 17, color: const Color(0xff17483d)),
+        Text(
+          '$count ${count == 1 ? singular : plural}',
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+      ],
+    ),
+  );
 }
 
 class WorkerList extends StatelessWidget {
@@ -804,6 +981,17 @@ class _JobDetailState extends State<JobDetail> {
                 'Metadata',
                 const JsonEncoder.withIndent('  ').convert(detail!['job']),
               ),
+              _section('Volledige prompt', detail!['prompt']?.toString() ?? ''),
+              if ((detail!['inputAttachments'] as List? ?? const []).isNotEmpty)
+                FileCollection(
+                  title: 'Meegegeven attachments',
+                  emptyText: 'Geen attachments meegegeven',
+                  items: (detail!['inputAttachments'] as List)
+                      .cast<Map<String, dynamic>>(),
+                  api: widget.api,
+                  pathFor: (item) =>
+                      '/v1/management/jobs/${widget.id}/attachments/${item['id']}',
+                ),
               if (detail!['errorCode'] != null)
                 _section(
                   'Fout',
@@ -819,39 +1007,14 @@ class _JobDetailState extends State<JobDetail> {
               if (detail!['result'] != null &&
                   (detail!['result']['artifacts'] as List? ?? const [])
                       .isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Artifacts',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          ...(detail!['result']['artifacts'] as List).map(
-                            (artifact) => ListTile(
-                              title: Text(artifact['filename'].toString()),
-                              subtitle: Text(
-                                '${artifact['mimeType']} · ${artifact['sizeBytes']} bytes · SHA-256 ${artifact['sha256']}',
-                              ),
-                              trailing: const Icon(Icons.download),
-                              onTap: () => widget.api.download(
-                                '/v1/jobs/${widget.id}/artifacts/${artifact['id']}',
-                                artifact['filename'].toString(),
-                                artifact['mimeType'].toString(),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+                FileCollection(
+                  title: 'Teruggekomen artifacts',
+                  emptyText: 'Geen artifacts teruggekomen',
+                  items: (detail!['result']['artifacts'] as List)
+                      .cast<Map<String, dynamic>>(),
+                  api: widget.api,
+                  pathFor: (item) =>
+                      '/v1/jobs/${widget.id}/artifacts/${item['id']}',
                 ),
               _section(
                 'Technische attempts',
@@ -908,4 +1071,152 @@ class _JobDetailState extends State<JobDetail> {
       ),
     ),
   );
+}
+
+class FileCollection extends StatelessWidget {
+  final String title;
+  final String emptyText;
+  final List<Map<String, dynamic>> items;
+  final ApiClient api;
+  final String Function(Map<String, dynamic>) pathFor;
+  const FileCollection({
+    super.key,
+    required this.title,
+    required this.emptyText,
+    required this.items,
+    required this.api,
+    required this.pathFor,
+  });
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 16),
+    child: Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 12),
+            if (items.isEmpty) Text(emptyText),
+            ...items.map(
+              (item) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _FileItem(item: item, api: api, path: pathFor(item)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _FileItem extends StatefulWidget {
+  final Map<String, dynamic> item;
+  final ApiClient api;
+  final String path;
+  const _FileItem({required this.item, required this.api, required this.path});
+
+  @override
+  State<_FileItem> createState() => _FileItemState();
+}
+
+class _FileItemState extends State<_FileItem> {
+  Future<Uint8List>? preview;
+
+  bool get isImage =>
+      widget.item['mimeType']?.toString().startsWith('image/') == true;
+
+  @override
+  void initState() {
+    super.initState();
+    if (isImage) preview = widget.api.getBytes(widget.path);
+  }
+
+  @override
+  void didUpdateWidget(covariant _FileItem oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.path != widget.path ||
+        oldWidget.item['mimeType'] != widget.item['mimeType']) {
+      preview = isImage ? widget.api.getBytes(widget.path) : null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filename = widget.item['filename']?.toString() ?? 'bestand';
+    final mimeType =
+        widget.item['mimeType']?.toString() ?? 'application/octet-stream';
+    final size = widget.item['sizeBytes'] as int? ?? 0;
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: const Color(0xfff5f9f7),
+        border: Border.all(color: const Color(0xffc7d4cf)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (isImage)
+            FutureBuilder<Uint8List>(
+              future: preview,
+              builder: (context, snapshot) {
+                if (snapshot.hasData) {
+                  return Container(
+                    width: double.infinity,
+                    constraints: const BoxConstraints(maxHeight: 480),
+                    color: Colors.white,
+                    child: Image.memory(
+                      snapshot.data!,
+                      fit: BoxFit.contain,
+                      semanticLabel: 'Voorbeeld van $filename',
+                    ),
+                  );
+                }
+                if (snapshot.hasError) {
+                  return const Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Text(
+                      'Afbeeldingsvoorbeeld kon niet worden geladen.',
+                    ),
+                  );
+                }
+                return const SizedBox(
+                  height: 120,
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              },
+            ),
+          ListTile(
+            leading: Icon(isImage ? Icons.image_outlined : Icons.description),
+            title: Text(filename),
+            subtitle: Text(
+              '$mimeType · ${_formatBytes(size)}\nSHA-256 ${widget.item['sha256']}',
+            ),
+            trailing: IconButton(
+              tooltip: 'Download $filename',
+              icon: const Icon(Icons.download),
+              onPressed: () =>
+                  widget.api.download(widget.path, filename, mimeType),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatBytes(int bytes) {
+  if (bytes >= 1024 * 1024) {
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+  if (bytes >= 1024) return '${(bytes / 1024).toStringAsFixed(1)} kB';
+  return '$bytes bytes';
 }

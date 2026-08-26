@@ -71,7 +71,10 @@ Deze pagina toont terminale jobs met status `SUCCEEDED`, `FAILED` of `CANCELLED`
 - De URL bewaart zoekterm en paginacursor, zodat vernieuwen en delen dezelfde lijst opleveren.
 
 Per regel zijn zichtbaar: taaknaam, job-ID, applicatie, jobsoort, provider/model, eindstatus,
-eindtijd en totale looptijd. Een regel opent het jobdetail. Als niets gevonden is, maakt de tekst
+eindtijd en totale looptijd. Daarnaast toont iedere jobregel de eerste 240 tekens van de prompt,
+waar beschikbaar de eerste 240 tekens van het resultaat, en afzonderlijke tellingen voor
+meegegeven inputattachments en teruggekomen outputartifacts. Een regel opent het jobdetail. Als
+niets gevonden is, maakt de tekst
 onderscheid tussen **Er zijn nog geen afgeronde jobs** en **Geen jobs gevonden voor deze zoekterm**.
 
 ## Workers
@@ -97,11 +100,19 @@ worker, starttijd en looptijd. Daaronder staan twee onderdelen.
 
 - Bij `SUCCEEDED` staat het volledige schema-gevalideerde JSON-resultaat als veilige tekst/JSON.
 - Eventuele artifacts zijn met bestandsnaam en gecontroleerde download beschikbaar.
+- De volledige prompt en alle inputattachments zijn zichtbaar. Afbeeldingsattachments krijgen een
+  inline voorbeeld en blijven daarnaast downloadbaar.
+- Afbeeldingsartifacts krijgen eveneens een inline voorbeeld; andere artifacts tonen gecontroleerde
+  metadata en een downloadactie.
 - Bij `FAILED` staat de veilige foutcode en foutmelding.
 - Bij `CANCELLED` staat wie of wat annuleerde en wanneer.
 - Bij een actieve job staat **Resultaat is beschikbaar zodra de job is afgerond.**
 
 De frontend rendert resultaat en foutinhoud nooit als HTML.
+
+De beheer-API geeft voor lijsten uitsluitend begrensde tekstpreviews en bestandsaantallen terug.
+Jobdetail bevat attachment- en artifactmetadata, nooit Base64 of bestandbytes. De UI haalt een
+bestand pas via een afzonderlijke beveiligde route op voor een voorbeeld of download.
 
 ### AI-conversatie
 
@@ -168,6 +179,9 @@ jobuitkomst; aanvullende technische diagnose kan via bestaande logs en metrics.
 - Implementatie: Flutter Web, geleverd vanuit Agent Runtime of als onderdeel van dezelfde release.
 - Gegevensbron: uitsluitend beveiligde beheerquery's van Agent Runtime, nooit rechtstreekse
   databasetoegang.
+- Kleurgebruik: een lichte navigatie- en inhoudsachtergrond met donker tekst- en icooncontrast; de
+  bediening blijft ook bij fel omgevingslicht leesbaar en gebruikt niet alleen kleur om status of
+  bestandsaanwezigheid over te brengen.
 - Authenticatie: standaard via de officiele Google-login. De frontend haalt de publieke OAuth-
   configuratie bij de Runtime op en wisselt het Google ID-token direct in voor een eigen, tijdelijk
   Runtime-sessietoken. Alleen Google-accounts op de server-side beheerdersallowlist worden

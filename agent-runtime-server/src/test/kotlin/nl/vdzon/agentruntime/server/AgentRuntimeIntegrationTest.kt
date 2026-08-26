@@ -99,6 +99,12 @@ class AgentRuntimeIntegrationTest(
         postJson("/v1/workers/$workerId/jobs/$id/output-finalization", WORKER_TOKEN, FinalizeAcceptedOutputRequest(attempt, token, second.path("outputAttemptId").asText()))
         val result = getJson("/v1/jobs/$id/result", PRODUCT_TOKEN)
         assertThat(result.path("artifacts")).hasSize(1)
+        val completed = getJson("/v1/management/jobs/completed?limit=30", ADMIN_TOKEN).path("items")
+            .first { it.path("id").asText() == id }
+        assertThat(completed.path("artifactCount").asInt()).isEqualTo(1)
+        assertThat(completed.path("inputAttachmentCount").asInt()).isZero()
+        assertThat(completed.path("promptPreview").asText()).startsWith("Return a test answer")
+        assertThat(completed.path("outputPreview").asText()).contains("yes")
         val transcript = getJson("/v1/management/jobs/$id/transcript", ADMIN_TOKEN)
         assertThat(transcript.path("items")).hasSize(1)
     }
@@ -188,8 +194,26 @@ class AgentRuntimeIntegrationTest(
         val valid = applicationRequest(UUID.randomUUID().toString(), Provider.CODEX).copy(
             attachments = listOf(InputAttachmentRequest("screen.png", "image/png", java.util.Base64.getEncoder().encodeToString(png))),
         )
-        mvc.perform(post("/v1/jobs").bearer(PRODUCT_TOKEN).contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsBytes(valid)))
-            .andExpect(status().isAccepted)
+        val created = mapper.readTree(
+            mvc.perform(post("/v1/jobs").bearer(PRODUCT_TOKEN).contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsBytes(valid)))
+                .andExpect(status().isAccepted).andReturn().response.contentAsString
+        )
+        val jobId = created.path("id").asText()
+        val queueItem = getJson("/v1/management/queue", ADMIN_TOKEN).path("items")
+            .first { it.path("id").asText() == jobId }
+        assertThat(queueItem.path("inputAttachmentCount").asInt()).isEqualTo(1)
+        assertThat(queueItem.path("artifactCount").asInt()).isZero()
+        assertThat(queueItem.path("promptPreview").asText()).startsWith("Return a test answer")
+
+        val detail = getJson("/v1/management/jobs/$jobId", ADMIN_TOKEN)
+        assertThat(detail.path("prompt").asText()).isEqualTo(valid.prompt)
+        assertThat(detail.path("inputAttachments")).hasSize(1)
+        assertThat(detail.toString()).doesNotContain("contentBase64", java.util.Base64.getEncoder().encodeToString(png))
+        val attachmentId = detail.path("inputAttachments").single().path("id").asText()
+        val downloaded = mvc.perform(get("/v1/management/jobs/$jobId/attachments/$attachmentId").bearer(ADMIN_TOKEN))
+            .andExpect(status().isOk).andReturn().response.contentAsByteArray
+        assertThat(downloaded).isEqualTo(png)
+
         val unsafe = valid.copy(idempotencyKey = UUID.randomUUID().toString(), attachments = listOf(InputAttachmentRequest("../screen.png", "image/png", java.util.Base64.getEncoder().encodeToString(png))))
         mvc.perform(post("/v1/jobs").bearer(PRODUCT_TOKEN).contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsBytes(unsafe)))
             .andExpect(status().isBadRequest)
