@@ -1,5 +1,6 @@
 package nl.vdzon.agentruntime.server.config
 
+import io.micrometer.core.instrument.MeterRegistry
 import nl.vdzon.agentruntime.contracts.ErrorResponse
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
@@ -13,11 +14,16 @@ import org.springframework.web.server.ResponseStatusException
 class ApiException(val code: String, message: String, val status: HttpStatus = HttpStatus.BAD_REQUEST) : RuntimeException(message)
 
 @RestControllerAdvice
-class ApiErrors {
+class ApiErrors(private val metrics: MeterRegistry) {
     private val logger = LoggerFactory.getLogger(ApiErrors::class.java)
 
     @ExceptionHandler(ApiException::class)
-    fun api(error: ApiException) = ResponseEntity.status(error.status).body(ErrorResponse(error.code, error.message.orEmpty()))
+    fun api(error: ApiException): ResponseEntity<ErrorResponse> {
+        if (error.code.contains("ATTACHMENT") || error.code.contains("ARTIFACT") || error.code.contains("UNSAFE_FILENAME")) {
+            metrics.counter("agent_runtime_file_rejections", "code", error.code).increment()
+        }
+        return ResponseEntity.status(error.status).body(ErrorResponse(error.code, error.message.orEmpty()))
+    }
 
     @ExceptionHandler(MethodArgumentNotValidException::class)
     fun validation(error: MethodArgumentNotValidException) = ResponseEntity.badRequest().body(

@@ -2,22 +2,26 @@
 set -euo pipefail
 
 umask 077
+result_file="${AR_RESULT_FILE:-/job/output/result.json}"
 case "${AR_ENGINE:-}" in
   CODEX)
     cp -R /credential-source/. /home/agent/.codex/
-    args=(exec --ephemeral --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -C /work -m "$AR_MODEL" -o /runtime/result.json)
-    if [[ -s /runtime/response-schema.json ]]; then
-      args+=(--output-schema /runtime/response-schema.json)
+    args=(exec --ephemeral --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -C /work -m "$AR_MODEL" -o "$result_file")
+    if [[ -s /job/input/response-schema.json ]]; then
+      args+=(--output-schema /job/input/response-schema.json)
     fi
-    codex "${args[@]}" "$(cat /runtime/prompt.txt)"
+    codex "${args[@]}" "$(cat /job/input/prompt.md)"
     ;;
   CLAUDE)
     cp -R /credential-source/. /home/agent/.claude/
-    args=(-p --no-session-persistence --dangerously-skip-permissions --model "$AR_MODEL" --output-format text)
-    if [[ -s /runtime/response-schema.json ]]; then
-      args+=(--json-schema "$(cat /runtime/response-schema.json)")
+    if [[ -f /credential-config.json ]]; then
+      cp /credential-config.json /home/agent/.claude.json
     fi
-    claude "${args[@]}" "$(cat /runtime/prompt.txt)" > /runtime/result.json
+    args=(-p --no-session-persistence --dangerously-skip-permissions --model "$AR_MODEL" --output-format text)
+    if [[ -s /job/input/response-schema.json ]]; then
+      args+=(--json-schema "$(cat /job/input/response-schema.json)")
+    fi
+    claude "${args[@]}" "$(cat /job/input/prompt.md)" > "$result_file"
     ;;
   *)
     echo "Unsupported execution engine" >&2
@@ -25,4 +29,4 @@ case "${AR_ENGINE:-}" in
     ;;
 esac
 
-test -s /runtime/result.json
+test -s "$result_file"

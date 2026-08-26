@@ -13,10 +13,11 @@ data class RequestIdentity(val role: PrincipalRole, val tenantId: String? = null
 
 @Component
 class ApiSecurity(private val properties: RuntimeProperties, private val adminAuth: AdminAuthService) : OncePerRequestFilter() {
-    override fun shouldNotFilter(request: HttpServletRequest): Boolean =
-        request.requestURI == "/" || request.requestURI.startsWith("/assets/") ||
-            request.requestURI.startsWith("/actuator/health") || request.requestURI == "/healthz" ||
-            request.requestURI.startsWith("/v1/auth/")
+    override fun shouldNotFilter(request: HttpServletRequest): Boolean {
+        val path = request.requestURI
+        return (!path.startsWith("/v1/") && !path.startsWith("/actuator/")) ||
+            path.startsWith("/actuator/health") || path.startsWith("/v1/auth/")
+    }
 
     override fun doFilterInternal(request: HttpServletRequest, response: HttpServletResponse, chain: FilterChain) {
         val token = request.getHeader("Authorization")?.removePrefix("Bearer ")?.takeIf { it.isNotBlank() }

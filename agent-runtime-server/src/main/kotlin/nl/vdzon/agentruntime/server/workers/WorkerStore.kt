@@ -25,6 +25,19 @@ data class AttemptRecord(
     val status: String,
     val leaseUntil: Instant,
     val recoveryUntil: Instant?,
+    val attemptDeadline: Instant,
+)
+
+data class AttemptSummary(
+    val id: String,
+    val jobId: String,
+    val workerId: String,
+    val attemptNumber: Int,
+    val status: String,
+    val leaseUntil: Instant,
+    val attemptDeadline: Instant,
+    val startedAt: Instant,
+    val completedAt: Instant?,
 )
 
 @Repository
@@ -33,16 +46,18 @@ class WorkerStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMapp
         val now = Instant.now().atOffset(ZoneOffset.UTC)
         val updated = jdbc.update(
             """UPDATE runtime_worker SET boot_id=?, status='ONLINE', capabilities_json=?, providers_json=?, models_json=?,
-               versions_json=?, last_heartbeat_at=? WHERE worker_id=?""",
+               environment_keys_json=?, max_concurrency=?, versions_json=?, last_heartbeat_at=? WHERE worker_id=?""",
             request.bootId, mapper.writeValueAsString(request.capabilities), mapper.writeValueAsString(request.providers),
-            mapper.writeValueAsString(request.models), mapper.writeValueAsString(request.versions), now, request.workerId,
+            mapper.writeValueAsString(request.models), mapper.writeValueAsString(request.availableEnvironmentKeys), request.maxConcurrency,
+            mapper.writeValueAsString(request.versions), now, request.workerId,
         )
         if (updated == 0) try {
             jdbc.update(
-                """INSERT INTO runtime_worker(worker_id,boot_id,status,capabilities_json,providers_json,models_json,versions_json,last_heartbeat_at,registered_at)
-                   VALUES (?,?,'ONLINE',?,?,?,?,?,?)""",
+                """INSERT INTO runtime_worker(worker_id,boot_id,status,capabilities_json,providers_json,models_json,environment_keys_json,max_concurrency,versions_json,last_heartbeat_at,registered_at)
+                   VALUES (?,?,'ONLINE',?,?,?,?,?,?,?,?)""",
                 request.workerId, request.bootId, mapper.writeValueAsString(request.capabilities), mapper.writeValueAsString(request.providers),
-                mapper.writeValueAsString(request.models), mapper.writeValueAsString(request.versions), now, now,
+                mapper.writeValueAsString(request.models), mapper.writeValueAsString(request.availableEnvironmentKeys), request.maxConcurrency,
+                mapper.writeValueAsString(request.versions), now, now,
             )
         } catch (_: DuplicateKeyException) { register(request) }
     }
@@ -51,13 +66,13 @@ class WorkerStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMapp
         jdbc.update("UPDATE runtime_worker SET status='ONLINE', last_heartbeat_at=? WHERE worker_id=? AND boot_id=?", Instant.now().atOffset(ZoneOffset.UTC), workerId, bootId)
     }
 
-    fun createAttempt(jobId: String, workerId: String, bootId: String, attemptNumber: Int, rawToken: String, leaseUntil: Instant): AttemptRecord {
+    fun createAttempt(jobId: String, workerId: String, bootId: String, attemptNumber: Int, rawToken: String, leaseUntil: Instant, attemptDeadline: Instant): AttemptRecord {
         val id = UUID.randomUUID().toString()
         val now = Instant.now().atOffset(ZoneOffset.UTC)
         jdbc.update(
-            """INSERT INTO runtime_attempt(id,job_id,worker_id,worker_boot_id,attempt_number,fencing_token_hash,status,lease_until,heartbeat_at,started_at)
-               VALUES (?,?,?,?,?,?,'ACTIVE',?,?,?)""",
-            id, jobId, workerId, bootId, attemptNumber, hash(rawToken), leaseUntil.atOffset(ZoneOffset.UTC), now, now,
+            """INSERT INTO runtime_attempt(id,job_id,worker_id,worker_boot_id,attempt_number,fencing_token_hash,status,lease_until,attempt_deadline,heartbeat_at,started_at)
+               VALUES (?,?,?,?,?,?,'ACTIVE',?,?,?,?)""",
+            id, jobId, workerId, bootId, attemptNumber, hash(rawToken), leaseUntil.atOffset(ZoneOffset.UTC), attemptDeadline.atOffset(ZoneOffset.UTC), now, now,
         )
         return findAttempt(id)!!
     }
@@ -69,6 +84,7 @@ class WorkerStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMapp
                 rs.getInt("attempt_number"), rs.getString("fencing_token_hash"), rs.getString("status"),
                 rs.getObject("lease_until", OffsetDateTime::class.java).toInstant(),
                 rs.getObject("recovery_until", OffsetDateTime::class.java)?.toInstant(),
+                rs.getObject("attempt_deadline", OffsetDateTime::class.java).toInstant(),
             )
         }, id)
     } catch (_: EmptyResultDataAccessException) { null }
@@ -80,6 +96,7 @@ class WorkerStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMapp
                 rs.getInt("attempt_number"), rs.getString("fencing_token_hash"), rs.getString("status"),
                 rs.getObject("lease_until", OffsetDateTime::class.java).toInstant(),
                 rs.getObject("recovery_until", OffsetDateTime::class.java)?.toInstant(),
+                rs.getObject("attempt_deadline", OffsetDateTime::class.java).toInstant(),
             )
         }, jobId)
     } catch (_: EmptyResultDataAccessException) { null }
@@ -98,9 +115,35 @@ class WorkerStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMapp
         )
     }
 
+    fun activeCount(workerId: String): Int = jdbc.queryForObject(
+        "SELECT COUNT(*) FROM runtime_attempt WHERE worker_id=? AND status IN ('ACTIVE','SUSPECTED')",
+        Int::class.java, workerId,
+    ) ?: 0
+
+    fun attemptsForJob(jobId: String): List<AttemptSummary> = jdbc.query(
+        "SELECT id,job_id,worker_id,attempt_number,status,lease_until,attempt_deadline,started_at,completed_at FROM runtime_attempt WHERE job_id=? ORDER BY attempt_number",
+        { rs, _ -> AttemptSummary(
+            rs.getString("id"), rs.getString("job_id"), rs.getString("worker_id"), rs.getInt("attempt_number"), rs.getString("status"),
+            rs.getObject("lease_until", OffsetDateTime::class.java).toInstant(), rs.getObject("attempt_deadline", OffsetDateTime::class.java).toInstant(),
+            rs.getObject("started_at", OffsetDateTime::class.java).toInstant(), rs.getObject("completed_at", OffsetDateTime::class.java)?.toInstant(),
+        ) }, jobId,
+    )
+
+    fun expiredDeadlines(): List<AttemptRecord> = jdbc.query(
+        "SELECT * FROM runtime_attempt WHERE status IN ('ACTIVE','SUSPECTED') AND attempt_deadline <= CURRENT_TIMESTAMP",
+    ) { rs, _ ->
+        AttemptRecord(
+            rs.getString("id"), rs.getString("job_id"), rs.getString("worker_id"), rs.getString("worker_boot_id"),
+            rs.getInt("attempt_number"), rs.getString("fencing_token_hash"), rs.getString("status"),
+            rs.getObject("lease_until", OffsetDateTime::class.java).toInstant(),
+            rs.getObject("recovery_until", OffsetDateTime::class.java)?.toInstant(),
+            rs.getObject("attempt_deadline", OffsetDateTime::class.java).toInstant(),
+        )
+    }
+
     fun markExpiredActive(recoveryUntil: Instant): List<AttemptRecord> {
         val expired = jdbc.query("SELECT * FROM runtime_attempt WHERE status='ACTIVE' AND lease_until < CURRENT_TIMESTAMP", { rs, _ ->
-            AttemptRecord(rs.getString("id"), rs.getString("job_id"), rs.getString("worker_id"), rs.getString("worker_boot_id"), rs.getInt("attempt_number"), rs.getString("fencing_token_hash"), rs.getString("status"), rs.getObject("lease_until", OffsetDateTime::class.java).toInstant(), null)
+            AttemptRecord(rs.getString("id"), rs.getString("job_id"), rs.getString("worker_id"), rs.getString("worker_boot_id"), rs.getInt("attempt_number"), rs.getString("fencing_token_hash"), rs.getString("status"), rs.getObject("lease_until", OffsetDateTime::class.java).toInstant(), null, rs.getObject("attempt_deadline", OffsetDateTime::class.java).toInstant())
         })
         expired.forEach { jdbc.update("UPDATE runtime_attempt SET status='SUSPECTED', recovery_until=? WHERE id=? AND status='ACTIVE'", recoveryUntil.atOffset(ZoneOffset.UTC), it.id) }
         return expired
@@ -108,7 +151,7 @@ class WorkerStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMapp
 
     fun abandonExpiredSuspected(): List<AttemptRecord> {
         val expired = jdbc.query("SELECT * FROM runtime_attempt WHERE status='SUSPECTED' AND recovery_until < CURRENT_TIMESTAMP", { rs, _ ->
-            AttemptRecord(rs.getString("id"), rs.getString("job_id"), rs.getString("worker_id"), rs.getString("worker_boot_id"), rs.getInt("attempt_number"), rs.getString("fencing_token_hash"), rs.getString("status"), rs.getObject("lease_until", OffsetDateTime::class.java).toInstant(), rs.getObject("recovery_until", OffsetDateTime::class.java)?.toInstant())
+            AttemptRecord(rs.getString("id"), rs.getString("job_id"), rs.getString("worker_id"), rs.getString("worker_boot_id"), rs.getInt("attempt_number"), rs.getString("fencing_token_hash"), rs.getString("status"), rs.getObject("lease_until", OffsetDateTime::class.java).toInstant(), rs.getObject("recovery_until", OffsetDateTime::class.java)?.toInstant(), rs.getObject("attempt_deadline", OffsetDateTime::class.java).toInstant())
         })
         expired.forEach { jdbc.update("UPDATE runtime_attempt SET status='ABANDONED', completed_at=? WHERE id=? AND status='SUSPECTED'", Instant.now().atOffset(ZoneOffset.UTC), it.id) }
         return expired
@@ -117,8 +160,13 @@ class WorkerStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMapp
     fun listWorkers(): List<WorkerView> = jdbc.query("SELECT * FROM runtime_worker ORDER BY worker_id") { rs, _ ->
         val last = rs.getObject("last_heartbeat_at", OffsetDateTime::class.java).toInstant()
         WorkerView(
-            rs.getString("worker_id"), rs.getString("boot_id"), if (last.isBefore(Instant.now().minusSeconds(120))) "OFFLINE" else rs.getString("status"),
-            readSet(rs.getString("capabilities_json")), readEnumSet(rs.getString("providers_json")), readSet(rs.getString("models_json")), last,
+            rs.getString("worker_id"), rs.getString("boot_id"), when {
+                last.isBefore(Instant.now().minusSeconds(120)) -> "OFFLINE"
+                last.isBefore(Instant.now().minusSeconds(45)) -> "STALE"
+                else -> "ONLINE"
+            },
+            readSet(rs.getString("capabilities_json")), readEnumSet(rs.getString("providers_json")), readSet(rs.getString("models_json")),
+            readSet(rs.getString("environment_keys_json")), rs.getInt("max_concurrency"), last,
         )
     }
 

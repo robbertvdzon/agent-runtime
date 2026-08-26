@@ -3,6 +3,7 @@ info:
   title: Agent Runtime API
   version: 1.0.0
   description: Versioned asynchronous contract for opaque application and repository agent work.
+  license: {name: Proprietary, identifier: LicenseRef-Proprietary}
 servers:
   - url: /v1
 security:
@@ -21,87 +22,490 @@ paths:
         '202':
           description: Accepted
           content: {application/json: {schema: {$ref: '#/components/schemas/JobView'}}}
+        '400': {$ref: '#/components/responses/ClientError'}
+        '409': {$ref: '#/components/responses/Conflict'}
     get:
       operationId: listJobs
+      summary: List jobs visible to the authenticated consumer or administrator
       parameters:
         - {in: query, name: status, schema: {type: string}}
       responses:
-        '200':
-          description: Jobs visible to the authenticated tenant
+        '200': {description: Jobs visible to the authenticated tenant, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/JobView'}}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
   /jobs/{jobId}:
     get:
       operationId: getJob
+      summary: Get current job status
       parameters: [{$ref: '#/components/parameters/JobId'}]
       responses:
-        '200': {description: Job status}
+        '200': {description: Job status, content: {application/json: {schema: {$ref: '#/components/schemas/JobView'}}}}
+        '404': {$ref: '#/components/responses/NotFound'}
   /jobs/{jobId}/result:
     get:
       operationId: getJobResult
+      summary: Get the immutable successful result and artifacts
       parameters: [{$ref: '#/components/parameters/JobId'}]
       responses:
-        '200': {description: Immutable result}
+        '200': {description: Immutable result, content: {application/json: {schema: {$ref: '#/components/schemas/JobResultView'}}}}
+        '409': {$ref: '#/components/responses/Conflict'}
   /jobs/{jobId}/events:
     get:
       operationId: getJobEvents
+      summary: Get the immutable technical event timeline
       parameters: [{$ref: '#/components/parameters/JobId'}]
       responses:
-        '200': {description: Immutable event timeline}
+        '200': {description: Immutable event timeline, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/JobEventView'}}}}}
+        '404': {$ref: '#/components/responses/NotFound'}
   /jobs/{jobId}/cancel:
     post:
       operationId: cancelJob
+      summary: Cancel queued work or request cancellation of a running attempt
       parameters: [{$ref: '#/components/parameters/JobId'}]
       responses:
-        '200': {description: Cancelled or cancellation requested}
+        '200': {description: Cancelled or cancellation requested, content: {application/json: {schema: {$ref: '#/components/schemas/JobView'}}}}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /jobs/{jobId}/artifacts/{artifactId}:
+    get:
+      operationId: downloadArtifact
+      summary: Download one immutable artifact visible to the authenticated tenant
+      parameters:
+        - {$ref: '#/components/parameters/JobId'}
+        - {in: path, name: artifactId, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: Artifact bytes, content: {application/octet-stream: {schema: {type: string, format: binary}}}}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /environment-keys:
+    get:
+      operationId: listEnvironmentKeys
+      summary: List policy-filtered project credential names and worker availability; values are never returned
+      parameters:
+        - {in: query, name: project, required: true, schema: {type: string, pattern: '^[A-Z][A-Z0-9_]*$'}}
+      responses:
+        '200': {description: Available names, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/EnvironmentKeyView'}}}}}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /workers/register:
+    post:
+      operationId: registerWorker
+      summary: Register or refresh a worker and its current capabilities; credential values are never accepted
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/WorkerRegistrationRequest'}}}}
+      responses:
+        '200': {description: Current worker view, content: {application/json: {schema: {$ref: '#/components/schemas/WorkerView'}}}}
+        '400': {$ref: '#/components/responses/ClientError'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /workers/{workerId}/claims:
+    post:
+      operationId: claimJob
+      summary: Long-poll for one policy- and capability-compatible job
+      parameters: [{$ref: '#/components/parameters/WorkerId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ClaimRequest'}}}}
+      responses:
+        '200': {description: Claimed job with authoritative deadline and fencing data, content: {application/json: {schema: {$ref: '#/components/schemas/ClaimedJob'}}}}
+        '204': {description: No compatible job became available}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /workers/{workerId}/jobs/{jobId}/heartbeat:
+    post:
+      operationId: heartbeatAttempt
+      summary: Refresh a live lease without extending the hard attempt deadline
+      parameters: [{$ref: '#/components/parameters/WorkerId'}, {$ref: '#/components/parameters/JobId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/HeartbeatRequest'}}}}
+      responses:
+        '200': {description: Lease state, content: {application/json: {schema: {$ref: '#/components/schemas/HeartbeatResponse'}}}}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /workers/{workerId}/jobs/{jobId}/progress:
+    post:
+      operationId: reportProgress
+      summary: Store bounded, redacted technical progress for a fenced attempt
+      parameters: [{$ref: '#/components/parameters/WorkerId'}, {$ref: '#/components/parameters/JobId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProgressRequest'}}}}
+      responses:
+        '204': {description: Progress accepted}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /workers/{workerId}/jobs/{jobId}/output-attempts:
+    post:
+      operationId: startOutputAttempt
+      summary: Idempotently reserve one of at most three model-output attempts
+      parameters: [{$ref: '#/components/parameters/WorkerId'}, {$ref: '#/components/parameters/JobId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/StartOutputAttemptRequest'}}}}
+      responses:
+        '200': {description: Reserved attempt, content: {application/json: {schema: {$ref: '#/components/schemas/OutputAttemptView'}}}}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /workers/{workerId}/jobs/{jobId}/output-candidates:
+    post:
+      operationId: submitOutputCandidate
+      summary: Submit bounded raw model text for authoritative JSON and schema validation
+      parameters: [{$ref: '#/components/parameters/WorkerId'}, {$ref: '#/components/parameters/JobId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SubmitOutputCandidateRequest'}}}}
+      responses:
+        '200': {description: 'Acceptance, correction, or exhaustion', content: {application/json: {schema: {$ref: '#/components/schemas/SubmitOutputCandidateResponse'}}}}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /workers/{workerId}/jobs/{jobId}/output-finalization:
+    post:
+      operationId: finalizeAcceptedOutput
+      summary: Finalize an accepted result after controlled artifact upload
+      parameters: [{$ref: '#/components/parameters/WorkerId'}, {$ref: '#/components/parameters/JobId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/FinalizeAcceptedOutputRequest'}}}}
+      responses:
+        '204': {description: Job succeeded}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /workers/{workerId}/jobs/{jobId}/transcript:
+    post:
+      operationId: appendTranscript
+      summary: Append one visible, redacted, fenced transcript part
+      parameters: [{$ref: '#/components/parameters/WorkerId'}, {$ref: '#/components/parameters/JobId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AppendTranscriptRequest'}}}}
+      responses:
+        '200': {description: Stored transcript part}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /workers/{workerId}/jobs/{jobId}/complete:
+    post:
+      operationId: completeLegacyAttempt
+      deprecated: true
+      summary: Complete repository work or a legacy non-output-protocol attempt
+      parameters: [{$ref: '#/components/parameters/WorkerId'}, {$ref: '#/components/parameters/JobId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CompleteAttemptRequest'}}}}
+      responses: {'204': {description: Attempt completed}, '409': {$ref: '#/components/responses/Conflict'}}
+  /workers/{workerId}/jobs/{jobId}/fail:
+    post:
+      operationId: failAttempt
+      summary: Fail a fenced attempt with a stable bounded error
+      parameters: [{$ref: '#/components/parameters/WorkerId'}, {$ref: '#/components/parameters/JobId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/FailAttemptRequest'}}}}
+      responses: {'204': {description: Failure accepted}, '409': {$ref: '#/components/responses/Conflict'}}
+  /workers/{workerId}/jobs/{jobId}/artifacts:
+    put:
+      operationId: uploadArtifact
+      summary: Upload one direct, bounded output artifact before result finalization
+      parameters:
+        - {$ref: '#/components/parameters/WorkerId'}
+        - {$ref: '#/components/parameters/JobId'}
+        - {in: header, name: X-Attempt-Id, required: true, schema: {type: string, format: uuid}}
+        - {in: header, name: X-Fencing-Token, required: true, schema: {type: string}}
+        - {in: header, name: X-Filename, required: true, schema: {type: string, maxLength: 255, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'}}
+        - {in: header, name: X-Content-SHA256, required: true, schema: {type: string, pattern: '^[0-9a-f]{64}$'}}
+        - {in: header, name: X-Mime-Type, required: false, schema: {type: string, maxLength: 160}}
+      requestBody: {required: true, content: {application/octet-stream: {schema: {type: string, format: binary, maxLength: 5242880}}}}
+      responses:
+        '200': {description: Immutable artifact metadata, content: {application/json: {schema: {$ref: '#/components/schemas/ArtifactView'}}}}
+        '413': {$ref: '#/components/responses/ClientError'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /workers:
+    get:
+      operationId: listWorkers
+      summary: List registered workers for an administrator
+      responses:
+        '200': {description: Workers, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/WorkerView'}}}}}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /management/environment:
+    get: {operationId: managementEnvironment, summary: Get monitor environment and server time, responses: {'200': {description: Environment metadata}, '403': {$ref: '#/components/responses/Forbidden'}}}
+  /management/jobs/running:
+    get: {operationId: managementRunningJobs, summary: List active jobs, responses: {'200': {description: Active jobs with server time}, '403': {$ref: '#/components/responses/Forbidden'}}}
+  /management/queue:
+    get: {operationId: managementQueue, summary: List the queue in expected claim order, responses: {'200': {description: Queue in expected claim order with wait reasons}, '403': {$ref: '#/components/responses/Forbidden'}}}
+  /management/jobs/completed:
+    get:
+      operationId: managementCompletedJobs
+      summary: Search and page through terminal jobs
+      parameters:
+        - {in: query, name: search, schema: {type: string}}
+        - {in: query, name: cursor, schema: {type: string}}
+        - {in: query, name: limit, schema: {type: integer, maximum: 30, default: 30}}
+      responses: {'200': {description: Server-filtered cursor page}, '403': {$ref: '#/components/responses/Forbidden'}}
+  /management/jobs/{jobId}:
+    get: {operationId: managementJobDetail, summary: Get safe management job detail, parameters: [{$ref: '#/components/parameters/JobId'}], responses: {'200': {description: 'Job, attempts, output attempts, result and safe failure'}, '404': {$ref: '#/components/responses/NotFound'}}}
+  /management/jobs/{jobId}/transcript:
+    get:
+      operationId: managementTranscript
+      summary: Page incrementally through visible transcript parts
+      parameters:
+        - {$ref: '#/components/parameters/JobId'}
+        - {in: query, name: afterSequence, schema: {type: integer, format: int64}}
+        - {in: query, name: beforeSequence, schema: {type: integer, format: int64}}
+        - {in: query, name: limit, schema: {type: integer, maximum: 200, default: 100}}
+      responses: {'200': {description: Incremental transcript page}, '404': {$ref: '#/components/responses/NotFound'}}
+  /management/jobs/{jobId}/result:
+    get: {operationId: managementJobResult, summary: Get an immutable result as administrator, parameters: [{$ref: '#/components/parameters/JobId'}], responses: {'200': {description: Immutable result, content: {application/json: {schema: {$ref: '#/components/schemas/JobResultView'}}}}, '409': {$ref: '#/components/responses/Conflict'}}}
+  /management/jobs/{jobId}/retry:
+    post: {operationId: managementRetryJob, summary: Explicitly requeue a failed or cancelled job, parameters: [{$ref: '#/components/parameters/JobId'}], responses: {'204': {description: Job requeued}, '409': {$ref: '#/components/responses/Conflict'}}}
+  /management/workers:
+    get: {operationId: managementWorkers, summary: List safe worker status and capabilities, responses: {'200': {description: 'Online, stale and offline workers without credentials or local paths'}, '403': {$ref: '#/components/responses/Forbidden'}}}
+  /management/summary:
+    get: {operationId: managementSummary, summary: Get counts by job status, responses: {'200': {description: Current status counts and server time}, '403': {$ref: '#/components/responses/Forbidden'}}}
 components:
   securitySchemes:
     bearerAuth: {type: http, scheme: bearer}
   parameters:
     JobId: {in: path, name: jobId, required: true, schema: {type: string, format: uuid}}
+    WorkerId: {in: path, name: workerId, required: true, schema: {type: string}}
+  responses:
+    Unauthorized:
+      description: Authentication is missing or expired
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+    Forbidden:
+      description: The identity is not authorized for this operation
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+    NotFound:
+      description: The resource is absent or hidden by tenant isolation
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+    ClientError:
+      description: Invalid, unknown, unsupported, over-limit or policy-forbidden request
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+    Conflict:
+      description: Idempotency, attempt fencing, hard deadline or immutable-state conflict
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
   schemas:
     CreateJobRequest:
       type: object
-      required: [jobKind, idempotencyKey, jobProfile, jobKey, provider, model, configurationVersion, instructionVersion, instructions, input]
+      additionalProperties: false
+      required: [jobKind, idempotencyKey, provider, model, prompt]
       properties:
         jobKind: {type: string, enum: [APPLICATION_WORK, REPOSITORY_WORK]}
         idempotencyKey: {type: string, maxLength: 160}
-        jobProfile: {type: string, maxLength: 100}
-        jobKey: {type: string, maxLength: 160}
         provider: {type: string, enum: [CODEX, CLAUDE, MOCKED]}
         model: {type: string, maxLength: 100}
-        configurationVersion: {type: string}
-        instructionVersion: {type: string}
-        instructions: {type: string, maxLength: 200000}
-        input: {}
+        prompt: {type: string, minLength: 1, maxLength: 200000}
         responseSchema: {}
         repositorySnapshot: {$ref: '#/components/schemas/RepositorySnapshot'}
         repositoryRequest: {$ref: '#/components/schemas/RepositoryRequest'}
-        resourceRequests: {type: array, maxItems: 20, items: {type: object, required: [key], properties: {key: {type: string}}}}
+        environmentKeys:
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          items: {type: string, pattern: '^[A-Z][A-Z0-9_]*__[A-Z][A-Z0-9_]*$'}
+        attachments:
+          type: array
+          maxItems: 10
+          items: {$ref: '#/components/schemas/InputAttachment'}
         executionTimeoutSeconds: {type: integer, minimum: 30, maximum: 86400, default: 3600}
-        maxAttempts: {type: integer, minimum: 1, maximum: 10, default: 3}
-        priority: {type: integer, minimum: 0, maximum: 100, default: 50}
-        consumerContext: {}
+    InputAttachment:
+      type: object
+      additionalProperties: false
+      required: [filename, mimeType, contentBase64]
+      properties:
+        filename: {type: string, maxLength: 255, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'}
+        mimeType: {type: string, maxLength: 160}
+        contentBase64: {type: string, format: byte, maxLength: 2800000}
     RepositorySnapshot:
       type: object
+      additionalProperties: false
       required: [url, commitSha]
       properties:
         url: {type: string, pattern: '^https://'}
         commitSha: {type: string, pattern: '^[0-9a-fA-F]{40}$'}
     RepositoryRequest:
       type: object
+      additionalProperties: false
       required: [alias, baseBranch]
       properties:
-        alias: {type: string}
-        baseBranch: {type: string}
-        branchHint: {type: string}
+        alias: {type: string, minLength: 1, maxLength: 100}
+        baseBranch: {type: string, minLength: 1, maxLength: 120}
+        branchHint: {type: string, maxLength: 120}
         publish: {type: boolean, default: true}
     JobView:
       type: object
-      required: [id, tenantId, jobKind, status, phase, createdAt, updatedAt]
+      required: [id, tenantId, jobKind, idempotencyKey, provider, model, status, phase, attemptCount, maxAttempts, priority, createdAt, updatedAt]
       properties:
         id: {type: string, format: uuid}
         tenantId: {type: string}
-        jobKind: {type: string}
+        jobKind: {type: string, enum: [APPLICATION_WORK, REPOSITORY_WORK]}
+        idempotencyKey: {type: string}
+        provider: {type: string, enum: [CODEX, CLAUDE, MOCKED]}
+        model: {type: string}
         status: {type: string, enum: [QUEUED, WAITING_FOR_WORKER, RUNNING, SUCCEEDED, FAILED, CANCELLED]}
         phase: {type: string}
+        attemptCount: {type: integer, minimum: 0}
+        maxAttempts: {type: integer, minimum: 1}
+        priority: {type: integer, minimum: 0, maximum: 100, description: Server-policy value; never supplied by a job request.}
+        progressPercent: {type: integer, minimum: 0, maximum: 100}
+        progressMessage: {type: string, maxLength: 1000}
+        errorCode: {type: string}
+        errorMessage: {type: string}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
+        notBefore: {type: string, format: date-time}
+    JobResultView:
+      type: object
+      required: [jobId, result, artifacts, completedAt]
+      properties:
+        jobId: {type: string, format: uuid}
+        result: {}
+        usage: {type: object}
+        artifacts: {type: array, maxItems: 25, items: {$ref: '#/components/schemas/ArtifactView'}}
+        completedAt: {type: string, format: date-time}
+    JobEventView:
+      type: object
+      required: [id, jobId, type, phase, createdAt]
+      properties:
+        id: {type: integer, format: int64}
+        jobId: {type: string, format: uuid}
+        type: {type: string}
+        phase: {type: string}
+        message: {type: string}
+        createdAt: {type: string, format: date-time}
+    ArtifactView:
+      type: object
+      required: [id, jobId, filename, mimeType, sizeBytes, sha256, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        jobId: {type: string, format: uuid}
+        filename: {type: string, maxLength: 255}
+        mimeType: {type: string, maxLength: 160}
+        sizeBytes: {type: integer, format: int64, minimum: 0, maximum: 5242880}
+        sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+        createdAt: {type: string, format: date-time}
+    EnvironmentKeyView:
+      type: object
+      required: [name, projectPrefix, available, matchingOnlineWorkers, lastSeenAt]
+      properties:
+        name: {type: string}
+        projectPrefix: {type: string}
+        available: {type: boolean}
+        matchingOnlineWorkers: {type: integer, minimum: 0}
+        lastSeenAt: {type: string, format: date-time}
+    WorkerRegistrationRequest:
+      type: object
+      additionalProperties: false
+      required: [workerId, bootId, capabilities, providers, models]
+      properties:
+        workerId: {type: string, minLength: 1, maxLength: 100}
+        bootId: {type: string, minLength: 1, maxLength: 100}
+        capabilities: {type: array, maxItems: 20, uniqueItems: true, items: {type: string}}
+        providers: {type: array, maxItems: 10, uniqueItems: true, items: {type: string, enum: [CODEX, CLAUDE]}}
+        models: {type: array, maxItems: 30, uniqueItems: true, items: {type: string}}
+        availableEnvironmentKeys: {type: array, maxItems: 1000, uniqueItems: true, items: {type: string, pattern: '^[A-Z][A-Z0-9_]*__[A-Z][A-Z0-9_]*$'}}
+        maxConcurrency: {type: integer, minimum: 1, maximum: 32, default: 1}
+        versions: {type: object, additionalProperties: {type: string}}
+    WorkerView:
+      type: object
+      required: [workerId, bootId, status, capabilities, providers, models, availableEnvironmentKeys, maxConcurrency, lastHeartbeatAt]
+      properties:
+        workerId: {type: string}
+        bootId: {type: string}
+        status: {type: string, enum: [ONLINE, STALE, OFFLINE]}
+        capabilities: {type: array, uniqueItems: true, items: {type: string}}
+        providers: {type: array, uniqueItems: true, items: {type: string, enum: [CODEX, CLAUDE]}}
+        models: {type: array, uniqueItems: true, items: {type: string}}
+        availableEnvironmentKeys: {type: array, uniqueItems: true, items: {type: string}}
+        maxConcurrency: {type: integer, minimum: 1, maximum: 32}
+        lastHeartbeatAt: {type: string, format: date-time}
+    ClaimRequest:
+      type: object
+      additionalProperties: false
+      required: [bootId, capabilities, providers, models]
+      properties:
+        bootId: {type: string, minLength: 1}
+        capabilities: {type: array, maxItems: 20, uniqueItems: true, items: {type: string}}
+        providers: {type: array, maxItems: 10, uniqueItems: true, items: {type: string, enum: [CODEX, CLAUDE]}}
+        models: {type: array, maxItems: 30, uniqueItems: true, items: {type: string}}
+        waitSeconds: {type: integer, minimum: 0, maximum: 25, default: 20}
+    ClaimedJob:
+      type: object
+      required: [job, attemptId, fencingToken, leaseUntil, attemptDeadline, request]
+      properties:
+        job: {$ref: '#/components/schemas/JobView'}
+        attemptId: {type: string, format: uuid}
+        fencingToken: {type: string}
+        leaseUntil: {type: string, format: date-time}
+        attemptDeadline: {type: string, format: date-time}
+        request: {$ref: '#/components/schemas/CreateJobRequest'}
+    AttemptAuth:
+      type: object
+      additionalProperties: false
+      required: [attemptId, fencingToken]
+      properties:
+        attemptId: {type: string, format: uuid}
+        fencingToken: {type: string}
+    HeartbeatRequest:
+      allOf:
+        - {$ref: '#/components/schemas/AttemptAuth'}
+        - {type: object, required: [bootId], properties: {bootId: {type: string, minLength: 1}}}
+    HeartbeatResponse:
+      type: object
+      required: [accepted, cancelRequested, fenced]
+      properties:
+        accepted: {type: boolean}
+        cancelRequested: {type: boolean}
+        fenced: {type: boolean}
+        leaseUntil: {type: string, format: date-time}
+    ProgressRequest:
+      allOf:
+        - {$ref: '#/components/schemas/AttemptAuth'}
+        - type: object
+          required: [phase]
+          properties:
+            phase: {type: string, minLength: 1, maxLength: 80}
+            percent: {type: integer, minimum: 0, maximum: 100}
+            message: {type: string, maxLength: 1000}
+    CompleteAttemptRequest:
+      allOf:
+        - {$ref: '#/components/schemas/AttemptAuth'}
+        - type: object
+          required: [result]
+          properties:
+            result: {}
+            usage: {type: object}
+    FailAttemptRequest:
+      allOf:
+        - {$ref: '#/components/schemas/AttemptAuth'}
+        - type: object
+          required: [errorCode, message, retryable]
+          properties:
+            errorCode: {type: string, minLength: 1, maxLength: 120}
+            message: {type: string, minLength: 1, maxLength: 2000}
+            retryable: {type: boolean}
+    StartOutputAttemptRequest:
+      allOf:
+        - {$ref: '#/components/schemas/AttemptAuth'}
+        - {type: object, required: [idempotencyKey], properties: {idempotencyKey: {type: string, maxLength: 160}}}
+    OutputAttemptView:
+      type: object
+      required: [outputAttemptId, outputAttemptNumber, maxOutputAttempts, correctionErrors]
+      properties:
+        outputAttemptId: {type: string, format: uuid}
+        outputAttemptNumber: {type: integer, minimum: 1, maximum: 3}
+        maxOutputAttempts: {type: integer, minimum: 1, maximum: 3}
+        correctionErrors: {type: array, maxItems: 25, items: {$ref: '#/components/schemas/JsonValidationError'}}
+    SubmitOutputCandidateRequest:
+      allOf:
+        - {$ref: '#/components/schemas/AttemptAuth'}
+        - type: object
+          required: [outputAttemptId, candidateText]
+          properties:
+            outputAttemptId: {type: string, format: uuid}
+            candidateText: {type: string, minLength: 1, maxLength: 5242880}
+            usage: {type: object}
+    SubmitOutputCandidateResponse:
+      type: object
+      required: [status, validationErrors, outputAttemptsRemaining]
+      properties:
+        status: {type: string, enum: [ACCEPTED, CORRECTION_REQUIRED, EXHAUSTED]}
+        errorCode: {type: string, enum: [MODEL_OUTPUT_NOT_JSON, MODEL_OUTPUT_SCHEMA_INVALID, MODEL_OUTPUT_RETRIES_EXHAUSTED, RESULT_TOO_LARGE]}
+        validationErrors: {type: array, maxItems: 25, items: {$ref: '#/components/schemas/JsonValidationError'}}
+        outputAttemptsRemaining: {type: integer, minimum: 0, maximum: 2}
+    FinalizeAcceptedOutputRequest:
+      allOf:
+        - {$ref: '#/components/schemas/AttemptAuth'}
+        - {type: object, required: [outputAttemptId], properties: {outputAttemptId: {type: string, format: uuid}}}
+    JsonValidationError:
+      type: object
+      required: [path, keyword, message]
+      properties:
+        path: {type: string}
+        keyword: {type: string}
+        message: {type: string, maxLength: 500}
+    AppendTranscriptRequest:
+      allOf:
+        - {$ref: '#/components/schemas/AttemptAuth'}
+        - type: object
+          required: [partId, sequence, kind, text]
+          properties:
+            partId: {type: string, maxLength: 100}
+            sequence: {type: integer, format: int64, minimum: 1}
+            kind: {type: string, enum: [PROMPT, AGENT_TEXT, TOOL_CALL, TOOL_OUTPUT, CORRECTION, PROVIDER_RESULT]}
+            text: {type: string, minLength: 1, maxLength: 100000}
+    ErrorResponse:
+      type: object
+      required: [code, message, timestamp]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        timestamp: {type: string, format: date-time}

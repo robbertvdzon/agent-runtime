@@ -12,6 +12,8 @@ spring:
     enabled: true
   jackson:
     default-property-inclusion: non_null
+    deserialization:
+      fail-on-unknown-properties: true
   lifecycle:
     timeout-per-shutdown-phase: 20s
 management:
@@ -41,3 +43,13 @@ agent-runtime:
   session-signing-secret: ${AR_SESSION_SIGNING_SECRET:local-session-signing-secret}
   lease-seconds: ${AR_LEASE_SECONDS:120}
   recovery-seconds: ${AR_RECOVERY_SECONDS:1800}
+  max-attempts: ${AR_MAX_ATTEMPTS:3}
+  default-priority: ${AR_DEFAULT_PRIORITY:50}
+  max-output-attempts: ${AR_MAX_OUTPUT_ATTEMPTS:3}
+  product-factory-environment-prefixes: ${AR_PRODUCT_FACTORY_ENVIRONMENT_PREFIXES:PF,HKH}
+  software-factory-environment-prefixes: ${AR_SOFTWARE_FACTORY_ENVIRONMENT_PREFIXES:SF,PF,HKH}
+  product-factory-providers: ${AR_PRODUCT_FACTORY_PROVIDERS:CODEX,CLAUDE,MOCKED}
+  software-factory-providers: ${AR_SOFTWARE_FACTORY_PROVIDERS:CODEX,CLAUDE,MOCKED}
+  product-factory-models: ${AR_PRODUCT_FACTORY_MODELS:*}
+  software-factory-models: ${AR_SOFTWARE_FACTORY_MODELS:*}
+  transcript-max-bytes-per-job: ${AR_TRANSCRIPT_MAX_BYTES_PER_JOB:10485760}

@@ -34,8 +34,9 @@ Lees vóór implementatie in deze volgorde:
    `agent-runtime-worker/src/main/kotlin/nl/vdzon/agentruntime/worker/WorkerMain.kt`
 9. het container-entrypoint in `execution-images/run-agent.sh`
 
-Verander het externe consumentencontract alleen achterwaarts compatibel. Interne worker-API's
-mogen worden uitgebreid, maar bestaande clients en opgeslagen jobs moeten blijven werken.
+Werk het huidige externe contract rechtstreeks bij. Er zijn nog geen actieve clients, dus bouw geen
+parallelle versie of compatibiliteitslaag. Houd interne workeroperaties wel idempotent en
+versieerbaar.
 
 ## Huidige situatie en probleem
 
@@ -60,8 +61,8 @@ Dit is nog niet betrouwbaar genoeg:
    worker vangt dat uiteindelijk als `WORKER_ERROR` af. Daardoor verdwijnt de echte validatiefout.
 4. Er is geen gerichte self-correction waarbij het model te horen krijgt welke velden ontbreken of
    welk datatype fout is.
-5. `maxAttempts` telt technische execution-attempts met leases en backoff. Dit mag niet worden
-   misbruikt voor directe JSON-correcties.
+5. De server-side technische attemptlimiet telt execution-attempts met leases en backoff. Deze mag
+   niet worden misbruikt voor directe JSON-correcties.
 6. De mock kan alleen een al geparseerde `JsonNode` voorbereiden. Daardoor kan hij geen ongeldige
    JSON, proza rond JSON of een reeks correctiepogingen simuleren.
 
@@ -93,16 +94,16 @@ het gevraagde JSON-resultaat te produceren.
 | Outputpoging | Eén modelaanroep voor het JSON-antwoord | Directe correctie zonder backoff |
 
 Een job krijgt maximaal drie outputpogingen in totaal. Dit maximum is een server-side
-platforminstelling of jobprofile-instelling en is niet hetzelfde als `CreateJobRequest.maxAttempts`.
-Begin met de vaste standaardwaarde `3`. Maak de naam expliciet, bijvoorbeeld
+platforminstelling en staat los van de eveneens server-side technische attemptlimiet. Begin met de
+vaste standaardwaarde `3`. Maak de naam expliciet, bijvoorbeeld
 `maxOutputAttempts`, zodat niemand beide tellers verwart.
 
 De server reserveert en bewaart een outputpoging vóór de modelaanroep. Als de worker daarna crasht,
 is die poging verbruikt; een volgende technische attempt kan alleen de resterende outputpogingen
 gebruiken. Zo kan een crash niet tot onbeperkte modelaanroepen leiden. Wanneer het budget uitsluitend
 door afgebroken technische uitvoeringen is uitgeput, gebruik dan een aparte technische fout zoals
-`OUTPUT_ATTEMPTS_INTERRUPTED`; noem dat niet ten onrechte een JSON-afwijzing. De bestaande
-`maxAttempts`-grens blijft daarnaast technische herstarts begrenzen.
+`OUTPUT_ATTEMPTS_INTERRUPTED`; noem dat niet ten onrechte een JSON-afwijzing. De server-side
+attemptgrens blijft daarnaast technische herstarts begrenzen.
 
 ### JSON-correctie geldt voor AI-uitvoer van `APPLICATION_WORK`
 
@@ -362,15 +363,15 @@ Gebruik een unieke containernaam en resultaatbestandsnaam per outputpoging. Neem
 outputpogingnummer ook op in het versleutelde workerjournal, zodat crashherstel nooit per ongeluk
 een oude kandidaat als nieuwe poging instuurt.
 
-De correctieprompt bevat de oorspronkelijke instructies, oorspronkelijke input en het oorspronkelijke
-schema opnieuw, plus alleen concrete foutfeedback:
+De correctieprompt bevat de volledige oorspronkelijke prompt en het oorspronkelijke schema opnieuw,
+plus alleen concrete foutfeedback:
 
 ```text
 Your previous answer was rejected.
 
 Validation errors:
 - $.stories is required.
-- $.priority must be an integer.
+- $.stories[0].title must be a string.
 
 Return the complete answer again, not a patch.
 Return only JSON that satisfies the original response schema.
@@ -536,9 +537,7 @@ Leg expliciet vast:
 - provider-native schemaopties zijn de eerste verdedigingslaag, geen bewijs van geldigheid;
 - servervalidatie is gezaghebbend;
 - outputcorrecties zijn direct en verschillen van technische retries;
-- een consument verwerkt alleen een terminale, schema-geldige uitkomst;
-- Product Factory moet een schema meesturen voor ieder resultaat dat naar domeinentiteiten wordt
-  vertaald.
+- een consumer ontvangt alleen een terminale, schema-geldige uitkomst.
 
 ## Acceptatiecriteria
 
@@ -554,7 +553,7 @@ De wijziging is pas klaar wanneer al het volgende aantoonbaar waar is:
 - technische retries en crashherstel blijven werken zoals voorheen;
 - fencing beschermt ook alle nieuwe outputoperaties;
 - een netwerkretry kan geen outputpoging dubbel tellen;
-- Product Factory en andere consumenten hoeven geen JSON uit proza te extraheren;
+- consumers hoeven geen JSON uit proza te extraheren;
 - een geldig eindresultaat blijft onveranderlijk;
 - foutcodes, pogingen en veilige diagnoses zijn in events en monitor zichtbaar;
 - centrale mocks kunnen alle geldige en ongeldige JSON-scenario's deterministisch nabootsen;
@@ -573,7 +572,7 @@ De wijziging is pas klaar wanneer al het volgende aantoonbaar waar is:
 
 ## Verwachte oplevering
 
-Lever één samenhangende, achterwaarts compatibele wijziging op met:
+Lever één samenhangende wijziging aan het huidige contract op met:
 
 - database-migratie;
 - contractuitbreidingen;
@@ -586,6 +585,5 @@ Lever één samenhangende, achterwaarts compatibele wijziging op met:
 - unit-, integratie- en scenario-tests;
 - bijgewerkte documentatie.
 
-Maak geen afzonderlijke Product Factory-implementatie voor deze betrouwbaarheid. Zodra Agent Runtime
-alleen geldige eindresultaten publiceert, hoeft Product Factory het resultaat uitsluitend naar haar
-eigen DTO te deserialiseren en inhoudelijk als domeindata te beoordelen.
+Maak geen afzonderlijke consumerimplementatie voor deze betrouwbaarheid. Agent Runtime garandeert
+zelf dat een succesvol technisch resultaat geldige, schema-conforme JSON is.

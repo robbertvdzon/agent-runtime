@@ -17,8 +17,20 @@ data class RuntimeProperties(
     var sessionSigningSecret: String = "local-session-signing-secret",
     var leaseSeconds: Long = 120,
     var recoverySeconds: Long = 1800,
+    var maxAttempts: Int = 3,
+    var defaultPriority: Int = 50,
+    var maxOutputAttempts: Int = 3,
+    var productFactoryEnvironmentPrefixes: String = "PF,HKH",
+    var softwareFactoryEnvironmentPrefixes: String = "SF,PF,HKH",
+    var productFactoryProviders: String = "CODEX,CLAUDE,MOCKED",
+    var softwareFactoryProviders: String = "CODEX,CLAUDE,MOCKED",
+    var productFactoryModels: String = "*",
+    var softwareFactoryModels: String = "*",
+    var inputAttachmentMaxBytes: Long = 2L * 1024 * 1024,
+    var jobInputAttachmentMaxBytes: Long = 10L * 1024 * 1024,
     var artifactMaxBytes: Long = 5L * 1024 * 1024,
     var jobArtifactMaxBytes: Long = 25L * 1024 * 1024,
+    var transcriptMaxBytesPerJob: Long = 10L * 1024 * 1024,
 ) {
     @PostConstruct
     fun validate() {
@@ -30,7 +42,34 @@ data class RuntimeProperties(
         }
         require(leaseSeconds in 30..900)
         require(recoverySeconds in leaseSeconds..86_400)
+        require(maxAttempts in 1..10)
+        require(defaultPriority in 0..100)
+        require(maxOutputAttempts in 1..3)
+        require(inputAttachmentMaxBytes in 1..10L * 1024 * 1024)
+        require(jobInputAttachmentMaxBytes in inputAttachmentMaxBytes..50L * 1024 * 1024)
+        require(transcriptMaxBytesPerJob in 1L * 1024 * 1024..100L * 1024 * 1024)
     }
 
     fun allowedAdminEmails(): Set<String> = adminEmails.split(',').map(String::trim).map(String::lowercase).filter(String::isNotBlank).toSet()
+
+    fun allowedEnvironmentPrefixes(tenantId: String): Set<String> = when (tenantId) {
+        "product-factory" -> productFactoryEnvironmentPrefixes
+        "software-factory" -> softwareFactoryEnvironmentPrefixes
+        else -> ""
+    }.split(',').map(String::trim).filter(String::isNotBlank).toSet()
+
+    fun allowedProviders(tenantId: String): Set<String> = when (tenantId) {
+        "product-factory" -> productFactoryProviders
+        "software-factory" -> softwareFactoryProviders
+        else -> ""
+    }.split(',').map(String::trim).map(String::uppercase).filter(String::isNotBlank).toSet()
+
+    fun modelAllowed(tenantId: String, model: String): Boolean {
+        val configured = when (tenantId) {
+            "product-factory" -> productFactoryModels
+            "software-factory" -> softwareFactoryModels
+            else -> ""
+        }.split(',').map(String::trim).filter(String::isNotBlank).toSet()
+        return "*" in configured || model in configured
+    }
 }

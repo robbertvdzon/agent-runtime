@@ -13,9 +13,12 @@ import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
+import org.springframework.jdbc.core.JdbcTemplate
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
+import java.security.MessageDigest
+import java.util.HexFormat
 
 @SpringBootTest(properties = ["agent-runtime.environment=ACCEPTANCE"])
 @AutoConfigureMockMvc
@@ -23,7 +26,18 @@ class AgentRuntimeIntegrationTest(
     @Autowired private val mvc: MockMvc,
     @Autowired private val mapper: ObjectMapper,
     @Autowired private val mocks: MockResponseStore,
+    @Autowired private val jdbc: JdbcTemplate,
 ) {
+    @Test
+    fun `monitor shell is public while management data remains protected`() {
+        mvc.perform(get("/"))
+            .andExpect(status().isOk)
+        mvc.perform(get("/flutter.js"))
+            .andExpect(status().isOk)
+        mvc.perform(get("/v1/management/summary"))
+            .andExpect(status().isUnauthorized)
+    }
+
     @Test
     fun `incomplete request is a safe client error`() {
         mvc.perform(
@@ -35,7 +49,7 @@ class AgentRuntimeIntegrationTest(
     @Test
     fun `mocked application work is durable idempotent and schema validated`() {
         val key = UUID.randomUUID().toString()
-        mocks.insert(PrepareMockResponseRequest("product-factory", "product-factory-default", key, result = mapper.readTree("""{"answer":"ok"}""")))
+        mocks.insert(PrepareMockResponseRequest("product-factory", key, result = mapper.readTree("""{"answer":"ok"}""")))
         val request = applicationRequest(key, Provider.MOCKED)
         val first = postJob(PRODUCT_TOKEN, request)
         val second = postJob(PRODUCT_TOKEN, request)
@@ -45,11 +59,60 @@ class AgentRuntimeIntegrationTest(
         assertThat(result.path("result").path("answer").asText()).isEqualTo("ok")
 
         val events = getJson("/v1/jobs/${first.path("id").asText()}/events", PRODUCT_TOKEN)
-        assertThat(events.map { it.path("type").asText() }).containsExactly("JOB_CREATED", "MOCK_JOB_SUCCEEDED")
+        assertThat(events.map { it.path("type").asText() }).containsExactly("JOB_CREATED", "OUTPUT_ATTEMPT_STARTED", "OUTPUT_ACCEPTED", "MOCK_JOB_SUCCEEDED")
     }
 
     @Test
-    fun `consumer isolation and profile boundaries fail closed`() {
+    fun `mock output sequence corrects invalid json without a worker`() {
+        val key = UUID.randomUUID().toString()
+        mocks.insert(PrepareMockResponseRequest("product-factory", key, outputSequence = listOf("not json", """{"answer":"corrected"}""")))
+        val job = postJob(PRODUCT_TOKEN, applicationRequest(key, Provider.MOCKED))
+        val result = awaitResult(job.path("id").asText(), PRODUCT_TOKEN)
+        assertThat(result.path("result").path("answer").asText()).isEqualTo("corrected")
+        val events = getJson("/v1/jobs/${job.path("id").asText()}/events", PRODUCT_TOKEN).map { it.path("type").asText() }
+        assertThat(events).containsSubsequence("OUTPUT_REJECTED_NOT_JSON", "OUTPUT_ATTEMPT_STARTED", "OUTPUT_ACCEPTED")
+    }
+
+    @Test
+    fun `worker output protocol validates corrects uploads and finalizes`() {
+        val workerId = "output-${UUID.randomUUID()}"
+        val bootId = UUID.randomUUID().toString()
+        val model = "output-${UUID.randomUUID()}"
+        val job = postJob(PRODUCT_TOKEN, applicationRequest(UUID.randomUUID().toString(), Provider.CODEX).copy(model = model))
+        postJson("/v1/workers/register", WORKER_TOKEN, WorkerRegistrationRequest(workerId, bootId, setOf("application-work"), setOf(Provider.CODEX), setOf(model)))
+        val claim = postJson("/v1/workers/$workerId/claims", WORKER_TOKEN, ClaimRequest(bootId, setOf("application-work"), setOf(Provider.CODEX), setOf(model), 0))
+        val id = job.path("id").asText(); val attempt = claim.path("attemptId").asText(); val token = claim.path("fencingToken").asText()
+        postJson("/v1/workers/$workerId/jobs/$id/transcript", WORKER_TOKEN, AppendTranscriptRequest(attempt, token, "prompt", 1_000_001, TranscriptKind.PROMPT, "visible prompt"))
+
+        val first = postJson("/v1/workers/$workerId/jobs/$id/output-attempts", WORKER_TOKEN, StartOutputAttemptRequest(attempt, token, "first"))
+        val rejected = postJson("/v1/workers/$workerId/jobs/$id/output-candidates", WORKER_TOKEN, SubmitOutputCandidateRequest(attempt, token, first.path("outputAttemptId").asText(), "no json"))
+        assertThat(rejected.path("status").asText()).isEqualTo("CORRECTION_REQUIRED")
+        val second = postJson("/v1/workers/$workerId/jobs/$id/output-attempts", WORKER_TOKEN, StartOutputAttemptRequest(attempt, token, "second"))
+        val accepted = postJson("/v1/workers/$workerId/jobs/$id/output-candidates", WORKER_TOKEN, SubmitOutputCandidateRequest(attempt, token, second.path("outputAttemptId").asText(), """{"answer":"yes"}"""))
+        assertThat(accepted.path("status").asText()).isEqualTo("ACCEPTED")
+
+        val bytes = "evidence".toByteArray(); val sha = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes))
+        mvc.perform(put("/v1/workers/$workerId/jobs/$id/artifacts").bearer(WORKER_TOKEN)
+            .contentType(MediaType.APPLICATION_OCTET_STREAM).header("X-Attempt-Id", attempt).header("X-Fencing-Token", token)
+            .header("X-Filename", "evidence.txt").header("X-Mime-Type", "text/plain").header("X-Content-SHA256", sha).content(bytes))
+            .andExpect(status().isOk)
+        postJson("/v1/workers/$workerId/jobs/$id/output-finalization", WORKER_TOKEN, FinalizeAcceptedOutputRequest(attempt, token, second.path("outputAttemptId").asText()))
+        val result = getJson("/v1/jobs/$id/result", PRODUCT_TOKEN)
+        assertThat(result.path("artifacts")).hasSize(1)
+        val transcript = getJson("/v1/management/jobs/$id/transcript", ADMIN_TOKEN)
+        assertThat(transcript.path("items")).hasSize(1)
+    }
+
+    @Test
+    fun `management lists use admin identity and expose no fencing data`() {
+        val response = getJson("/v1/management/jobs/completed?limit=30", ADMIN_TOKEN)
+        assertThat(response.has("serverTime")).isTrue()
+        assertThat(response.toString()).doesNotContain("fencingToken")
+        mvc.perform(get("/v1/management/workers").bearer(PRODUCT_TOKEN)).andExpect(status().isForbidden)
+    }
+
+    @Test
+    fun `consumer isolation and server policy boundaries fail closed`() {
         val job = postJob(PRODUCT_TOKEN, applicationRequest(UUID.randomUUID().toString(), Provider.CODEX))
         mvc.perform(get("/v1/jobs/${job.path("id").asText()}").bearer(SOFTWARE_TOKEN)).andExpect(status().isNotFound)
 
@@ -62,9 +125,10 @@ class AgentRuntimeIntegrationTest(
     fun `fake worker claims heartbeats reports progress and completes`() {
         val workerId = "fake-${UUID.randomUUID()}"
         val bootId = UUID.randomUUID().toString()
-        val job = postJob(PRODUCT_TOKEN, applicationRequest(UUID.randomUUID().toString(), Provider.CODEX).copy(priority = 100))
-        postJson("/v1/workers/register", WORKER_TOKEN, WorkerRegistrationRequest(workerId, bootId, setOf("application-work"), setOf(Provider.CODEX), emptySet()))
-        val claim = postJson("/v1/workers/$workerId/claims", WORKER_TOKEN, ClaimRequest(bootId, setOf("application-work"), setOf(Provider.CODEX), emptySet(), 0))
+        val workerModel = "worker-${UUID.randomUUID()}"
+        val job = postJob(PRODUCT_TOKEN, applicationRequest(UUID.randomUUID().toString(), Provider.CODEX).copy(model = workerModel))
+        postJson("/v1/workers/register", WORKER_TOKEN, WorkerRegistrationRequest(workerId, bootId, setOf("application-work"), setOf(Provider.CODEX), setOf(workerModel)))
+        val claim = postJson("/v1/workers/$workerId/claims", WORKER_TOKEN, ClaimRequest(bootId, setOf("application-work"), setOf(Provider.CODEX), setOf(workerModel), 0))
         assertThat(claim.path("job").path("id").asText()).isEqualTo(job.path("id").asText())
         val attempt = claim.path("attemptId").asText()
         val token = claim.path("fencingToken").asText()
@@ -82,9 +146,10 @@ class AgentRuntimeIntegrationTest(
     fun `invalid fencing token cannot change a running job`() {
         val workerId = "fence-${UUID.randomUUID()}"
         val bootId = UUID.randomUUID().toString()
-        val job = postJob(PRODUCT_TOKEN, applicationRequest(UUID.randomUUID().toString(), Provider.CLAUDE))
-        postJson("/v1/workers/register", WORKER_TOKEN, WorkerRegistrationRequest(workerId, bootId, setOf("application-work"), setOf(Provider.CLAUDE), emptySet()))
-        val claim = postJson("/v1/workers/$workerId/claims", WORKER_TOKEN, ClaimRequest(bootId, setOf("application-work"), setOf(Provider.CLAUDE), emptySet(), 0))
+        val workerModel = "fence-${UUID.randomUUID()}"
+        val job = postJob(PRODUCT_TOKEN, applicationRequest(UUID.randomUUID().toString(), Provider.CLAUDE).copy(model = workerModel))
+        postJson("/v1/workers/register", WORKER_TOKEN, WorkerRegistrationRequest(workerId, bootId, setOf("application-work"), setOf(Provider.CLAUDE), setOf(workerModel)))
+        val claim = postJson("/v1/workers/$workerId/claims", WORKER_TOKEN, ClaimRequest(bootId, setOf("application-work"), setOf(Provider.CLAUDE), setOf(workerModel), 0))
         mvc.perform(
             post("/v1/workers/$workerId/jobs/${job.path("id").asText()}/complete").bearer(WORKER_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
@@ -92,9 +157,65 @@ class AgentRuntimeIntegrationTest(
         ).andExpect(status().isConflict)
     }
 
+    @Test
+    fun `removed request fields are rejected`() {
+        val body = """{
+          "jobKind":"APPLICATION_WORK",
+          "idempotencyKey":"${UUID.randomUUID()}",
+          "provider":"CODEX",
+          "model":"test-model",
+          "prompt":"Return JSON",
+          "jobKey":"legacy"
+        }""".trimIndent()
+        mvc.perform(post("/v1/jobs").bearer(PRODUCT_TOKEN).contentType(MediaType.APPLICATION_JSON).content(body))
+            .andExpect(status().isBadRequest)
+    }
+
+    @Test
+    fun `attachments and environment catalog are bounded and values never appear`() {
+        val workerId = "catalog-${UUID.randomUUID()}"; val bootId = UUID.randomUUID().toString()
+        postJson("/v1/workers/register", WORKER_TOKEN, WorkerRegistrationRequest(
+            workerId, bootId, setOf("application-work"), setOf(Provider.CODEX), emptySet(), setOf("HKH__SCREENSHOT_USER"), 1,
+        ))
+        val catalog = getJson("/v1/environment-keys?project=HKH", PRODUCT_TOKEN)
+        assertThat(catalog.single().path("name").asText()).isEqualTo("HKH__SCREENSHOT_USER")
+        assertThat(catalog.toString()).doesNotContain("password", "secret-value")
+
+        val png = byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10, 0)
+        val valid = applicationRequest(UUID.randomUUID().toString(), Provider.CODEX).copy(
+            attachments = listOf(InputAttachmentRequest("screen.png", "image/png", java.util.Base64.getEncoder().encodeToString(png))),
+        )
+        mvc.perform(post("/v1/jobs").bearer(PRODUCT_TOKEN).contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsBytes(valid)))
+            .andExpect(status().isAccepted)
+        val unsafe = valid.copy(idempotencyKey = UUID.randomUUID().toString(), attachments = listOf(InputAttachmentRequest("../screen.png", "image/png", java.util.Base64.getEncoder().encodeToString(png))))
+        mvc.perform(post("/v1/jobs").bearer(PRODUCT_TOKEN).contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsBytes(unsafe)))
+            .andExpect(status().isBadRequest)
+    }
+
+    @Test
+    fun `server fences every operation after hard attempt deadline`() {
+        val workerId = "deadline-${UUID.randomUUID()}"; val bootId = UUID.randomUUID().toString(); val model = "deadline-model-${UUID.randomUUID()}"
+        val job = postJob(PRODUCT_TOKEN, applicationRequest(UUID.randomUUID().toString(), Provider.CODEX).copy(model = model, executionTimeoutSeconds = 30))
+        postJson("/v1/workers/register", WORKER_TOKEN, WorkerRegistrationRequest(workerId, bootId, setOf("application-work"), setOf(Provider.CODEX), setOf(model)))
+        val claim = postJson("/v1/workers/$workerId/claims", WORKER_TOKEN, ClaimRequest(bootId, setOf("application-work"), setOf(Provider.CODEX), setOf(model), 0))
+        val attempt = claim.path("attemptId").asText(); val token = claim.path("fencingToken").asText(); val id = job.path("id").asText()
+        assertThat(Instant.parse(claim.path("attemptDeadline").asText())).isAfter(Instant.now())
+        jdbc.update("UPDATE runtime_attempt SET attempt_deadline=DATEADD('SECOND', -1, CURRENT_TIMESTAMP) WHERE id=?", attempt)
+        mvc.perform(post("/v1/workers/$workerId/jobs/$id/heartbeat").bearer(WORKER_TOKEN).contentType(MediaType.APPLICATION_JSON)
+            .content(mapper.writeValueAsBytes(HeartbeatRequest(attempt, token, bootId))))
+            .andExpect(status().isConflict)
+        mvc.perform(post("/v1/workers/$workerId/jobs/$id/transcript").bearer(WORKER_TOKEN).contentType(MediaType.APPLICATION_JSON)
+            .content(mapper.writeValueAsBytes(AppendTranscriptRequest(attempt, token, "late", 1, TranscriptKind.AGENT_TEXT, "late"))))
+            .andExpect(status().isConflict)
+    }
+
     private fun applicationRequest(key: String, provider: Provider) = CreateJobRequest(
-        JobKind.APPLICATION_WORK, key, "product-factory-default", key, provider, "test-model", "1", "1",
-        "Return a test answer", mapper.createObjectNode(), mapper.readTree("""{"type":"object","required":["answer"],"properties":{"answer":{"type":"string"}}}"""),
+        jobKind = JobKind.APPLICATION_WORK,
+        idempotencyKey = key,
+        provider = provider,
+        model = "test-model",
+        prompt = "Return a test answer",
+        responseSchema = mapper.readTree("""{"type":"object","required":["answer"],"properties":{"answer":{"type":"string"}}}"""),
     )
 
     private fun postJob(token: String, body: Any) = postJson("/v1/jobs", token, body)
@@ -126,5 +247,6 @@ class AgentRuntimeIntegrationTest(
         const val PRODUCT_TOKEN = "local-product-factory-token"
         const val SOFTWARE_TOKEN = "local-software-factory-token"
         const val WORKER_TOKEN = "local-worker-token"
+        const val ADMIN_TOKEN = "local-admin-token"
     }
 }

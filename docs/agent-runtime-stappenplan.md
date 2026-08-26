@@ -2,7 +2,14 @@
 
 ## Status
 
-Dit is het uitvoerbare vervolgplan voor Agent Runtime na de eerste platformrelease. Die release
+Dit is het uitgevoerde vervolgplan voor Agent Runtime na de eerste platformrelease. De fasen 0 tot
+en met 8 en de bouw-, test-, documentatie- en observabilityonderdelen van fase 9 zijn op 25 augustus
+2026 geïmplementeerd en lokaal geverifieerd. De resterende releasehandelingen zijn extern: Claude
+opnieuw authenticeren, immutable images publiceren, een OpenShift-project selecteren, acceptatie
+uitrollen en controleren, een databasebackup maken en daarna productie uitrollen. De actuele
+verificatiestatus staat in [release-verificatie.md](release-verificatie.md).
+
+De eerste platformrelease
 bevat al het duurzame control plane, de lokale worker, Codex- en Claude-uitvoering,
 `REPOSITORY_WORK`, centrale mocks, OpenShift-deployment en een compacte technische monitor.
 
@@ -11,21 +18,20 @@ Factory, Newsfeed, HKH of een andere consument hoort in het stappenplan van die 
 hier niet meer tussen. Agent Runtime levert wel de generieke contracten en API's die zulke
 consumenten nodig hebben.
 
-De nog te bouwen wijzigingen komen uit drie leidende specificaties:
+De uitgevoerde wijzigingen komen uit drie leidende specificaties:
 
-1. [Vereenvoudigd `APPLICATION_WORK`-contract v2](application-work-v2.md);
+1. [Vereenvoudigd `APPLICATION_WORK`-contract](application-work.md);
 2. [Betrouwbare JSON-resultaten](implementatieplan-betrouwbare-json-resultaten.md);
 3. [Eenvoudige beheerinterface](beheerinterface.md).
 
-De huidige code implementeert contract v1. V1 blijft beschikbaar totdat de Runtime aantoonbaar geen
-v1-verkeer meer ontvangt en de eigenaar expliciet besluit het contract uit te faseren. Nieuwe
-databasevelden en interne routes worden daarom eerst achterwaarts compatibel toegevoegd.
+De huidige API heeft nog geen consumers. Het bestaande contract wordt daarom rechtstreeks breaking
+vereenvoudigd. Er komt geen parallel v2-contract, compatibiliteitsroute of overgangsmodel.
 
 ## Doel
 
 Na uitvoering van dit plan kan Agent Runtime:
 
-- een minimale v2-`APPLICATION_WORK`-aanvraag met één complete prompt uitvoeren;
+- een minimale `APPLICATION_WORK`-aanvraag met één complete prompt uitvoeren;
 - lokaal beschikbare projectcredentials uitsluitend bij naam ontdekken en per attempt begrensd
   beschikbaar stellen;
 - kleine inputattachments veilig materialiseren en outputartifacts als bestanden verzamelen;
@@ -43,8 +49,8 @@ Na uitvoering van dit plan kan Agent Runtime:
   opnemen.
 - Spring AI introduceren of Codex CLI en Claude Code vervangen.
 - Provider- of modelkeuze stilzwijgend wijzigen na een fout.
-- `REPOSITORY_WORK` opnieuw ontwerpen; alleen gedeelde infrastructuur mag daarvoor achterwaarts
-  compatibel worden uitgebreid.
+- `REPOSITORY_WORK` opnieuw ontwerpen; alleen gedeelde infrastructuur mag daarvoor worden
+  uitgebreid.
 - Een agent Git-publicatiecredentials, Runtime-secrets of providercredentials geven.
 - Verborgen chain-of-thought verzamelen of reconstrueren.
 - Een configuratie- of bedieningsconsole bouwen. De nieuwe frontend is alleen een monitor.
@@ -81,45 +87,46 @@ Deze regels gelden in iedere fase en worden niet per story opnieuw onderhandelba
 De fasen worden in onderstaande volgorde uitgevoerd. Een fase mag technisch in meerdere pull
 requests worden verdeeld, maar haar Definition of Done is de poort naar de volgende fase.
 
-## Fase 0 — Contractconsistentie en compatibele basis
+## Fase 0 — Huidige contract direct vereenvoudigen
 
 ### Resultaat
 
-Een vastgelegde contract- en migratiebasis waarop de overige wijzigingen zonder breuk van v1
-kunnen worden gebouwd.
+Eén klein huidig contract zonder legacyvelden of parallelle API-versie.
 
 ### Werk
 
-- Leg in OpenAPI en Kotlin-contracttypen een nieuwe `/v2`-familie vast voor
-  `APPLICATION_WORK`.
-- Gebruik in v2 alleen:
-  - verplicht: `jobKind`, `idempotencyKey`, `provider`, `model`, `prompt` en
-    `executionTimeoutSeconds`;
-  - optioneel: `responseSchema`, `environmentKeys`, `attachments` en `repositorySnapshot`.
-- Neem `jobProfile`, `jobKey`, `configurationVersion`, `instructionVersion`, `instructions`,
-  `input`, `resourceRequests`, `consumerContext`, `priority` en `maxAttempts` niet over in de
-  v2-aanvraag.
-- Accepteer voor v2 uitsluitend `APPLICATION_WORK`. Houd de bestaande gecontroleerde
-  `REPOSITORY_WORK`-aanvraag onder v1 in stand totdat daarvoor afzonderlijk een versieplan bestaat.
+- Pas de bestaande `/v1/jobs`-OpenAPI, Kotlin-contracttypen en implementatie rechtstreeks aan; voeg
+  geen `/v2` toe.
+- Gebruik als verplichte gemeenschappelijke requestvelden alleen `jobKind`, `idempotencyKey`,
+  `provider`, `model` en `prompt`.
+- Houd `responseSchema`, `executionTimeoutSeconds`, `repositorySnapshot` en de gecontroleerde
+  `repositoryRequest` optioneel of jobsoortafhankelijk.
+- Verwijder profiel, applicatiejobkey, configuratieversie, instructieversie, losse
+  instructies/input, vrije resourceaanvragen en consumercontext uit contract, database, mocks,
+  worker, monitor en tests.
+- Verwijder `priority` en `maxAttempts` uit de aanvraag. Bewaar technische retrylimiet en prioriteit
+  uitsluitend als interne, server-side configuratie en status.
+- Houd zowel `APPLICATION_WORK` als de bestaande gecontroleerde `REPOSITORY_WORK`-aanvraag op
+  dezelfde huidige API.
 - Bevries provider, model, prompt, responseschema, time-out, environmentkeynamen, attachments en
   repositorysnapshot bij het aanmaken van de job.
 - Laat prioriteit, technische retries, maximale outputpogingen, quota, tools, netwerkbeleid,
   attachmentlimieten, artifactlimieten en zichtbare projectprefixes uit serverpolicy per
   geauthenticeerde consument volgen.
 - Maak foutresponses voor contract- en policyafwijzingen stabiel en versieerbaar.
-- Voeg een migratietestmatrix toe waarin v1- en v2-jobs gelijktijdig kunnen worden opgeslagen,
-  geclaimd, bevraagd en afgerond.
-- Houd bestaande opgeslagen v1-jobs en de oude `/complete`-route leesbaar en uitvoerbaar.
-- Gebruik in de monitor voor v2 een servergegenereerde technische naam op basis van applicatie,
+- Voeg een Flywaymigratie toe die de verwijderde job- en mockkolommen uit een bestaande database
+  verwijdert. Er hoeft geen oude request-JSON te worden gemigreerd.
+- Weiger onbekende JSON-requestvelden zodat legacyvelden niet stilzwijgend worden genegeerd.
+- Gebruik in de monitor een servergegenereerde technische naam op basis van applicatie,
   jobsoort en verkort job-ID. Voeg geen vrij taaknaam- of correlatieveld toe om de verwijderde
   domeincontext alsnog terug te brengen.
 
 ### Definition of Done
 
-- De gepubliceerde `/v2`-OpenAPI beschrijft ieder veld, limiet, foutgeval en voorbeeld volledig.
-- Een v2-aanvraag met een verwijderd v1-veld wordt afgewezen of het onbekende veld wordt volgens
-  één expliciet gedocumenteerde strictnessregel behandeld.
-- V1-contracttests en opgeslagen v1-fixtures blijven slagen.
+- De gepubliceerde huidige OpenAPI beschrijft ieder veld, limiet, foutgeval en voorbeeld volledig.
+- Een aanvraag met een verwijderd of onbekend veld wordt als clientfout afgewezen.
+- Een verse database en een bestaande database op de vorige Flywayversie komen op hetzelfde nieuwe
+  schema uit.
 - Een payload kan geen provider, model, prefix, tool, retry, prioriteit of quotum buiten de
   serverpolicy activeren.
 
@@ -148,7 +155,7 @@ kunnen zien welke namen beschikbaar zijn en de scheduler een geschikte worker ka
 - Bewaar per worker naam, laatst gezien tijdstip en actuele beschikbaarheid. Een offline worker
   maakt een naam historisch bekend maar niet beschikbaar.
 - Voeg een beveiligde, op tokenpolicy gefilterde catalogusquery toe, conceptueel
-  `GET /v2/environment-keys?project=<PREFIX>`.
+  `GET /v1/environment-keys?project=<PREFIX>`.
 - Retourneer per catalogusitem minimaal naam, projectprefix, beschikbaarheid, aantal passende
   online workers en `lastSeenAt`.
 - Laat de scheduler alleen een worker selecteren die provider, model, jobsoort en alle gevraagde
@@ -400,7 +407,7 @@ zonder technische retries en outputpogingen door elkaar te halen.
 - Een geldig resultaat is na acceptatie onveranderlijk.
 - `REPOSITORY_WORK` wordt niet opnieuw door een agent uitgevoerd vanwege resultaatvalidatie.
 
-## Fase 6 — Centrale mocks voor v2 en JSON-correctie
+## Fase 6 — Centrale mocks en JSON-correctie
 
 ### Resultaat
 
@@ -409,10 +416,10 @@ deterministisch te testen.
 
 ### Werk
 
-- Houd de bestaande voorbereide `result: JsonNode` achterwaarts compatibel.
+- Houd de eenvoudige voorbereide `result: JsonNode` naast de nieuwe kandidaatreeks beschikbaar.
 - Voeg een begrensde `outputSequence: List<String>` toe voor ruwe kandidaatreeksen.
-- Gebruik voor v2-mockselectie een afzonderlijke beveiligde testcorrelatie buiten het minimale
-  productiecontract; voeg daarvoor geen `jobKey` aan iedere productiejob toe.
+- Gebruik voor mockselectie een afzonderlijke beveiligde testcorrelatie buiten het minimale
+  productiecontract; voeg daarvoor geen applicatiejobkey aan iedere productiejob toe.
 - Laat de mockexecutor dezelfde servernormalisatie, schemavalidatie, outputpogingadministratie en
   foutcodes gebruiken als echte `APPLICATION_WORK`-uitvoering.
 - Maak voor een mock geen workerattempt, taakdirectory, credentialselectie, deadlinelease of
@@ -426,7 +433,7 @@ deterministisch te testen.
   - drie afwijzingen en uitgeput budget;
   - te grote kandidaat;
   - schemafout vóór jobaanmaak;
-  - bestaande v1-mockresultaten.
+  - bestaande voorbereide mockresultaten.
 - Consumeer nooit kandidaten boven het maximumbudget. Laat een te korte reeks expliciet falen in
   plaats van wachten.
 - Laat mockartifacts dezelfde naam-, type-, hash- en groottelimieten doorlopen als echte artifacts.
@@ -473,8 +480,8 @@ incrementeel tonen, zonder verborgen redeneerstappen te verzinnen.
   actieve/terminale indicatie bevatten.
 - Maak lange transcripten in beide richtingen pagineerbaar zodat een beheerder altijd het eerste en
   laatste bewaarde deel kan bereiken.
-- Zoek op job-ID, servergegenereerde technische naam, applicatie en alleen correlatie die in het
-  betreffende oude contract al veilig aanwezig is. Introduceer voor v2 geen nieuwe domeincorrelatie.
+- Zoek op job-ID, servergegenereerde technische naam en applicatie. Introduceer geen nieuwe
+  domeincorrelatie.
 - Geef workers als `ONLINE`, `STALE` of `OFFLINE` terug met laatste heartbeat, capaciteit,
   providers, modellen, jobsoorten en actuele technische jobnaam.
 - Toon bij outputpogingen pogingnummer, maximum, provider/model, veilige foutcode en begrensde
@@ -578,21 +585,19 @@ De drie wijzigingen zijn gezamenlijk herstelbaar, meetbaar en achterwaarts compa
 - Laat ontbrekende lokale provideraccounts de geautomatiseerde build niet laten falen.
 - Voer minimaal `mvn -B --no-transfer-progress verify`, containerbuilds, OpenAPI-validatie,
   Modulith-/ArchUnitcontroles, Flutter-tests en beide Kustomize-validaties uit.
-- Werk README, architectuur, deploymentdocumentatie en runbook bij met v2, credentialbestanden,
+- Werk README, architectuur, deploymentdocumentatie en runbook bij met het vereenvoudigde contract, credentialbestanden,
   timeout, outputpogingen, transcript, monitor, foutcodes en herstelprocedures.
-- Rol eerst uit naar acceptatie met v1 en v2 naast elkaar. Controleer mocks, echte smokejobs,
-  metrics, redactie en database-/rollbackcompatibiliteit.
-- Rol productie uit met dezelfde immutable server-, worker- en execution-imageversie.
-- Gebruik uitsluitend voorwaartse Flywaymigraties die compatibel blijven met de ondersteunde
-  rollbackversie.
-- Houd v1 beschikbaar totdat telemetry geen v1-verkeer meer toont en de eigenaar een afzonderlijk
-  verwijderbesluit heeft genomen. Het omzetten van consumers staat niet in dit plan.
+- Rol eerst uit naar acceptatie en controleer contractafwijzingen, migratie, mocks, echte smokejobs,
+  metrics en redactie.
+- Maak vóór productie een databasebackup en rol daarna dezelfde immutable server-, worker- en
+  execution-imageversie uit. Deze release is bewust contract- en databaseschemabreking; een oude
+  serverversie is na de kolomverwijdering geen geldige applicatierollback.
 
 ### Definition of Done
 
 - Alle geautomatiseerde verificaties en beide provider-smokes slagen, of het ontbreken van een
   lokaal provideraccount is expliciet vastgelegd zonder een test te faken.
-- Een rollback van de applicatieversie vereist geen neerwaartse databasemigratie.
+- De breaking database-upgrade en de herstelroute via backup zijn in acceptatie geoefend.
 - Runbookscenario's bestaan voor credentialbestand afgewezen, environmentkey niet beschikbaar,
   JSON-pogingen uitgeput, harde time-out, transcriptopslag vol en mislukte artifactupload.
 - Productie weigert mocks, bewaart geen projectcredentialwaarden en accepteert geen laat of
@@ -602,8 +607,9 @@ De drie wijzigingen zijn gezamenlijk herstelbaar, meetbaar en achterwaarts compa
 
 Deze stories vormen de aanbevolen pull-requestvolgorde:
 
-1. Publiceer v2-OpenAPI, Kotlin-contracten, strictnessregels en compatibiliteitsfixtures.
-2. Voeg v2-opslagmapping en serverpolicy voor provider, model, retry, prioriteit, tools en prefixes
+1. Vereenvoudig de huidige OpenAPI, Kotlin-contracten, opslag, worker, mocks en monitor breaking en
+   voeg strictness- en migratietests toe.
+2. Voeg serverpolicy voor provider, model, retry, prioriteit, tools en prefixes
    toe.
 3. Splits lokale secretbestanden en bouw veilige parsing plus workerregistratie van alleen namen.
 4. Bouw environmentcatalogus en capability-/keygebaseerde schedulerselectie.
@@ -614,7 +620,7 @@ Deze stories vormen de aanbevolen pull-requestvolgorde:
 9. Vervang de eenvoudige JSON-schemavalidator en valideer schema's vóór jobaanmaak.
 10. Voeg duurzame outputpogingen en de gefencete worker-API toe.
 11. Splits provideradapters en bouw de directe self-correction-loop.
-12. Breid de centrale mock uit met ruwe kandidaatreeksen en v2-fixtures.
+12. Breid de centrale mock uit met ruwe kandidaatreeksen en contractfixtures.
 13. Voeg duurzame geredigeerde transcriptingest en managementquery's toe.
 14. Bouw de vijf Flutter-monitorviews tegen de echte API.
 15. Voeg volledige systeemtests, metrics, runbooks en acceptatie-/productierelease toe.
@@ -626,7 +632,7 @@ wanneer alleen het happy path werkt.
 
 | Specificatieonderdeel | Fase |
 |---|---|
-| Minimale v2-aanvraag, verwijderde v1-velden en serverpolicy | 0 |
+| Minimale huidige aanvraag, verwijderde legacyvelden en serverpolicy | 0 |
 | `secrets.env`, `project-credentials.env`, catalogus en claimselectie | 1 |
 | Taakdirectory, `available-tools.md`, Base64-input en file-based output | 2 |
 | Harde uitvoeringstime-out en recovery | 3 |
