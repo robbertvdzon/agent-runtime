@@ -66,7 +66,7 @@ data class WorkerConfig(
 
 fun main(args: Array<String>) {
     val config = WorkerConfig.load()
-    SecretRedactor.configure(config.projectCredentials.values + listOfNotNull(config.claudeOauthToken))
+    SecretRedactor.configure(redactionValues(config.projectCredentials, config.claudeOauthToken))
     config.workRoot.createDirectories()
     val mapper = jacksonObjectMapper().registerModule(JavaTimeModule())
     val client = RuntimeClient(config, mapper)
@@ -91,14 +91,14 @@ fun main(args: Array<String>) {
             val refreshed = try { ProjectCredentials.load(config.projectCredentialsPath) } catch (error: Exception) {
                 val hadKeys = config.projectCredentials.isNotEmpty()
                 config.projectCredentials.clear()
-                SecretRedactor.configure(listOfNotNull(config.claudeOauthToken))
+                SecretRedactor.configure(redactionValues(emptyMap(), config.claudeOauthToken))
                 if (hadKeys) register()
                 throw error
             }
             if (refreshed != config.projectCredentials) {
                 val keysChanged = refreshed.keys != config.projectCredentials.keys
                 config.projectCredentials.clear(); config.projectCredentials.putAll(refreshed)
-                SecretRedactor.configure(refreshed.values + listOfNotNull(config.claudeOauthToken))
+                SecretRedactor.configure(redactionValues(refreshed, config.claudeOauthToken))
                 if (keysChanged) register()
             }
             val claimed = client.claim(ClaimRequest(bootId, capabilities, providers, emptySet(), 20))
@@ -210,7 +210,9 @@ class JobExecutor(
             if (exit != 0) throw JobFailure("ENGINE_FAILED", "Provider process exited with code $exit.", exit in setOf(124, 137))
             if (!resultPath.exists() || resultPath.fileSize() > 5L * 1024 * 1024) throw JobFailure("RESULT_TOO_LARGE", "Provider did not produce a bounded candidate result.", false)
             val candidate = providerAdapter(claim.job.provider).candidate(resultPath)
-            if (SecretRedactor.contains(candidate)) throw JobFailure("SECRET_EXPOSURE_BLOCKED", "Provider output contained a locally known project credential value.", false)
+            if (SecretRedactor.contains(candidate, sensitiveValues(claim))) {
+                throw JobFailure("SECRET_EXPOSURE_BLOCKED", "Provider output contained a sensitive value selected for this job.", false)
+            }
             client.transcript(claim, transcriptSequence(claim, transcriptOffset++), TranscriptKind.PROVIDER_RESULT, candidate.take(100_000))
             val response = client.submitOutputCandidate(claim, output.outputAttemptId, candidate)
             when (response.status) {
@@ -287,6 +289,11 @@ class JobExecutor(
             another AI request, transcript, result or artifact. Write the structured result to
             `/job/output/result.json` and evidence files directly to `/job/output/artifacts`.
 
+            Shell and tool output is part of the provider conversation. Never display, dump or inspect
+            secrets.env with cat, od, printenv, env, set -x, shell tracing or equivalent commands. Source
+            only the specifically needed values with tracing disabled and ensure commands print only the
+            non-sensitive operation result.
+
             A selected key ending in `__OPENSHIFT_KUBECONFIG_BASE64` contains a Base64-encoded
             kubeconfig. Decode its value without printing it to a mode-0600 file under `/tmp`, set
             `KUBECONFIG` to that file, and delete it when the OpenShift operation is complete.
@@ -361,7 +368,9 @@ class JobExecutor(
             total += size
             if (total > 25L * 1024 * 1024) throw JobFailure("JOB_ARTIFACT_LIMIT", "Artifacts exceed 25 MB.", false)
             val content = path.readBytes()
-            if (SecretRedactor.contains(content)) throw JobFailure("SECRET_EXPOSURE_BLOCKED", "An artifact contained a locally known project credential value.", false)
+            if (SecretRedactor.contains(content, sensitiveValues(claim))) {
+                throw JobFailure("SECRET_EXPOSURE_BLOCKED", "An artifact contained a sensitive value selected for this job.", false)
+            }
             val sha256 = java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content))
             client.uploadArtifact(claim, path.fileName.toString(), detectMime(path), sha256, content)
         }
@@ -446,6 +455,10 @@ class JobExecutor(
         Never copy values from /job/secrets/secrets.env into a provider request, transcript, result, or artifact.
         ${if (claim.job.jobKind == JobKind.APPLICATION_WORK) "Write only the complete JSON result to /job/output/result.json and satisfy /job/input/response-schema.json when it exists. Write evidence files directly to /job/output/artifacts." else "Make the requested changes in /work. Do not commit, push, create a pull request, or read credentials; the worker owns publication."}
     """.trimIndent()
+
+    private fun sensitiveValues(claim: ClaimedJob): List<String> =
+        selectedSensitiveValues(claim.request.environmentKeys, config.projectCredentials) +
+            if (claim.job.provider == Provider.CLAUDE) listOfNotNull(config.claudeOauthToken) else emptyList()
 
     private fun providerAdapter(provider: Provider): ProviderAdapter = when (provider) {
         Provider.CODEX -> CodexProviderAdapter(config.codexCredentials)
@@ -683,11 +696,40 @@ object SecureEnvFiles {
 
 object SecretRedactor {
     @Volatile private var values: List<String> = emptyList()
-    fun configure(secretValues: Collection<String>) { values = secretValues.filter { it.length >= 4 }.distinct().sortedByDescending(String::length) }
+    fun configure(secretValues: Collection<String>) { values = protectedValues(secretValues) }
     fun clean(value: String): String = values.fold(value) { current, secret -> current.replace(secret, "[REDACTED]") }
     fun contains(value: String): Boolean = values.any(value::contains)
     fun contains(value: ByteArray): Boolean = values.any { secret -> value.indexOfSubsequence(secret.toByteArray()) >= 0 }
+    fun contains(value: String, secretValues: Collection<String>): Boolean = protectedValues(secretValues).any(value::contains)
+    fun contains(value: ByteArray, secretValues: Collection<String>): Boolean = protectedValues(secretValues)
+        .any { secret -> value.indexOfSubsequence(secret.toByteArray()) >= 0 }
+
+    private fun protectedValues(secretValues: Collection<String>): List<String> =
+        secretValues.filter { it.length >= 4 }.distinct().sortedByDescending(String::length)
 }
+
+object ProjectCredentialPolicy {
+    private val sensitiveSegments = setOf("PASSWORD", "TOKEN", "SECRET", "KEY", "KUBECONFIG", "CREDENTIAL", "CREDENTIALS")
+    private val sensitiveUrlParameter = Regex("(?i)(?:[?&]|^)(?:password|token|secret|api[_-]?key)=")
+
+    fun isSensitive(key: String, value: String): Boolean {
+        val name = key.substringAfter("__", key)
+        if (name.split('_').any(sensitiveSegments::contains)) return true
+        if (!name.endsWith("URL")) return false
+        if (sensitiveUrlParameter.containsMatchIn(value)) return true
+        val uriValue = value.removePrefix("jdbc:")
+        return runCatching { !URI.create(uriValue).rawUserInfo.isNullOrBlank() }.getOrDefault(false)
+    }
+}
+
+fun selectedSensitiveValues(environmentKeys: Collection<String>, projectCredentials: Map<String, String>): List<String> =
+    environmentKeys.mapNotNull { key ->
+        projectCredentials[key]?.takeIf { value -> ProjectCredentialPolicy.isSensitive(key, value) }
+    }
+
+fun redactionValues(projectCredentials: Map<String, String>, providerSecret: String?): List<String> =
+    projectCredentials.mapNotNull { (key, value) -> value.takeIf { ProjectCredentialPolicy.isSensitive(key, it) } } +
+        listOfNotNull(providerSecret)
 
 private fun ByteArray.indexOfSubsequence(needle: ByteArray): Int {
     if (needle.isEmpty() || needle.size > size) return -1

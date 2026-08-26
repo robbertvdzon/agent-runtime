@@ -146,8 +146,15 @@ chmod 600 project-credentials.env
 ```
 
 Namen volgen `PROJECT__NAAM`. De worker publiceert alleen de namen aan de server en injecteert per
-attempt uitsluitend de expliciet aangevraagde subset. Waarden blijven lokaal. OpenShift-toegang
-wordt als Base64-kubeconfig opgeslagen, zodat de job hem binnen de container kan materialiseren.
+attempt uitsluitend de expliciet aangevraagde subset. Waarden komen niet in de serverqueue of
+catalogus. OpenShift-toegang wordt als Base64-kubeconfig opgeslagen, zodat de job hem binnen de
+container kan materialiseren. Een service op de laptop gebruikt vanuit Docker
+`host.docker.internal` in plaats van `localhost`, bijvoorbeeld in een database-URL.
+
+De worker behandelt keys met onder meer `PASSWORD`, `TOKEN`, `SECRET`, `KEY`, `KUBECONFIG` of
+`CREDENTIALS` als gevoelig. Een database-URL met userinfo of een gevoelige queryparameter is ook
+gevoelig. Alleen geselecteerde gevoelige waarden worden in resultaten en artifacts geblokkeerd;
+gewone configuratie zoals usernames, schema's, URL's zonder credentials en booleans mag terugkomen.
 
 ### Bouwen en installeren
 

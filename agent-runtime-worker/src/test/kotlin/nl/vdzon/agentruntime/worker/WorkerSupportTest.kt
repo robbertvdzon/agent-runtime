@@ -63,6 +63,39 @@ class WorkerSupportTest {
     }
 
     @Test
+    fun `credential policy distinguishes secrets from ordinary project configuration`() {
+        assertThat(ProjectCredentialPolicy.isSensitive("PF__PASSWORD", "value")).isTrue()
+        assertThat(ProjectCredentialPolicy.isSensitive("PF__OPENSHIFT_KUBECONFIG_BASE64", "value")).isTrue()
+        assertThat(ProjectCredentialPolicy.isSensitive("PF__FIREBASE_CREDENTIALS_JSON", "value")).isTrue()
+        assertThat(ProjectCredentialPolicy.isSensitive("PF__DATABASE_URL", "postgresql://user:password@localhost/db")).isTrue()
+        assertThat(ProjectCredentialPolicy.isSensitive("PF__DATABASE_URL", "postgresql://database.example/db")).isFalse()
+        assertThat(ProjectCredentialPolicy.isSensitive("PF__USERNAME", "robbert")).isFalse()
+        assertThat(ProjectCredentialPolicy.isSensitive("PF__DATABASE_SCHEMA", "software_factory")).isFalse()
+        assertThat(ProjectCredentialPolicy.isSensitive("PF__COOKIE_SECURE", "true")).isFalse()
+    }
+
+    @Test
+    fun `output blocking uses only sensitive values selected for the current job`() {
+        val credentials = mapOf(
+            "PF__USERNAME" to "robbert",
+            "PF__PASSWORD" to "robbert",
+            "PF__COOKIE_SECURE" to "true",
+            "PF__DATABASE_SCHEMA" to "software_factory",
+        )
+        val ordinaryValues = selectedSensitiveValues(
+            listOf("PF__USERNAME", "PF__COOKIE_SECURE", "PF__DATABASE_SCHEMA"),
+            credentials,
+        )
+        assertThat(ordinaryValues).isEmpty()
+        assertThat(SecretRedactor.contains("worker robberts-macbook is online", ordinaryValues)).isFalse()
+        assertThat(SecretRedactor.contains("result was true", ordinaryValues)).isFalse()
+
+        val selectedPassword = selectedSensitiveValues(listOf("PF__PASSWORD"), credentials)
+        assertThat(selectedPassword).containsExactly("robbert")
+        assertThat(SecretRedactor.contains("worker robberts-macbook is online", selectedPassword)).isTrue()
+    }
+
+    @Test
     fun `journal encrypts fencing token and can recover claim`(@TempDir root: Path) {
         val mapper = jacksonObjectMapper().registerModule(JavaTimeModule())
         val request = CreateJobRequest(JobKind.APPLICATION_WORK, "idem", Provider.CODEX, "model", "do it")
