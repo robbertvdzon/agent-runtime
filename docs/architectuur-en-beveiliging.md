@@ -1,17 +1,11 @@
 # Architectuur en beveiliging
 
-Voor `APPLICATION_WORK` geldt aanvullend het doelontwerp
-[Vereenvoudigd APPLICATION_WORK-contract](application-work.md). Het contract houdt Runtime- en
-providercredentials buiten de agentcontainer, maar maakt een bewust
-geselecteerde subset uit lokaal `project-credentials.env` wel leesbaar voor de agent. Dit is voor
-deze persoonlijke projecten een expliciet geaccepteerde risicoafweging en geen algemene veilige
-standaard voor multitenant- of bedrijfscredentials.
+## Platformgrens
 
-## Grens van het platform
-
-Agent Runtime kent alleen technische uitvoering. `APPLICATION_WORK` bevat één complete opaque
-prompt; `REPOSITORY_WORK` voegt een vooraf bekende repositoryalias toe. Productnamen, rollen,
-epics, stories en bugs hebben voor dit platform geen betekenis.
+Agent Runtime verwerkt technische AI-uitvoering. Applicatiespecifieke rollen, sessies, stories en
+andere domeinentiteiten staan niet in het Runtime-contract. Een `APPLICATION_WORK`-job bevat één
+complete prompt; een `REPOSITORY_WORK`-job voegt een geregistreerde repositoryalias en
+publicatie-instructie toe.
 
 ```mermaid
 flowchart LR
@@ -19,98 +13,116 @@ flowchart LR
   SF[Software Factory] -->|REPOSITORY_WORK| API
   API --> DB[(PostgreSQL)]
   API --> MOCK[Centrale mockexecutor]
-  WORKER[Laptopworker] -->|uitgaande HTTPS long-poll| API
+  WORKER[MacBook-worker] -->|uitgaande HTTPS long-poll| API
   WORKER --> CONTAINER[Execution-container]
   CONTAINER --> CODEX[Codex of Claude]
 ```
 
-De server is de enige eigenaar van queue, status, attempts, leases, retries, events, geredigeerde
-transcriptdelen en resultaten. Een consument verwerkt alleen een terminale, schema-geldige
-technische uitkomst naar zijn eigen domein. De worker kent geen consumentendatabase en de server
-bewaart geen lokale AI-credentials.
+De server is de enige eigenaar van queue, status, attempts, leases, retries, events, transcripten,
+resultaten, attachments en artifacts. De worker heeft geen toegang tot consumentendatabases. De
+server bewaart geen lokale providercredentials of projectcredentialwaarden.
 
-## Maven- en Modulithgrenzen
+## Modules
 
-- `agent-runtime-contracts` bevat uitsluitend de versieerbare externe gegevensvormen en OpenAPI.
+- `agent-runtime-contracts` bevat de externe gegevensvormen en OpenAPI-specificatie.
 - `agent-runtime-server` is de composition root. De packages `jobs`, `workers`, `mock` en `monitor`
-  zijn acyclische Modulithmodules; dit wordt in CI met ArchUnit geverifieerd.
-- `agent-runtime-worker` is een zelfstandig proces en praat alleen via HTTPS.
+  zijn acyclische Spring Modulithmodules; ArchUnit verifieert deze grenzen.
+- `agent-runtime-worker` is een zelfstandig proces dat alleen via HTTPS met de server praat.
+- `monitor-ui` wordt als statische Flutter Web-build in de server-JAR geleverd.
 
-## Authenticatie en autorisatie
+## Identiteiten en autorisatie
 
-Vier onafhankelijke bearercredentials bestaan in productie:
+Productie gebruikt vier onafhankelijke bearercredentials:
 
-| Credential | Mag |
-|---|---|
-| `AR_PRODUCT_FACTORY_TOKEN` | Alleen eigen `APPLICATION_WORK` maken en lezen |
-| `AR_SOFTWARE_FACTORY_TOKEN` | Alleen eigen `REPOSITORY_WORK` maken en lezen |
-| `AR_WORKER_TOKEN` | Worker registreren en actuele attempts bedienen |
-| `AR_ADMIN_TOKEN` | Alle veilige metadata bekijken, terminal werk opnieuw aanbieden en mocks in acceptatie beheren |
+| Credential | Autoriteit |
+| --- | --- |
+| `AR_PRODUCT_FACTORY_TOKEN` | Eigen `APPLICATION_WORK` maken, lezen, annuleren en artifacts downloaden |
+| `AR_SOFTWARE_FACTORY_TOKEN` | Eigen `REPOSITORY_WORK` maken, lezen, annuleren en artifacts downloaden |
+| `AR_WORKER_TOKEN` | Worker registreren, jobs claimen en actuele gefencete attempts bedienen |
+| `AR_ADMIN_TOKEN` | Managementmetadata lezen en terminale jobs opnieuw aanbieden |
 
-Tenant en rechten volgen uitsluitend uit het token. Payloadvelden kunnen nooit meer rechten geven.
-Er gelden vaste serverpolicies plus de voor de consument zichtbare projectprefixes. Een ongeldig
-token, environmentkey, repositoryalias, provider of werksoort faalt vóór uitvoering. Productie
-weigert `MOCKED` en stelt de Test Control API niet bruikbaar beschikbaar.
+Tenant en rechten volgen uit het token. De server valideert jobsoort, provider, model,
+repositoryalias en environmentkeyprefix tegen de vaste tenantpolicy voordat een job uitvoerbaar
+wordt. Een consument ziet jobs van een andere tenant niet; de API retourneert daarvoor dezelfde
+not-found-respons als voor een onbekende job.
 
-## Secrets
+De webmonitor gebruikt in productie Google Identity Services. De server controleert issuer,
+audience, e-mailverificatie en de `AR_ADMIN_EMAILS`-allowlist en geeft daarna een tijdelijk, met
+`AR_SESSION_SIGNING_SECRET` ondertekend beheersessietoken uit. Het Google ID-token wordt niet
+opgeslagen. Het statische beheertoken is alleen de noodroute.
 
-Het serversecretproces volgt dezelfde regels als Product Factory:
+## Serversecrets
 
-- de lokale bron voor te sealen OpenShift-serversecrets is het genegeerde `secrets.env`;
-- productie leest waarden uit één OpenShift Secret dat alleen als SealedSecret in Git staat;
-- secretwaarden komen nooit in prompts, payloads, foutmeldingen, Dockerlabels of logs;
-- `deploy/seal-secrets.sh` gebruikt alleen bestanden met mode `0600`, `mktemp` en een cleanuptrap;
-- `deploy/initialize-secrets.sh` kan de bestaande servicetokens zonder weergave overnemen en
-  genereert onafhankelijke ontbrekende waarden;
-- een productieproces start niet met lege, korte of lokale standaardtokens.
+`deploy/initialize-secrets.sh` maakt de genegeerde lokale bron `secrets.env` met mode `0600`.
+`deploy/seal-secrets.sh` zet deze waarden om naar namespacegebonden Sealed Secrets voor acceptatie
+en productie. Alleen de versleutelde manifests staan in Git.
 
-Een worker-only laptop gebruikt geen `secrets.env`. Alle interne workerconfiguratie staat in één
-gitignored `properties.env` met mode `0600`; procesenvironmentwaarden mogen die instellingen
-overschrijven. De worker scheidt dit bestand van `project-credentials.env`. Alleen namen uit dat
-tweede, eveneens gitignored en met `0600` beschermde bestand worden geregistreerd. Een job bevat
-uitsluitend namen; de worker maakt per attempt een tijdelijke subset. De bronbestanden zelf en alle
-`AR_*`-, provider- en Git-publicatiecredentials worden nooit gemount.
+Een productieproces start niet met lege, korte of `local-...`-tokens. Secretwaarden worden niet in
+prompts, payloads, foutmeldingen, Dockerlabels of logs geplaatst. Logs en voortgang worden op
+bearer- en herkenbare key/valuepatronen geredigeerd.
 
-## Execution-containers
+## Worker- en projectcredentials
 
-Het brede image bevat Codex, Claude, Git, Java/Maven, Node, Playwright/Chromium, `oc`/`kubectl` en
-PostgreSQL-tools. Aanwezigheid van tooling verleent geen autoriteit. Er geldt een vaste serverpolicy
-per consument en de job selecteert alleen geregistreerde environmentkeynamen. De worker materialiseert
-daarvan een tijdelijke, read-only `secrets.env`; het volledige lokale bronbestand wordt nooit
-gemount.
+De worker leest interne configuratie uit het gitignored `properties.env` met mode `0600`.
+Workertoken, providercredentialpaden en repository-URL's uit dit bestand zijn niet selecteerbaar
+door een job.
 
-De agentcontainer krijgt nooit het GitHub-token waarmee de worker publiceert. Bij
-`APPLICATION_WORK` verwijdert de worker zelfs de remote na een detached checkout. Bij
-`REPOSITORY_WORK` controleert de worker symlinks, geheime bestandsnamen en grote bestanden voordat
-hij commit en publiceert.
+Projectgebonden waarden staan apart in `project-credentials.env`. De worker accepteert alleen
+reguliere bestanden zonder symlink, veilige rechten, unieke namen en namen volgens
+`PROJECT__NAAM`. Alleen de namen worden bij de server geregistreerd. De servercatalogus bevat geen
+waarden.
+
+Per attempt maakt de worker een tijdelijk bestand met uitsluitend de door de job aangevraagde en
+door de tenantpolicy toegestane subset. Dit bestand wordt read-only onder
+`/job/secrets/secrets.env` gemount en na de attempt verwijderd. De agent kan deze geselecteerde
+waarden tijdens de uitvoering lezen. De worker blokkeert bekende projectcredentialwaarden in
+provideruitvoer en artifacts. Runtime-, worker-, provider- en Git-publicatiecredentials blijven
+buiten de agentcontainer.
+
+## Execution-container
+
+Het gedeelde multi-arch image bevat Codex, Claude, Git, Java/Maven, Node, Playwright/Chromium,
+`oc`/`kubectl` en PostgreSQL-tools. De worker gebruikt `--pull always` voor de bewegende `main`-tag.
+
+De container krijgt vaste read-only input-, documentatie- en secretmounts, een schrijfbare
+outputdirectory en een aparte `/work`-worktree. Alleen technische job- en attemptidentifiers staan
+in containerlabels. Fencing tokens en andere credentials staan niet in labels.
+
+Bij `APPLICATION_WORK` verwijdert de worker de Gitremote na een detached read-only checkout. Bij
+`REPOSITORY_WORK` krijgt de agent geen Git-publicatiecredential. De worker controleert de worktree,
+maakt de commit, pusht de vaste jobbranch en opent het pull request.
 
 ## Betrouwbaarheid
 
-- Iedere consumentenaanvraag heeft een unieke idempotency key per tenant.
-- Iedere echte poging heeft een willekeurig fencing token; alleen de SHA-256-hash staat in de
+- Idempotentie is uniek per tenant en requestinhoud.
+- Iedere echte attempt heeft een willekeurig fencing token; alleen de SHA-256-hash staat in de
   database.
-- Heartbeat verlengt standaard iedere 30 seconden een lease van twee minuten.
-- Na leaseverlies volgt eerst een herstelvenster van dertig minuten (`SUSPECTED`). Pas daarna wordt
-  een poging verlaten en met 30, 60, 120 seconden enzovoort opnieuw aangeboden, maximaal 30 minuten
-  en nooit boven de server-side attemptlimiet.
-- Resultaat, artifacts en progress worden alleen geaccepteerd voor het actuele attempt.
-- Transcriptdelen worden alleen voor de actuele gefencete attempt geaccepteerd, zijn idempotent op
-  deel-ID en sequence-nummer en worden vóór opslag geredigeerd.
-- Artifacts zijn per stuk maximaal 5 MB en per job 25 MB, met verplichte SHA-256-controle.
-- Events en transcriptdelen zijn append-only; het resultaat van een geslaagde job verandert niet
-  meer.
+- Heartbeats verlengen de lease tot maximaal de harde attemptdeadline.
+- Leaseverlies zet de attempt in `SUSPECTED`; binnen het herstelvenster kan dezelfde worker met
+  hetzelfde token hervatten.
+- Na een verlopen herstelvenster gebruikt de server begrensde exponentiële retryback-off.
+- Resultaten, artifacts, transcripten en voortgang worden alleen voor de actuele gefencete attempt
+  geaccepteerd.
+- De attemptdeadline wordt door server en worker onafhankelijk afgedwongen en nooit verlengd.
+- Events en transcriptdelen zijn append-only. Een geslaagd resultaat en zijn artifacts zijn
+  onveranderlijk.
+- `APPLICATION_WORK`-uitvoer wordt door de server geparseerd en volledig tegen het aangevraagde
+  JSON-schema gevalideerd.
+- Productie weigert `MOCKED`; acceptatie gebruikt dezelfde opslag- en validatieketen zonder worker.
 
-## Threatmodel in het kort
+## Bestandsgrenzen
 
-| Dreiging | Begrenzing |
-|---|---|
-| Gestolen consumenttoken | Tenant- en serverpolicyscope; token apart roteerbaar |
-| Promptinjectie uit Git, web of input | Externe inhoud expliciet onvertrouwd; kan serverpolicy nooit verruimen |
-| Oude worker voltooit na retry | Attempt-ID plus fencing token; oude token wordt geweigerd |
-| Laptop slaapt tijdelijk | Lease wordt eerst `SUSPECTED`; ruim herstelvenster voorkomt dubbel werk |
-| Agent probeert Gitcredential te lezen | Credential blijft buiten container; publicatie door worker |
-| Secret in log of fout | Redactie, maximale lengte en veilige generieke serverfouten |
-| Secret in zichtbaar agenttranscript | Redactie in de worker en opnieuw op de server vóór duurzame opslag |
-| Verborgen modelredenering wordt als transcript verwacht | Alleen provider-zichtbare tekst en toolgebeurtenissen opslaan; niets reconstrueren |
-| Mock per ongeluk in productie | Startupomgeving en aanvraagvalidatie weigeren `MOCKED` |
-| Databaseverlies | Dagelijkse custom-format backup, hash, retentie en restorecontrole |
+Inputattachments hebben veilige platte namen, toegestane MIME-types, hash- en magic-bytecontroles
+en standaardlimieten van 2 MB per bestand, 10 MB per job en tien bestanden. Outputartifacts zijn
+directe reguliere bestanden met maximaal 5 MB per bestand, 25 MB per job en 25 bestanden. Symlinks,
+apparaten, padtraversal en bekende projectcredentialwaarden worden geweigerd.
+
+De managementlijsten bevatten alleen prompt-/outputpreviews, aantallen en bestandsmetadata.
+Attachment- en artifactbytes worden pas via een afzonderlijke geauthenticeerde route geladen.
+
+## Database en herstel
+
+Productie gebruikt PostgreSQL op een persistente volumeclaim. Flyway beheert het schema.
+De nachtelijke backupjob maakt een custom-format dump, valideert hem met `pg_restore --list`,
+schrijft een SHA-256-bestand en bewaart veertien dagen. Restore-oefeningen gebruiken een lege,
+afzonderlijke database.
