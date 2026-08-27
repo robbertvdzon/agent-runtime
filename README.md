@@ -23,6 +23,11 @@ deadlines, events, transcripten, JSON-schemavalidatie, resultaten, attachments e
 Consumenten leveren alleen de technische opdracht en verwerken de terminale uitkomst in hun eigen
 domein.
 
+Product Factory, HKH Autopilot en HKH hebben ieder een geïsoleerde `APPLICATION_WORK`-tenant.
+Software Factory is de enige gewone consument met `REPOSITORY_WORK`. De HKH-consumenten hebben elk
+een eigen bearercredential en mogen alleen projectcredentials onder respectievelijk
+`HKH_AUTOPILOT__...` en `HKH__...` selecteren.
+
 ## Onderdelen
 
 - `agent-runtime-contracts`: Kotlin-contracttypen en OpenAPI 3.1;

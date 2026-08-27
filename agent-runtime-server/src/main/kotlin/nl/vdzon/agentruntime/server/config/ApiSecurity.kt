@@ -31,6 +31,8 @@ class ApiSecurity(private val properties: RuntimeProperties, private val adminAu
         val identity = when {
             secureEquals(token, properties.productFactoryToken) -> RequestIdentity(PrincipalRole.CONSUMER, "product-factory")
             secureEquals(token, properties.softwareFactoryToken) -> RequestIdentity(PrincipalRole.CONSUMER, "software-factory")
+            secureEquals(token, properties.hkhAutopilotToken) -> RequestIdentity(PrincipalRole.CONSUMER, "hkh-autopilot")
+            secureEquals(token, properties.hkhToken) -> RequestIdentity(PrincipalRole.CONSUMER, "hkh")
             secureEquals(token, properties.workerToken) -> RequestIdentity(PrincipalRole.WORKER)
             secureEquals(token, properties.adminToken) -> RequestIdentity(PrincipalRole.ADMIN)
             token != null && adminAuth.verifySession(token) != null -> RequestIdentity(PrincipalRole.ADMIN)

@@ -10,6 +10,8 @@ data class RuntimeProperties(
     var environment: RuntimeEnvironment = RuntimeEnvironment.LOCAL,
     var productFactoryToken: String = "local-product-factory-token",
     var softwareFactoryToken: String = "local-software-factory-token",
+    var hkhAutopilotToken: String = "local-hkh-autopilot-token",
+    var hkhToken: String = "local-hkh-token",
     var workerToken: String = "local-worker-token",
     var workerApiEnabled: Boolean = true,
     var adminToken: String = "local-admin-token",
@@ -23,10 +25,16 @@ data class RuntimeProperties(
     var maxOutputAttempts: Int = 3,
     var productFactoryEnvironmentPrefixes: String = "PF,HKH,HKH_AUTOPILOT,PERSONAL_FEED,ROBBERTS_ASSISTENT,SF",
     var softwareFactoryEnvironmentPrefixes: String = "SF,PF,HKH,HKH_AUTOPILOT,PERSONAL_FEED,ROBBERTS_ASSISTENT",
+    var hkhAutopilotEnvironmentPrefixes: String = "HKH_AUTOPILOT",
+    var hkhEnvironmentPrefixes: String = "HKH",
     var productFactoryProviders: String = "CODEX,CLAUDE,MOCKED",
     var softwareFactoryProviders: String = "CODEX,CLAUDE,MOCKED",
+    var hkhAutopilotProviders: String = "CODEX,CLAUDE,MOCKED",
+    var hkhProviders: String = "CODEX,CLAUDE,MOCKED",
     var productFactoryModels: String = "*",
     var softwareFactoryModels: String = "*",
+    var hkhAutopilotModels: String = "*",
+    var hkhModels: String = "*",
     var inputAttachmentMaxBytes: Long = 2L * 1024 * 1024,
     var jobInputAttachmentMaxBytes: Long = 10L * 1024 * 1024,
     var artifactMaxBytes: Long = 5L * 1024 * 1024,
@@ -39,13 +47,20 @@ data class RuntimeProperties(
             require(!workerApiEnabled) { "Acceptance must have the worker API disabled." }
             require(allowedProviders("product-factory") == setOf("MOCKED")) { "Acceptance Product Factory may only allow MOCKED." }
             require(allowedProviders("software-factory") == setOf("MOCKED")) { "Acceptance Software Factory may only allow MOCKED." }
+            require(allowedProviders("hkh-autopilot") == setOf("MOCKED")) { "Acceptance HKH Autopilot may only allow MOCKED." }
+            require(allowedProviders("hkh") == setOf("MOCKED")) { "Acceptance HKH may only allow MOCKED." }
         }
         if (environment == RuntimeEnvironment.PRODUCTION) {
-            val unsafe = listOf(productFactoryToken, softwareFactoryToken, workerToken, adminToken, sessionSigningSecret)
+            val unsafe = listOf(
+                productFactoryToken, softwareFactoryToken, hkhAutopilotToken, hkhToken,
+                workerToken, adminToken, sessionSigningSecret,
+            )
                 .any { it.isBlank() || it.startsWith("local-") || it.length < 24 }
-            require(!unsafe) { "Production requires four non-default tokens of at least 24 characters." }
+            require(!unsafe) { "Production requires non-default credentials of at least 24 characters." }
             require(googleClientId.isNotBlank() && allowedAdminEmails().isNotEmpty()) { "Production requires Google client ID and an administrator email allowlist." }
         }
+        val bearerTokens = listOf(productFactoryToken, softwareFactoryToken, hkhAutopilotToken, hkhToken, workerToken, adminToken)
+        require(bearerTokens.size == bearerTokens.distinct().size) { "Bearer credentials must be unique." }
         require(leaseSeconds in 30..900)
         require(recoverySeconds in leaseSeconds..86_400)
         require(maxAttempts in 1..10)
@@ -61,12 +76,16 @@ data class RuntimeProperties(
     fun allowedEnvironmentPrefixes(tenantId: String): Set<String> = when (tenantId) {
         "product-factory" -> productFactoryEnvironmentPrefixes
         "software-factory" -> softwareFactoryEnvironmentPrefixes
+        "hkh-autopilot" -> hkhAutopilotEnvironmentPrefixes
+        "hkh" -> hkhEnvironmentPrefixes
         else -> ""
     }.split(',').map(String::trim).filter(String::isNotBlank).toSet()
 
     fun allowedProviders(tenantId: String): Set<String> = when (tenantId) {
         "product-factory" -> productFactoryProviders
         "software-factory" -> softwareFactoryProviders
+        "hkh-autopilot" -> hkhAutopilotProviders
+        "hkh" -> hkhProviders
         else -> ""
     }.split(',').map(String::trim).map(String::uppercase).filter(String::isNotBlank).toSet()
 
@@ -74,6 +93,8 @@ data class RuntimeProperties(
         val configured = when (tenantId) {
             "product-factory" -> productFactoryModels
             "software-factory" -> softwareFactoryModels
+            "hkh-autopilot" -> hkhAutopilotModels
+            "hkh" -> hkhModels
             else -> ""
         }.split(',').map(String::trim).filter(String::isNotBlank).toSet()
         return "*" in configured || model in configured

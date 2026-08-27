@@ -128,6 +128,35 @@ class AgentRuntimeIntegrationTest(
     }
 
     @Test
+    fun `hkh consumers have isolated application work and project credential policies`() {
+        val autopilotRequest = applicationRequest(UUID.randomUUID().toString(), Provider.CODEX).copy(
+            environmentKeys = listOf("HKH_AUTOPILOT__ACCEPTANCE_BASE_URL"),
+        )
+        val autopilotJob = postJob(HKH_AUTOPILOT_TOKEN, autopilotRequest)
+        mvc.perform(get("/v1/jobs/${autopilotJob.path("id").asText()}").bearer(HKH_TOKEN))
+            .andExpect(status().isNotFound)
+
+        val hkhRequest = applicationRequest(UUID.randomUUID().toString(), Provider.CODEX).copy(
+            environmentKeys = listOf("HKH__ACCEPTANCE_BASE_URL"),
+        )
+        postJob(HKH_TOKEN, hkhRequest)
+
+        val wrongPrefix = autopilotRequest.copy(
+            idempotencyKey = UUID.randomUUID().toString(),
+            environmentKeys = listOf("HKH__ACCEPTANCE_BASE_URL"),
+        )
+        mvc.perform(post("/v1/jobs").bearer(HKH_AUTOPILOT_TOKEN).contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsBytes(wrongPrefix)))
+            .andExpect(status().isBadRequest)
+
+        val repositoryWork = autopilotRequest.copy(
+            idempotencyKey = UUID.randomUUID().toString(),
+            jobKind = JobKind.REPOSITORY_WORK,
+        )
+        mvc.perform(post("/v1/jobs").bearer(HKH_AUTOPILOT_TOKEN).contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsBytes(repositoryWork)))
+            .andExpect(status().isBadRequest)
+    }
+
+    @Test
     fun `fake worker claims heartbeats reports progress and completes`() {
         val workerId = "fake-${UUID.randomUUID()}"
         val bootId = UUID.randomUUID().toString()
@@ -273,6 +302,8 @@ class AgentRuntimeIntegrationTest(
     companion object {
         const val PRODUCT_TOKEN = "local-product-factory-token"
         const val SOFTWARE_TOKEN = "local-software-factory-token"
+        const val HKH_AUTOPILOT_TOKEN = "local-hkh-autopilot-token"
+        const val HKH_TOKEN = "local-hkh-token"
         const val WORKER_TOKEN = "local-worker-token"
         const val ADMIN_TOKEN = "local-admin-token"
     }

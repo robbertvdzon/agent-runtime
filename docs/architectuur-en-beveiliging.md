@@ -10,6 +10,8 @@ publicatie-instructie toe.
 ```mermaid
 flowchart LR
   PF[Product Factory] -->|APPLICATION_WORK| API[Agent Runtime server]
+  HKHA[HKH Autopilot] -->|APPLICATION_WORK| API
+  HKH[HKH] -->|APPLICATION_WORK| API
   SF[Software Factory] -->|REPOSITORY_WORK| API
   API --> DB[(PostgreSQL)]
   API --> MOCK[Centrale mockexecutor]
@@ -32,12 +34,14 @@ server bewaart geen lokale providercredentials of projectcredentialwaarden.
 
 ## Identiteiten en autorisatie
 
-Productie gebruikt vier onafhankelijke bearercredentials:
+Productie gebruikt onafhankelijke bearercredentials per consument en platformrol:
 
 | Credential | Autoriteit |
 | --- | --- |
 | `AR_PRODUCT_FACTORY_TOKEN` | Eigen `APPLICATION_WORK` maken, lezen, annuleren en artifacts downloaden |
 | `AR_SOFTWARE_FACTORY_TOKEN` | Eigen `REPOSITORY_WORK` maken, lezen, annuleren en artifacts downloaden |
+| `AR_HKH_AUTOPILOT_TOKEN` | Alleen eigen `APPLICATION_WORK` met environmentprefix `HKH_AUTOPILOT` beheren |
+| `AR_HKH_TOKEN` | Alleen eigen `APPLICATION_WORK` met environmentprefix `HKH` beheren |
 | `AR_WORKER_TOKEN` | In lokaal en productie workers registreren, jobs claimen en actuele gefencete attempts bedienen |
 | `AR_ADMIN_TOKEN` | Managementmetadata lezen en terminale jobs opnieuw aanbieden |
 
@@ -60,6 +64,10 @@ en productie. Alleen de versleutelde manifests staan in Git.
 Een productieproces start niet met lege, korte of `local-...`-tokens. Secretwaarden worden niet in
 prompts, payloads, foutmeldingen, Dockerlabels of logs geplaatst. Logs en voortgang worden op
 bearer- en herkenbare key/valuepatronen geredigeerd.
+
+De twee HKH-consumenten delen geen credential met Product Factory. Zij kunnen geen
+`REPOSITORY_WORK` aanvragen en zien elkaars jobs niet. De applicaties bewaren hun eigen token onder
+een applicatiespecifieke configuratienaam; de `AR_...`-namen blijven uitsluitend serverconfiguratie.
 
 ## Worker- en projectcredentials
 

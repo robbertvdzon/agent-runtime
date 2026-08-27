@@ -8,7 +8,7 @@
 | Productie | `CODEX`, `CLAUDE` | Aan | `agent-runtime` | PostgreSQL op 5 GiB PVC | `agent-runtime.vdzonsoftware.nl` |
 
 Acceptatie weigert Codex en Claude, blokkeert `/v1/workers` en verliest H2-data bij een nieuwe pod.
-De overlay zet beide consumerallowlists expliciet op `MOCKED`; de server weigert te starten als de
+De overlay zet alle consumerallowlists expliciet op `MOCKED`; de server weigert te starten als de
 acceptatieconfiguratie die grens verruimt of de worker-API activeert. Productie weigert
 mockuitvoering en bewaart data in PostgreSQL.
 
@@ -30,9 +30,15 @@ ontbrekende waarden. `seal-secrets.sh` maakt afzonderlijke namespacegebonden Sea
 acceptatie en productie. De versleutelde manifests staan onder de deploymentoverlays in Git; het
 bronbestand wordt nooit gecommit.
 
-De serversecretset bevat databaseconfiguratie, vier servicetokens, Google OAuth-client-ID,
+De serversecretset bevat databaseconfiguratie, zes bearercredentials, Google OAuth-client-ID,
 beheerderallowlist en sessieondertekeningssecret. Productiestart faalt wanneer tokens leeg, te kort
 of lokale standaardwaarden zijn, of wanneer Google-login niet volledig is geconfigureerd.
+
+`AR_HKH_AUTOPILOT_TOKEN` en `AR_HKH_TOKEN` zijn zelfstandige consumentcredentials. De eerste mag
+alleen `APPLICATION_WORK` met projectprefix `HKH_AUTOPILOT` aanvragen; de tweede alleen
+`APPLICATION_WORK` met prefix `HKH`. Geen van beide heeft worker-, beheer- of repositoryrechten.
+`deploy/configure-hkh-local-secret.sh` kan de tweede credential zonder weergave naar de genegeerde
+`secrets.env` van een siblingcheckout `../hkh` overnemen en zet die file op mode `0600`.
 
 ## CI en releaseketen
 

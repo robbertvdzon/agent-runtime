@@ -24,6 +24,8 @@ import java.util.UUID
     "agent-runtime.worker-api-enabled=false",
     "agent-runtime.product-factory-providers=MOCKED",
     "agent-runtime.software-factory-providers=MOCKED",
+    "agent-runtime.hkh-autopilot-providers=MOCKED",
+    "agent-runtime.hkh-providers=MOCKED",
     "spring.datasource.url=jdbc:h2:mem:agent_runtime_acceptance_policy;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE",
 ])
 @AutoConfigureMockMvc
@@ -36,6 +38,14 @@ class AcceptancePolicyIntegrationTest(
         val mocked = request(Provider.MOCKED)
         mvc.perform(post("/v1/jobs").bearer(PRODUCT_TOKEN).contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsBytes(mocked)))
             .andExpect(status().isAccepted)
+        mvc.perform(
+            post("/v1/jobs").bearer(HKH_AUTOPILOT_TOKEN).contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsBytes(request(Provider.MOCKED)))
+        ).andExpect(status().isAccepted)
+        mvc.perform(
+            post("/v1/jobs").bearer(HKH_TOKEN).contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsBytes(request(Provider.MOCKED)))
+        ).andExpect(status().isAccepted)
 
         listOf(Provider.CODEX, Provider.CLAUDE).forEach { provider ->
             val response = mvc.perform(
@@ -71,6 +81,8 @@ class AcceptancePolicyIntegrationTest(
                 workerApiEnabled = true,
                 productFactoryProviders = "MOCKED",
                 softwareFactoryProviders = "MOCKED",
+                hkhAutopilotProviders = "MOCKED",
+                hkhProviders = "MOCKED",
             ).validate()
         }.hasMessage("Acceptance must have the worker API disabled.")
 
@@ -80,8 +92,21 @@ class AcceptancePolicyIntegrationTest(
                 workerApiEnabled = false,
                 productFactoryProviders = "MOCKED,CODEX",
                 softwareFactoryProviders = "MOCKED",
+                hkhAutopilotProviders = "MOCKED",
+                hkhProviders = "MOCKED",
             ).validate()
         }.hasMessage("Acceptance Product Factory may only allow MOCKED.")
+
+        assertThatThrownBy {
+            RuntimeProperties(
+                environment = RuntimeEnvironment.ACCEPTANCE,
+                workerApiEnabled = false,
+                productFactoryProviders = "MOCKED",
+                softwareFactoryProviders = "MOCKED",
+                hkhAutopilotProviders = "MOCKED,CODEX",
+                hkhProviders = "MOCKED",
+            ).validate()
+        }.hasMessage("Acceptance HKH Autopilot may only allow MOCKED.")
     }
 
     private fun request(provider: Provider) = CreateJobRequest(
@@ -97,6 +122,8 @@ class AcceptancePolicyIntegrationTest(
 
     companion object {
         const val PRODUCT_TOKEN = "local-product-factory-token"
+        const val HKH_AUTOPILOT_TOKEN = "local-hkh-autopilot-token"
+        const val HKH_TOKEN = "local-hkh-token"
         const val WORKER_TOKEN = "local-worker-token"
     }
 }
