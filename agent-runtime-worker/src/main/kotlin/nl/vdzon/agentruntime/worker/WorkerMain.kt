@@ -41,6 +41,7 @@ data class WorkerConfig(
     val repositoryAliases: Map<String, String>,
     val projectCredentialsPath: Path,
     val projectCredentials: MutableMap<String, String>,
+    val advertisedModels: Map<Provider, Set<String>>,
 ) {
     companion object {
         fun load(): WorkerConfig {
@@ -48,8 +49,13 @@ data class WorkerConfig(
             val values = EnvFiles.load(root)
             val projectCredentials = ProjectCredentials.load(root.resolve("project-credentials.env"))
             fun required(name: String) = values[name]?.takeIf(String::isNotBlank) ?: error("Missing required $name")
+            fun models(name: String) = values[name]?.split(',')?.map(String::trim)?.filter(String::isNotBlank)?.toSet().orEmpty()
             val aliases = values.filterKeys { it.startsWith("AR_REPOSITORY_") && it.endsWith("_URL") }
                 .mapKeys { (key, _) -> key.removePrefix("AR_REPOSITORY_").removeSuffix("_URL").lowercase().replace('_', '-') }
+            val advertisedModels = buildMap {
+                models("AR_CODEX_MODELS").takeIf(Set<String>::isNotEmpty)?.let { put(Provider.CODEX, it) }
+                models("AR_CLAUDE_MODELS").takeIf(Set<String>::isNotEmpty)?.let { put(Provider.CLAUDE, it) }
+            }
             return WorkerConfig(
                 required("AR_SERVER_URL").removeSuffix("/"), required("AR_WORKER_TOKEN"),
                 values["AR_WORKER_ID"]?.takeIf(String::isNotBlank) ?: InetAddress.getLocalHost().hostName,
@@ -59,6 +65,7 @@ data class WorkerConfig(
                 values["AR_CLAUDE_CREDENTIALS_DIR"]?.takeIf(String::isNotBlank)?.let(Path::of),
                 values["AR_CLAUDE_OAUTH_TOKEN"]?.takeIf(String::isNotBlank),
                 aliases, root.resolve("project-credentials.env"), projectCredentials.toMutableMap(),
+                advertisedModels,
             )
         }
     }
@@ -79,6 +86,7 @@ fun main(args: Array<String>) {
     val capabilities = buildSet { add("application-work"); if (config.repositoryAliases.isNotEmpty()) add("repository-work") }
     fun register() = client.register(WorkerRegistrationRequest(
         config.workerId, bootId, capabilities, providers, emptySet(), config.projectCredentials.keys, 1, mapOf("worker" to "0.1.0"),
+        advertisedModels = config.advertisedModels,
     ))
     register()
     println("Agent Runtime worker ${config.workerId} online with ${providers.joinToString()}.")

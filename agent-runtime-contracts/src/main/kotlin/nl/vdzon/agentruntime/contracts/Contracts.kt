@@ -103,6 +103,7 @@ data class WorkerRegistrationRequest(
     @field:Size(max = 1_000) val availableEnvironmentKeys: Set<String> = emptySet(),
     @field:Min(1) @field:Max(32) val maxConcurrency: Int = 1,
     val versions: Map<String, String> = emptyMap(),
+    val advertisedModels: Map<Provider, Set<String>> = emptyMap(),
 )
 
 data class WorkerView(
@@ -115,11 +116,20 @@ data class WorkerView(
     val availableEnvironmentKeys: Set<String>,
     val maxConcurrency: Int,
     val lastHeartbeatAt: Instant,
+    val advertisedModels: Map<Provider, Set<String>> = emptyMap(),
 )
 
 data class EnvironmentKeyView(
     val name: String,
     val projectPrefix: String,
+    val available: Boolean,
+    val matchingOnlineWorkers: Int,
+    val lastSeenAt: Instant,
+)
+
+data class ModelCatalogView(
+    val provider: Provider,
+    val model: String,
     val available: Boolean,
     val matchingOnlineWorkers: Int,
     val lastSeenAt: Instant,

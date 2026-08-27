@@ -83,6 +83,15 @@ paths:
       responses:
         '200': {description: Available names, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/EnvironmentKeyView'}}}}}
         '403': {$ref: '#/components/responses/Forbidden'}
+  /models:
+    get:
+      operationId: listModels
+      summary: List worker-advertised models per provider and their online-worker availability; catalog only, not used for job matching
+      parameters:
+        - {in: query, name: provider, required: false, schema: {type: string, enum: [CODEX, CLAUDE, MOCKED]}}
+      responses:
+        '200': {description: Advertised models, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/ModelCatalogView'}}}}}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /workers/register:
     post:
       operationId: registerWorker
@@ -371,6 +380,15 @@ components:
         available: {type: boolean}
         matchingOnlineWorkers: {type: integer, minimum: 0}
         lastSeenAt: {type: string, format: date-time}
+    ModelCatalogView:
+      type: object
+      required: [provider, model, available, matchingOnlineWorkers, lastSeenAt]
+      properties:
+        provider: {type: string, enum: [CODEX, CLAUDE, MOCKED]}
+        model: {type: string}
+        available: {type: boolean}
+        matchingOnlineWorkers: {type: integer, minimum: 0}
+        lastSeenAt: {type: string, format: date-time}
     WorkerRegistrationRequest:
       type: object
       additionalProperties: false
@@ -384,6 +402,7 @@ components:
         availableEnvironmentKeys: {type: array, maxItems: 1000, uniqueItems: true, items: {type: string, pattern: '^[A-Z][A-Z0-9_]*__[A-Z][A-Z0-9_]*$'}}
         maxConcurrency: {type: integer, minimum: 1, maximum: 32, default: 1}
         versions: {type: object, additionalProperties: {type: string}}
+        advertisedModels: {type: object, description: 'Catalog-only models per provider, admin-configured on the worker; never used for job matching.', additionalProperties: {type: array, uniqueItems: true, items: {type: string}}}
     WorkerView:
       type: object
       required: [workerId, bootId, status, capabilities, providers, models, availableEnvironmentKeys, maxConcurrency, lastHeartbeatAt]
@@ -397,6 +416,7 @@ components:
         availableEnvironmentKeys: {type: array, uniqueItems: true, items: {type: string}}
         maxConcurrency: {type: integer, minimum: 1, maximum: 32}
         lastHeartbeatAt: {type: string, format: date-time}
+        advertisedModels: {type: object, additionalProperties: {type: array, uniqueItems: true, items: {type: string}}}
     ClaimRequest:
       type: object
       additionalProperties: false

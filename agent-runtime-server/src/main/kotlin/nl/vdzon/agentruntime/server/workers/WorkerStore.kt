@@ -46,18 +46,18 @@ class WorkerStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMapp
         val now = Instant.now().atOffset(ZoneOffset.UTC)
         val updated = jdbc.update(
             """UPDATE runtime_worker SET boot_id=?, status='ONLINE', capabilities_json=?, providers_json=?, models_json=?,
-               environment_keys_json=?, max_concurrency=?, versions_json=?, last_heartbeat_at=? WHERE worker_id=?""",
+               environment_keys_json=?, max_concurrency=?, versions_json=?, advertised_models_json=?, last_heartbeat_at=? WHERE worker_id=?""",
             request.bootId, mapper.writeValueAsString(request.capabilities), mapper.writeValueAsString(request.providers),
             mapper.writeValueAsString(request.models), mapper.writeValueAsString(request.availableEnvironmentKeys), request.maxConcurrency,
-            mapper.writeValueAsString(request.versions), now, request.workerId,
+            mapper.writeValueAsString(request.versions), mapper.writeValueAsString(request.advertisedModels), now, request.workerId,
         )
         if (updated == 0) try {
             jdbc.update(
-                """INSERT INTO runtime_worker(worker_id,boot_id,status,capabilities_json,providers_json,models_json,environment_keys_json,max_concurrency,versions_json,last_heartbeat_at,registered_at)
-                   VALUES (?,?,'ONLINE',?,?,?,?,?,?,?,?)""",
+                """INSERT INTO runtime_worker(worker_id,boot_id,status,capabilities_json,providers_json,models_json,environment_keys_json,max_concurrency,versions_json,advertised_models_json,last_heartbeat_at,registered_at)
+                   VALUES (?,?,'ONLINE',?,?,?,?,?,?,?,?,?)""",
                 request.workerId, request.bootId, mapper.writeValueAsString(request.capabilities), mapper.writeValueAsString(request.providers),
                 mapper.writeValueAsString(request.models), mapper.writeValueAsString(request.availableEnvironmentKeys), request.maxConcurrency,
-                mapper.writeValueAsString(request.versions), now, now,
+                mapper.writeValueAsString(request.versions), mapper.writeValueAsString(request.advertisedModels), now, now,
             )
         } catch (_: DuplicateKeyException) { register(request) }
     }
@@ -167,6 +167,7 @@ class WorkerStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMapp
             },
             readSet(rs.getString("capabilities_json")), readEnumSet(rs.getString("providers_json")), readSet(rs.getString("models_json")),
             readSet(rs.getString("environment_keys_json")), rs.getInt("max_concurrency"), last,
+            readModelMap(rs.getString("advertised_models_json")),
         )
     }
 
@@ -175,6 +176,7 @@ class WorkerStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMapp
 
     private fun readSet(json: String): Set<String> = mapper.readValue(json, object : TypeReference<Set<String>>() {})
     private fun readEnumSet(json: String): Set<Provider> = mapper.readValue(json, object : TypeReference<Set<Provider>>() {})
+    private fun readModelMap(json: String): Map<Provider, Set<String>> = mapper.readValue(json, object : TypeReference<Map<Provider, Set<String>>>() {})
 
     companion object {
         fun hash(value: String): String = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.toByteArray()))
