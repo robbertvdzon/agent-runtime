@@ -3,6 +3,8 @@ set -euo pipefail
 
 umask 077
 result_file="${AR_RESULT_FILE:-/job/output/result.json}"
+# Prompt gaat via stdin, nooit als CLI-argument: een lang prompt.md (grote frozen
+# context) liet exec() eerder stuklopen op "Argument list too long" (E2BIG, exit 126).
 case "${AR_ENGINE:-}" in
   CODEX)
     cp -R /credential-source/. /home/agent/.codex/
@@ -10,7 +12,7 @@ case "${AR_ENGINE:-}" in
     if [[ -s /job/input/response-schema.json ]]; then
       args+=(--output-schema /job/input/response-schema.json)
     fi
-    codex "${args[@]}" "$(cat /job/input/prompt.md)"
+    codex "${args[@]}" < /job/input/prompt.md
     ;;
   CLAUDE)
     if [[ -d /credential-source ]]; then
@@ -23,7 +25,7 @@ case "${AR_ENGINE:-}" in
     if [[ -s /job/input/response-schema.json ]]; then
       args+=(--json-schema "$(cat /job/input/response-schema.json)")
     fi
-    claude "${args[@]}" "$(cat /job/input/prompt.md)" > "$result_file"
+    claude "${args[@]}" < /job/input/prompt.md > "$result_file"
     ;;
   *)
     echo "Unsupported execution engine" >&2
