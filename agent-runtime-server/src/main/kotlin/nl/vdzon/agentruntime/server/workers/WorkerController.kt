@@ -108,7 +108,7 @@ class WorkerController(
         execution.authenticateArtifact(jobId, workerId, attemptId, token)
         if (!SAFE_FILENAME.matches(filename) || filename in setOf(".", "..")) throw ApiException("UNSAFE_ARTIFACT", "Artifact filename is unsafe.")
         if (mimeType !in ALLOWED_ARTIFACT_MIME_TYPES) throw ApiException("ARTIFACT_MIME_UNSUPPORTED", "Artifact MIME type is not allowed.")
-        if (jobs.artifacts(jobId).size >= 25 && jobs.artifacts(jobId).none { it.filename == filename }) throw ApiException("JOB_ARTIFACT_LIMIT", "Job has the maximum number of artifacts.", HttpStatus.PAYLOAD_TOO_LARGE)
+        if (jobs.artifacts(jobId).size >= 75 && jobs.artifacts(jobId).none { it.filename == filename }) throw ApiException("JOB_ARTIFACT_LIMIT", "Job has the maximum number of artifacts.", HttpStatus.PAYLOAD_TOO_LARGE)
         if (content.size > properties.artifactMaxBytes) throw ApiException("ARTIFACT_TOO_LARGE", "Artifact exceeds the server limit.", HttpStatus.PAYLOAD_TOO_LARGE)
         if (jobs.totalArtifactBytes(jobId) + content.size > properties.jobArtifactMaxBytes) throw ApiException("JOB_ARTIFACT_LIMIT", "Job artifact limit exceeded.", HttpStatus.PAYLOAD_TOO_LARGE)
         val actual = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content))

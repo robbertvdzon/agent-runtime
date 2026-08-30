@@ -38,7 +38,7 @@ data class RuntimeProperties(
     var inputAttachmentMaxBytes: Long = 2L * 1024 * 1024,
     var jobInputAttachmentMaxBytes: Long = 10L * 1024 * 1024,
     var artifactMaxBytes: Long = 5L * 1024 * 1024,
-    var jobArtifactMaxBytes: Long = 25L * 1024 * 1024,
+    var jobArtifactMaxBytes: Long = 75L * 1024 * 1024,
     var transcriptMaxBytesPerJob: Long = 10L * 1024 * 1024,
 ) {
     @PostConstruct

@@ -366,7 +366,7 @@ class JobExecutor(
         val directory = taskRoot.resolve("output/artifacts")
         if (!directory.exists()) return
         val files = Files.list(directory).use { it.toList() }
-        if (files.size > 25) throw JobFailure("JOB_ARTIFACT_LIMIT", "Too many output artifacts.", false)
+        if (files.size > 75) throw JobFailure("JOB_ARTIFACT_LIMIT", "Too many output artifacts.", false)
         var total = 0L
         files.forEach { path ->
             if (path.isSymbolicLink() || !path.isRegularFile()) throw JobFailure("UNSAFE_ARTIFACT", "Artifacts must be direct regular files.", false)
@@ -374,7 +374,7 @@ class JobExecutor(
             val size = path.fileSize()
             if (size > 5L * 1024 * 1024) throw JobFailure("ARTIFACT_TOO_LARGE", "Artifact exceeds 5 MB.", false)
             total += size
-            if (total > 25L * 1024 * 1024) throw JobFailure("JOB_ARTIFACT_LIMIT", "Artifacts exceed 25 MB.", false)
+            if (total > 75L * 1024 * 1024) throw JobFailure("JOB_ARTIFACT_LIMIT", "Artifacts exceed 75 MB.", false)
             val content = path.readBytes()
             if (SecretRedactor.contains(content, sensitiveValues(claim))) {
                 throw JobFailure("SECRET_EXPOSURE_BLOCKED", "An artifact contained a sensitive value selected for this job.", false)
