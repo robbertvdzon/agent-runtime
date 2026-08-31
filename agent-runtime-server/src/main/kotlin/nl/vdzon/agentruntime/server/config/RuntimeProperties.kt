@@ -12,6 +12,7 @@ data class RuntimeProperties(
     var softwareFactoryToken: String = "local-software-factory-token",
     var hkhAutopilotToken: String = "local-hkh-autopilot-token",
     var hkhToken: String = "local-hkh-token",
+    var pvddToken: String = "local-pvdd-token",
     var workerToken: String = "local-worker-token",
     var workerApiEnabled: Boolean = true,
     var adminToken: String = "local-admin-token",
@@ -27,14 +28,17 @@ data class RuntimeProperties(
     var softwareFactoryEnvironmentPrefixes: String = "SF,PF,HKH,HKH_AUTOPILOT,PERSONAL_FEED,ROBBERTS_ASSISTENT",
     var hkhAutopilotEnvironmentPrefixes: String = "HKH_AUTOPILOT",
     var hkhEnvironmentPrefixes: String = "HKH",
+    var pvddEnvironmentPrefixes: String = "PVDD",
     var productFactoryProviders: String = "CODEX,CLAUDE,MOCKED",
     var softwareFactoryProviders: String = "CODEX,CLAUDE,MOCKED",
     var hkhAutopilotProviders: String = "CODEX,CLAUDE,MOCKED",
     var hkhProviders: String = "CODEX,CLAUDE,MOCKED",
+    var pvddProviders: String = "CODEX",
     var productFactoryModels: String = "*",
     var softwareFactoryModels: String = "*",
     var hkhAutopilotModels: String = "*",
     var hkhModels: String = "*",
+    var pvddModels: String = "gpt-5.6-sol",
     var inputAttachmentMaxBytes: Long = 2L * 1024 * 1024,
     var jobInputAttachmentMaxBytes: Long = 10L * 1024 * 1024,
     var artifactMaxBytes: Long = 5L * 1024 * 1024,
@@ -49,17 +53,25 @@ data class RuntimeProperties(
             require(allowedProviders("software-factory") == setOf("MOCKED")) { "Acceptance Software Factory may only allow MOCKED." }
             require(allowedProviders("hkh-autopilot") == setOf("MOCKED")) { "Acceptance HKH Autopilot may only allow MOCKED." }
             require(allowedProviders("hkh") == setOf("MOCKED")) { "Acceptance HKH may only allow MOCKED." }
+            require(allowedProviders("pvdd") == setOf("MOCKED")) { "Acceptance PvdD may only allow MOCKED." }
+            require(pvddModels.split(',').map(String::trim).filter(String::isNotBlank).toSet() == setOf("mock-model")) {
+                "Acceptance PvdD may only allow mock-model."
+            }
         }
         if (environment == RuntimeEnvironment.PRODUCTION) {
             val unsafe = listOf(
-                productFactoryToken, softwareFactoryToken, hkhAutopilotToken, hkhToken,
+                productFactoryToken, softwareFactoryToken, hkhAutopilotToken, hkhToken, pvddToken,
                 workerToken, adminToken, sessionSigningSecret,
             )
                 .any { it.isBlank() || it.startsWith("local-") || it.length < 24 }
             require(!unsafe) { "Production requires non-default credentials of at least 24 characters." }
             require(googleClientId.isNotBlank() && allowedAdminEmails().isNotEmpty()) { "Production requires Google client ID and an administrator email allowlist." }
+            require("MOCKED" !in allowedProviders("pvdd") && allowedProviders("pvdd").isNotEmpty()) {
+                "Production PvdD requires explicitly configured real providers."
+            }
+            require(pvddModels.isNotBlank() && pvddModels != "*") { "Production PvdD requires explicitly configured models." }
         }
-        val bearerTokens = listOf(productFactoryToken, softwareFactoryToken, hkhAutopilotToken, hkhToken, workerToken, adminToken)
+        val bearerTokens = listOf(productFactoryToken, softwareFactoryToken, hkhAutopilotToken, hkhToken, pvddToken, workerToken, adminToken)
         require(bearerTokens.size == bearerTokens.distinct().size) { "Bearer credentials must be unique." }
         require(leaseSeconds in 30..900)
         require(recoverySeconds in leaseSeconds..86_400)
@@ -78,6 +90,7 @@ data class RuntimeProperties(
         "software-factory" -> softwareFactoryEnvironmentPrefixes
         "hkh-autopilot" -> hkhAutopilotEnvironmentPrefixes
         "hkh" -> hkhEnvironmentPrefixes
+        "pvdd" -> pvddEnvironmentPrefixes
         else -> ""
     }.split(',').map(String::trim).filter(String::isNotBlank).toSet()
 
@@ -86,6 +99,7 @@ data class RuntimeProperties(
         "software-factory" -> softwareFactoryProviders
         "hkh-autopilot" -> hkhAutopilotProviders
         "hkh" -> hkhProviders
+        "pvdd" -> pvddProviders
         else -> ""
     }.split(',').map(String::trim).map(String::uppercase).filter(String::isNotBlank).toSet()
 
@@ -95,6 +109,7 @@ data class RuntimeProperties(
             "software-factory" -> softwareFactoryModels
             "hkh-autopilot" -> hkhAutopilotModels
             "hkh" -> hkhModels
+            "pvdd" -> pvddModels
             else -> ""
         }.split(',').map(String::trim).filter(String::isNotBlank).toSet()
         return "*" in configured || model in configured

@@ -19,3 +19,5 @@ patches:
         path: /spec/template/spec/containers/0/env
         value:
           - {name: AR_ENVIRONMENT, value: PRODUCTION}
+          - {name: AR_PVDD_PROVIDERS, value: CODEX}
+          - {name: AR_PVDD_MODELS, value: gpt-5.6-sol}

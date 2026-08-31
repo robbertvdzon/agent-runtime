@@ -157,6 +157,33 @@ class AgentRuntimeIntegrationTest(
     }
 
     @Test
+    fun `pvdd consumer is isolated and limited to application work and PVDD keys`() {
+        val request = applicationRequest(UUID.randomUUID().toString(), Provider.CODEX).copy(
+            model = "gpt-5.6-sol",
+            environmentKeys = listOf("PVDD__ACCEPTANCE_BASE_URL"),
+        )
+        val job = postJob(PVDD_TOKEN, request)
+        mvc.perform(get("/v1/jobs/${job.path("id").asText()}").bearer(PRODUCT_TOKEN))
+            .andExpect(status().isNotFound)
+
+        mvc.perform(
+            post("/v1/jobs").bearer(PVDD_TOKEN).contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsBytes(request.copy(
+                    idempotencyKey = UUID.randomUUID().toString(),
+                    environmentKeys = listOf("HKH__ACCEPTANCE_BASE_URL"),
+                )))
+        ).andExpect(status().isBadRequest)
+
+        mvc.perform(
+            post("/v1/jobs").bearer(PVDD_TOKEN).contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsBytes(request.copy(
+                    idempotencyKey = UUID.randomUUID().toString(),
+                    jobKind = JobKind.REPOSITORY_WORK,
+                )))
+        ).andExpect(status().isBadRequest)
+    }
+
+    @Test
     fun `fake worker claims heartbeats reports progress and completes`() {
         val workerId = "fake-${UUID.randomUUID()}"
         val bootId = UUID.randomUUID().toString()
@@ -304,6 +331,7 @@ class AgentRuntimeIntegrationTest(
         const val SOFTWARE_TOKEN = "local-software-factory-token"
         const val HKH_AUTOPILOT_TOKEN = "local-hkh-autopilot-token"
         const val HKH_TOKEN = "local-hkh-token"
+        const val PVDD_TOKEN = "local-pvdd-token"
         const val WORKER_TOKEN = "local-worker-token"
         const val ADMIN_TOKEN = "local-admin-token"
     }

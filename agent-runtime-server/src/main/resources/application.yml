@@ -38,6 +38,7 @@ agent-runtime:
   software-factory-token: ${AR_SOFTWARE_FACTORY_TOKEN:local-software-factory-token}
   hkh-autopilot-token: ${AR_HKH_AUTOPILOT_TOKEN:local-hkh-autopilot-token}
   hkh-token: ${AR_HKH_TOKEN:local-hkh-token}
+  pvdd-token: ${AR_PVDD_TOKEN:local-pvdd-token}
   worker-token: ${AR_WORKER_TOKEN:local-worker-token}
   worker-api-enabled: ${AR_WORKER_API_ENABLED:true}
   admin-token: ${AR_ADMIN_TOKEN:local-admin-token}
@@ -53,12 +54,15 @@ agent-runtime:
   software-factory-environment-prefixes: ${AR_SOFTWARE_FACTORY_ENVIRONMENT_PREFIXES:SF,PF,HKH,HKH_AUTOPILOT,PERSONAL_FEED,ROBBERTS_ASSISTENT}
   hkh-autopilot-environment-prefixes: ${AR_HKH_AUTOPILOT_ENVIRONMENT_PREFIXES:HKH_AUTOPILOT}
   hkh-environment-prefixes: ${AR_HKH_ENVIRONMENT_PREFIXES:HKH}
+  pvdd-environment-prefixes: ${AR_PVDD_ENVIRONMENT_PREFIXES:PVDD}
   product-factory-providers: ${AR_PRODUCT_FACTORY_PROVIDERS:CODEX,CLAUDE,MOCKED}
   software-factory-providers: ${AR_SOFTWARE_FACTORY_PROVIDERS:CODEX,CLAUDE,MOCKED}
   hkh-autopilot-providers: ${AR_HKH_AUTOPILOT_PROVIDERS:CODEX,CLAUDE,MOCKED}
   hkh-providers: ${AR_HKH_PROVIDERS:CODEX,CLAUDE,MOCKED}
+  pvdd-providers: ${AR_PVDD_PROVIDERS:CODEX}
   product-factory-models: ${AR_PRODUCT_FACTORY_MODELS:*}
   software-factory-models: ${AR_SOFTWARE_FACTORY_MODELS:*}
   hkh-autopilot-models: ${AR_HKH_AUTOPILOT_MODELS:*}
   hkh-models: ${AR_HKH_MODELS:*}
+  pvdd-models: ${AR_PVDD_MODELS:gpt-5.6-sol}
   transcript-max-bytes-per-job: ${AR_TRANSCRIPT_MAX_BYTES_PER_JOB:10485760}

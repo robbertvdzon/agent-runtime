@@ -40,6 +40,12 @@ alleen `APPLICATION_WORK` met projectprefix `HKH_AUTOPILOT` aanvragen; de tweede
 `deploy/configure-hkh-local-secret.sh` kan de tweede credential zonder weergave naar de genegeerde
 `secrets.env` van een siblingcheckout `../hkh` overnemen en zet die file op mode `0600`.
 
+PvdD gebruikt eveneens een zelfstandige consumentcredential en mag uitsluitend
+`APPLICATION_WORK` met environmentprefix `PVDD` aanvragen. `AR_PVDD_TOKEN` is het productietoken;
+`AR_PVDD_ACCEPTANCE_TOKEN` bestaat alleen in de lokale sealbron en wordt bij sealing als
+`AR_PVDD_TOKEN` in namespace `agent-runtime-acceptance` geplaatst. Acceptance staat uitsluitend
+`MOCKED`/`mock-model` toe; productie vereist expliciete echte providers en modellen.
+
 ## CI en releaseketen
 
 `.github/workflows/verify.yml` draait voor pull requests en iedere push naar `main`:

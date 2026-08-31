@@ -26,6 +26,8 @@ import java.util.UUID
     "agent-runtime.software-factory-providers=MOCKED",
     "agent-runtime.hkh-autopilot-providers=MOCKED",
     "agent-runtime.hkh-providers=MOCKED",
+    "agent-runtime.pvdd-providers=MOCKED",
+    "agent-runtime.pvdd-models=mock-model",
     "spring.datasource.url=jdbc:h2:mem:agent_runtime_acceptance_policy;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE",
 ])
 @AutoConfigureMockMvc
@@ -45,6 +47,13 @@ class AcceptancePolicyIntegrationTest(
         mvc.perform(
             post("/v1/jobs").bearer(HKH_TOKEN).contentType(MediaType.APPLICATION_JSON)
                 .content(mapper.writeValueAsBytes(request(Provider.MOCKED)))
+        ).andExpect(status().isAccepted)
+        mvc.perform(
+            post("/v1/jobs").bearer(PVDD_TOKEN).contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsBytes(request(Provider.MOCKED).copy(
+                    model = "mock-model",
+                    environmentKeys = listOf("PVDD__ACCEPTANCE_BASE_URL"),
+                )))
         ).andExpect(status().isAccepted)
 
         listOf(Provider.CODEX, Provider.CLAUDE).forEach { provider ->
@@ -83,6 +92,8 @@ class AcceptancePolicyIntegrationTest(
                 softwareFactoryProviders = "MOCKED",
                 hkhAutopilotProviders = "MOCKED",
                 hkhProviders = "MOCKED",
+                pvddProviders = "MOCKED",
+                pvddModels = "mock-model",
             ).validate()
         }.hasMessage("Acceptance must have the worker API disabled.")
 
@@ -94,6 +105,8 @@ class AcceptancePolicyIntegrationTest(
                 softwareFactoryProviders = "MOCKED",
                 hkhAutopilotProviders = "MOCKED",
                 hkhProviders = "MOCKED",
+                pvddProviders = "MOCKED",
+                pvddModels = "mock-model",
             ).validate()
         }.hasMessage("Acceptance Product Factory may only allow MOCKED.")
 
@@ -105,6 +118,8 @@ class AcceptancePolicyIntegrationTest(
                 softwareFactoryProviders = "MOCKED",
                 hkhAutopilotProviders = "MOCKED,CODEX",
                 hkhProviders = "MOCKED",
+                pvddProviders = "MOCKED",
+                pvddModels = "mock-model",
             ).validate()
         }.hasMessage("Acceptance HKH Autopilot may only allow MOCKED.")
     }
@@ -124,6 +139,7 @@ class AcceptancePolicyIntegrationTest(
         const val PRODUCT_TOKEN = "local-product-factory-token"
         const val HKH_AUTOPILOT_TOKEN = "local-hkh-autopilot-token"
         const val HKH_TOKEN = "local-hkh-token"
+        const val PVDD_TOKEN = "local-pvdd-token"
         const val WORKER_TOKEN = "local-worker-token"
     }
 }

@@ -81,8 +81,8 @@ class JobService(
             "software-factory" -> {
                 requireRequest(request.jobKind == JobKind.REPOSITORY_WORK, "Software Factory may only request REPOSITORY_WORK.")
             }
-            "hkh-autopilot", "hkh" -> {
-                requireRequest(request.jobKind == JobKind.APPLICATION_WORK, "HKH consumers may only request APPLICATION_WORK.")
+            "hkh-autopilot", "hkh", "pvdd" -> {
+                requireRequest(request.jobKind == JobKind.APPLICATION_WORK, "Application consumers may only request APPLICATION_WORK.")
             }
             else -> throw ApiException("TENANT_FORBIDDEN", "Tenant is not configured.", HttpStatus.FORBIDDEN)
         }

@@ -12,6 +12,7 @@ flowchart LR
   PF[Product Factory] -->|APPLICATION_WORK| API[Agent Runtime server]
   HKHA[HKH Autopilot] -->|APPLICATION_WORK| API
   HKH[HKH] -->|APPLICATION_WORK| API
+  PVDD[PvdD Commissie-assistent] -->|APPLICATION_WORK| API
   SF[Software Factory] -->|REPOSITORY_WORK| API
   API --> DB[(PostgreSQL)]
   API --> MOCK[Centrale mockexecutor]
@@ -42,6 +43,7 @@ Productie gebruikt onafhankelijke bearercredentials per consument en platformrol
 | `AR_SOFTWARE_FACTORY_TOKEN` | Eigen `REPOSITORY_WORK` maken, lezen, annuleren en artifacts downloaden |
 | `AR_HKH_AUTOPILOT_TOKEN` | Alleen eigen `APPLICATION_WORK` met environmentprefix `HKH_AUTOPILOT` beheren |
 | `AR_HKH_TOKEN` | Alleen eigen `APPLICATION_WORK` met environmentprefix `HKH` beheren |
+| `AR_PVDD_TOKEN` | Alleen eigen `APPLICATION_WORK` met environmentprefix `PVDD` beheren |
 | `AR_WORKER_TOKEN` | In lokaal en productie workers registreren, jobs claimen en actuele gefencete attempts bedienen |
 | `AR_ADMIN_TOKEN` | Managementmetadata lezen en terminale jobs opnieuw aanbieden |
 

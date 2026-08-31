@@ -23,11 +23,13 @@ if [[ -f "$target" ]]; then
   tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT; chmod 600 "$tmp"; cp "$target" "$tmp"
   [[ -n "$(value_for "$target" AR_HKH_AUTOPILOT_TOKEN)" ]] || printf 'AR_HKH_AUTOPILOT_TOKEN=%s\n' "$(random_secret)" >> "$tmp"
   [[ -n "$(value_for "$target" AR_HKH_TOKEN)" ]] || printf 'AR_HKH_TOKEN=%s\n' "$(random_secret)" >> "$tmp"
+  [[ -n "$(value_for "$target" AR_PVDD_TOKEN)" ]] || printf 'AR_PVDD_TOKEN=%s\n' "$(random_secret)" >> "$tmp"
+  [[ -n "$(value_for "$target" AR_PVDD_ACCEPTANCE_TOKEN)" ]] || printf 'AR_PVDD_ACCEPTANCE_TOKEN=%s\n' "$(random_secret)" >> "$tmp"
   [[ -n "$(value_for "$target" AR_GOOGLE_CLIENT_ID)" ]] || printf 'AR_GOOGLE_CLIENT_ID=%s\n' "$google_client" >> "$tmp"
   [[ -n "$(value_for "$target" AR_ADMIN_EMAILS)" ]] || printf 'AR_ADMIN_EMAILS=%s\n' "$admin_emails" >> "$tmp"
   [[ -n "$(value_for "$target" AR_SESSION_SIGNING_SECRET)" ]] || printf 'AR_SESSION_SIGNING_SECRET=%s\n' "$session_secret" >> "$tmp"
   mv "$tmp" "$target"; chmod 600 "$target"; trap - EXIT
-  echo "Bestaande secrets.env behouden en ontbrekende Google-beheerinstellingen zonder weergave aangevuld." >&2
+  echo "Bestaande secrets.env behouden en ontbrekende tenant- en Google-beheerinstellingen zonder weergave aangevuld." >&2
   exit 0
 fi
 
@@ -46,6 +48,8 @@ chmod 600 "$tmp"
   printf 'AR_SOFTWARE_FACTORY_TOKEN=%s\n' "$sf_token"
   printf 'AR_HKH_AUTOPILOT_TOKEN=%s\n' "$(random_secret)"
   printf 'AR_HKH_TOKEN=%s\n' "$(random_secret)"
+  printf 'AR_PVDD_TOKEN=%s\n' "$(random_secret)"
+  printf 'AR_PVDD_ACCEPTANCE_TOKEN=%s\n' "$(random_secret)"
   printf 'AR_WORKER_TOKEN=%s\n' "$(random_secret)"
   printf 'AR_ADMIN_TOKEN=%s\n' "$(random_secret)"
   printf 'AR_GOOGLE_CLIENT_ID=%s\n' "$google_client"
