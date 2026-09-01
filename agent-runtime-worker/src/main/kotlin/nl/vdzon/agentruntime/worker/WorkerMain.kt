@@ -294,8 +294,8 @@ class JobExecutor(
 
             Input is under `/job/input`, selected project values under `/job/secrets/secrets.env`,
             and writable output under `/job/output`. Never include secret values in a provider prompt,
-            another AI request, transcript, result or artifact. Write the structured result to
-            `/job/output/result.json` and evidence files directly to `/job/output/artifacts`.
+            another AI request, transcript, result or artifact. Return the structured result as the
+            final response; the runtime captures it. Write evidence files directly to `/job/output/artifacts`.
 
             Shell and tool output is part of the provider conversation. Never display, dump or inspect
             secrets.env with cat, od, printenv, env, set -x, shell tracing or equivalent commands. Source
@@ -461,7 +461,7 @@ class JobExecutor(
 
         Read task input from /job/input and tool documentation from /job/docs/available-tools.md.
         Never copy values from /job/secrets/secrets.env into a provider request, transcript, result, or artifact.
-        ${if (claim.job.jobKind == JobKind.APPLICATION_WORK) "Write only the complete JSON result to /job/output/result.json and satisfy /job/input/response-schema.json when it exists. Write evidence files directly to /job/output/artifacts." else "Make the requested changes in /work. Do not commit, push, create a pull request, or read credentials; the worker owns publication."}
+        ${if (claim.job.jobKind == JobKind.APPLICATION_WORK) "Return only the complete JSON result as your final response and satisfy /job/input/response-schema.json when it exists. The runtime captures that response automatically; do not create or write a result file yourself. Write evidence files directly to /job/output/artifacts." else "Make the requested changes in /work. Do not commit, push, create a pull request, or read credentials; the worker owns publication."}
     """.trimIndent()
 
     private fun sensitiveValues(claim: ClaimedJob): List<String> =

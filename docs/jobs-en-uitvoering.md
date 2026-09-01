@@ -64,8 +64,9 @@ read-only context uit een publieke GitHub-repository op een exacte commit-SHA:
 De worker doet een detached checkout en verwijdert daarna de remote. De agent kan deze checkout
 niet publiceren.
 
-De provider schrijft kandidaatuitvoer naar de taakdirectory. De worker stuurt de begrensde ruwe
-tekst naar de server. De server normaliseert uitsluitend een kaal JSON-document, een JSON-codeblok
+De provider retourneert de kandidaatuitvoer als zijn finale antwoord; het execution-image legt dit
+antwoord automatisch in de taakdirectory vast. De worker stuurt de begrensde ruwe tekst naar de
+server. De server normaliseert uitsluitend een kaal JSON-document, een JSON-codeblok
 of `Here is the JSON:` gevolgd door zo'n codeblok, parseert het resultaat en valideert het volledige
 JSON-schema. Bij een afwijzing krijgt dezelfde technische attempt concrete, veilige
 validatiefouten. Er zijn maximaal drie duurzame outputpogingen. Een geaccepteerd resultaat wordt
