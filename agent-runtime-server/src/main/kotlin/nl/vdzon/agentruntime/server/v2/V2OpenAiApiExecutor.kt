@@ -94,11 +94,7 @@ class V2OpenAiApiExecutor(
 
     private fun recordResponseMetadata(job:StoredV2Job,attempt:StoredV2Attempt,response:JsonNode) {
         response.path("output").filter{it.path("type").asText()=="reasoning"}.flatMap{it.path("summary").toList()}.mapNotNull{it.path("text").asText().takeIf(String::isNotBlank)}.forEachIndexed{i,text->jobs.addEvent(job.view.id,attempt.view.id,EventType.LOG_MESSAGE,"CALLING_PROVIDER",null,LogKind.REASONING_SUMMARY,text,"openai-reasoning-$i",true,externalId="reasoning-$i")}
-        val node=response.path("usage");val metrics=mutableListOf<UsageMetricValue>()
-        fun add(name:String,metric:UsageMetric){node.path(name).takeIf{it.isNumber}?.let{metrics+=UsageMetricValue(metric,it.asText(),UsageUnit.TOKEN)}}
-        add("input_tokens",UsageMetric.INPUT_TOKENS);add("output_tokens",UsageMetric.OUTPUT_TOKENS)
-        node.path("input_tokens_details").path("cached_tokens").takeIf{it.isNumber}?.let{metrics+=UsageMetricValue(UsageMetric.CACHED_INPUT_TOKENS,it.asText(),UsageUnit.TOKEN)}
-        node.path("output_tokens_details").path("reasoning_tokens").takeIf{it.isNumber}?.let{metrics+=UsageMetricValue(UsageMetric.REASONING_TOKENS,it.asText(),UsageUnit.TOKEN)}
+        val metrics=openAiUsageMetrics(response)
         if(metrics.isNotEmpty())usage.append(job,attempt.view.id,AppendUsageRequest("internal","openai-${response.path("id").asText()}",Instant.now(),metrics,response.path("id").asText(),UsageSource.PROVIDER_REPORTED))
     }
 
@@ -136,3 +132,22 @@ class ProviderFailure(val code:String,message:String,val retryable:Boolean):IOEx
 
 internal fun openAiReasoningOptions(mapper:ObjectMapper):JsonNode =
     mapper.createObjectNode().put("summary","auto")
+
+internal fun openAiUsageMetrics(response:JsonNode):List<UsageMetricValue> {
+    val usage=response.path("usage")
+    val cached=usage.path("input_tokens_details").path("cached_tokens").takeIf{it.isNumber}?.asLong()?:0L
+    val metrics=mutableListOf<UsageMetricValue>()
+    usage.path("input_tokens").takeIf{it.isNumber}?.let {
+        metrics+=UsageMetricValue(UsageMetric.INPUT_TOKENS,(it.asLong()-cached).coerceAtLeast(0).toString(),UsageUnit.TOKEN)
+    }
+    usage.path("input_tokens_details").path("cached_tokens").takeIf{it.isNumber}?.let {
+        metrics+=UsageMetricValue(UsageMetric.CACHED_INPUT_TOKENS,it.asText(),UsageUnit.TOKEN)
+    }
+    usage.path("output_tokens").takeIf{it.isNumber}?.let {
+        metrics+=UsageMetricValue(UsageMetric.OUTPUT_TOKENS,it.asText(),UsageUnit.TOKEN)
+    }
+    usage.path("output_tokens_details").path("reasoning_tokens").takeIf{it.isNumber}?.let {
+        metrics+=UsageMetricValue(UsageMetric.REASONING_TOKENS,it.asText(),UsageUnit.TOKEN)
+    }
+    return metrics
+}
