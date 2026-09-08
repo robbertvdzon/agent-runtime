@@ -61,7 +61,7 @@ class RuntimeMonitor extends StatelessWidget {
   }
 }
 
-enum ViewKind { active, queue, completed, workers }
+enum ViewKind { active, queue, completed, workers, usage }
 
 class ApiClient {
   String token = BrowserPlatform.readToken();
@@ -419,6 +419,8 @@ class _MonitorShellState extends State<MonitorShell> {
         ViewKind.completed =>
           '/v1/management/jobs/completed?limit=30&search=${Uri.encodeQueryComponent(search)}${cursor == null ? '' : '&cursor=${Uri.encodeQueryComponent(cursor!)}'}',
         ViewKind.workers => '/v1/management/workers',
+        ViewKind.usage =>
+          '/v2/management/usage/summary?groupBy=TENANT,VENDOR,MODEL,MODE,TASK_TYPE',
       };
       final data = await api.get(path);
       if (!mounted) return;
@@ -492,6 +494,7 @@ class _MonitorShellState extends State<MonitorShell> {
               label: 'Afgerond',
             ),
             NavigationDestination(icon: Icon(Icons.computer), label: 'Workers'),
+            NavigationDestination(icon: Icon(Icons.euro), label: 'Gebruik'),
           ],
         ),
       );
@@ -539,6 +542,10 @@ class _MonitorShellState extends State<MonitorShell> {
                 icon: Icon(Icons.computer),
                 label: Text('Workers'),
               ),
+              NavigationRailDestination(
+                icon: Icon(Icons.euro),
+                label: Text('Gebruik & kosten'),
+              ),
             ],
           ),
           Expanded(child: body),
@@ -550,6 +557,11 @@ class _MonitorShellState extends State<MonitorShell> {
   Widget _content() {
     if (snapshot == null) {
       return const Center(child: CircularProgressIndicator());
+    }
+    if (selected == ViewKind.usage) {
+      final rows = (snapshot!['rows'] as List? ?? const [])
+          .cast<Map<String, dynamic>>();
+      return UsageList(rows: rows);
     }
     final items = (snapshot!['items'] as List? ?? const [])
         .cast<Map<String, dynamic>>();
@@ -1209,6 +1221,87 @@ class _FileItemState extends State<_FileItem> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class UsageList extends StatelessWidget {
+  final List<Map<String, dynamic>> rows;
+  const UsageList({super.key, required this.rows});
+
+  @override
+  Widget build(BuildContext context) {
+    if (rows.isEmpty) {
+      return const Center(
+        child: Text('Er is in deze periode nog geen v2-gebruik gemeten'),
+      );
+    }
+    return ListView.separated(
+      itemCount: rows.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        final row = rows[index];
+        final dimensions = (row['dimensions'] as Map? ?? const {}).map(
+          (key, value) => MapEntry(key.toString(), value.toString()),
+        );
+        final metrics = (row['metrics'] as List? ?? const [])
+            .cast<Map<String, dynamic>>();
+        final shares = (row['usageShares'] as List? ?? const [])
+            .cast<Map<String, dynamic>>();
+        final costs = (row['costs'] as List? ?? const [])
+            .cast<Map<String, dynamic>>();
+        String dimension(String key) => dimensions[key] ?? '—';
+        final metricText = metrics
+            .map((metric) {
+              final share = shares
+                  .where((item) => item['metric'] == metric['metric'])
+                  .firstOrNull;
+              final suffix = share == null ? '' : ' (${share['percentage']}%)';
+              return '${metric['metric']}: ${metric['quantity']} ${metric['unit']}$suffix';
+            })
+            .join(' · ');
+        final costText = costs.isEmpty
+            ? 'Geen eurobedrag beschikbaar'
+            : costs
+                  .map(
+                    (cost) =>
+                        '${cost['currency']} ${cost['amount']} (${cost['kind']})',
+                  )
+                  .join(' · ');
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  dimension('tenantId'),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${dimension('vendorId')} · ${dimension('model')} · ${dimension('mode')} · ${dimension('taskType')}',
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '${row['jobCount']} jobs · ${row['attemptCount']} uitvoeringen · ${row['unknownUsageAttemptCount']} zonder meetbare usage',
+                ),
+                if (metricText.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(metricText),
+                ],
+                const SizedBox(height: 6),
+                Text(
+                  costText,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

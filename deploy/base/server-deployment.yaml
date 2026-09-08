@@ -20,6 +20,8 @@ spec:
           imagePullPolicy: Always
           envFrom:
             - secretRef: {name: agent-runtime-secrets}
+          env:
+            - {name: AR_OBJECT_STORE_PATH, value: /var/lib/agent-runtime-objects}
           ports:
             - {name: http, containerPort: 8080}
           startupProbe:
@@ -40,3 +42,8 @@ spec:
             capabilities: {drop: [ALL]}
             runAsNonRoot: true
             seccompProfile: {type: RuntimeDefault}
+          volumeMounts:
+            - {name: object-store, mountPath: /var/lib/agent-runtime-objects}
+      volumes:
+        - name: object-store
+          emptyDir: {}

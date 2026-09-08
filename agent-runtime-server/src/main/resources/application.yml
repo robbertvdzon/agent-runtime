@@ -39,6 +39,8 @@ agent-runtime:
   hkh-autopilot-token: ${AR_HKH_AUTOPILOT_TOKEN:local-hkh-autopilot-token}
   hkh-token: ${AR_HKH_TOKEN:local-hkh-token}
   pvdd-token: ${AR_PVDD_TOKEN:local-pvdd-token}
+  personal-news-feed-token: ${AR_PERSONAL_NEWS_FEED_TOKEN:local-personal-news-feed-token}
+  additional-consumer-tokens: ${AR_ADDITIONAL_CONSUMER_TOKENS:}
   worker-token: ${AR_WORKER_TOKEN:local-worker-token}
   worker-api-enabled: ${AR_WORKER_API_ENABLED:true}
   admin-token: ${AR_ADMIN_TOKEN:local-admin-token}
@@ -65,4 +67,19 @@ agent-runtime:
   hkh-autopilot-models: ${AR_HKH_AUTOPILOT_MODELS:*}
   hkh-models: ${AR_HKH_MODELS:*}
   pvdd-models: ${AR_PVDD_MODELS:gpt-5.6-sol}
+  personal-news-feed-environment-prefixes: ${AR_PERSONAL_NEWS_FEED_ENVIRONMENT_PREFIXES:PERSONAL_FEED}
+  personal-news-feed-providers: ${AR_PERSONAL_NEWS_FEED_PROVIDERS:CODEX,CLAUDE,MOCKED}
+  personal-news-feed-models: ${AR_PERSONAL_NEWS_FEED_MODELS:*}
   transcript-max-bytes-per-job: ${AR_TRANSCRIPT_MAX_BYTES_PER_JOB:10485760}
+  object-store-path: ${AR_OBJECT_STORE_PATH:${java.io.tmpdir}/agent-runtime-objects}
+  object-max-bytes: ${AR_OBJECT_MAX_BYTES:2147483648}
+  job-input-max-bytes: ${AR_JOB_INPUT_MAX_BYTES:5368709120}
+  job-output-max-bytes: ${AR_JOB_OUTPUT_MAX_BYTES:5368709120}
+  object-store-min-free-bytes: ${AR_OBJECT_STORE_MIN_FREE_BYTES:0}
+  upload-retention-hours: ${AR_UPLOAD_RETENTION_HOURS:24}
+  failed-content-retention-days: ${AR_FAILED_CONTENT_RETENTION_DAYS:7}
+  successful-content-retention-days: ${AR_SUCCESSFUL_CONTENT_RETENTION_DAYS:30}
+  monitor-log-retention-days: ${AR_MONITOR_LOG_RETENTION_DAYS:14}
+  v2-result-max-bytes: ${AR_V2_RESULT_MAX_BYTES:1048576}
+  open-ai-api-key: ${AR_OPENAI_API_KEY:}
+  open-ai-api-base-url: ${AR_OPENAI_API_BASE_URL:https://api.openai.com/v1}

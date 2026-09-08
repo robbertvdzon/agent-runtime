@@ -15,13 +15,13 @@ data class RequestIdentity(val role: PrincipalRole, val tenantId: String? = null
 class ApiSecurity(private val properties: RuntimeProperties, private val adminAuth: AdminAuthService) : OncePerRequestFilter() {
     override fun shouldNotFilter(request: HttpServletRequest): Boolean {
         val path = request.requestURI
-        return (!path.startsWith("/v1/") && !path.startsWith("/actuator/")) ||
+        return (!path.startsWith("/v1/") && !path.startsWith("/v2/") && !path.startsWith("/actuator/")) ||
             path.startsWith("/actuator/health") || path.startsWith("/v1/auth/")
     }
 
     override fun doFilterInternal(request: HttpServletRequest, response: HttpServletResponse, chain: FilterChain) {
         val path = request.requestURI
-        if (!properties.workerApiEnabled && (path == "/v1/workers" || path.startsWith("/v1/workers/"))) {
+        if (!properties.workerApiEnabled && (path == "/v1/workers" || path.startsWith("/v1/workers/") || path.startsWith("/v2/workers/"))) {
             response.status = 404
             response.contentType = MediaType.APPLICATION_JSON_VALUE
             response.writer.write("{\"code\":\"NOT_FOUND\",\"message\":\"Not found.\"}")
@@ -29,11 +29,10 @@ class ApiSecurity(private val properties: RuntimeProperties, private val adminAu
         }
         val token = request.getHeader("Authorization")?.removePrefix("Bearer ")?.takeIf { it.isNotBlank() }
         val identity = when {
-            secureEquals(token, properties.productFactoryToken) -> RequestIdentity(PrincipalRole.CONSUMER, "product-factory")
-            secureEquals(token, properties.softwareFactoryToken) -> RequestIdentity(PrincipalRole.CONSUMER, "software-factory")
-            secureEquals(token, properties.hkhAutopilotToken) -> RequestIdentity(PrincipalRole.CONSUMER, "hkh-autopilot")
-            secureEquals(token, properties.hkhToken) -> RequestIdentity(PrincipalRole.CONSUMER, "hkh")
-            secureEquals(token, properties.pvddToken) -> RequestIdentity(PrincipalRole.CONSUMER, "pvdd")
+            properties.consumerTokens().entries.any { secureEquals(token, it.value) } -> RequestIdentity(
+                PrincipalRole.CONSUMER,
+                properties.consumerTokens().entries.first { secureEquals(token, it.value) }.key,
+            )
             secureEquals(token, properties.workerToken) -> RequestIdentity(PrincipalRole.WORKER)
             secureEquals(token, properties.adminToken) -> RequestIdentity(PrincipalRole.ADMIN)
             token != null && adminAuth.verifySession(token) != null -> RequestIdentity(PrincipalRole.ADMIN)

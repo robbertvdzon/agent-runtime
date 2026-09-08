@@ -28,6 +28,7 @@ import java.util.UUID
     "agent-runtime.hkh-providers=MOCKED",
     "agent-runtime.pvdd-providers=MOCKED",
     "agent-runtime.pvdd-models=mock-model",
+    "agent-runtime.personal-news-feed-providers=MOCKED",
     "spring.datasource.url=jdbc:h2:mem:agent_runtime_acceptance_policy;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE",
 ])
 @AutoConfigureMockMvc

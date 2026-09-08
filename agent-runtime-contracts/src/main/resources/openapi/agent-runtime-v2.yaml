@@ -1,0 +1,1479 @@
+openapi: 3.1.0
+info:
+  title: Agent Runtime API
+  version: 2.0.0
+  description: |
+    Asynchronous Agent Runtime contract. All jobs return a bounded JSON object.
+    Large input and output use immutable objects transferred outside job JSON.
+    Live events can include provider-supplied reasoning summaries, visible agent text and tool
+    activity. Raw hidden chain-of-thought is not part of this contract.
+    The v2 contract is implemented alongside the backwards-compatible v1 API.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: /v2
+security:
+  - bearerAuth: []
+
+paths:
+  /uploads:
+    post:
+      operationId: createInputUpload
+      summary: Reserve a resumable upload for job input
+      description: |
+        Use this before creating a job when input contains a file or text larger than the inline
+        instruction limit. Binary files and text files such as text/plain, text/markdown and
+        application/json use the same upload flow. The returned objectId can only be referenced
+        after upload completion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUploadRequest'
+      responses:
+        '201':
+          description: Upload reserved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadView'
+        '400': {$ref: '#/components/responses/ClientError'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+
+  /uploads/{uploadId}:
+    parameters:
+      - $ref: '#/components/parameters/UploadId'
+    head:
+      operationId: getInputUploadOffset
+      summary: Read current upload offset and state
+      responses:
+        '204':
+          description: Upload state returned in headers
+          headers:
+            Upload-Offset:
+              required: true
+              schema: {type: integer, format: int64, minimum: 0}
+            Upload-Length:
+              required: true
+              schema: {type: integer, format: int64, minimum: 1}
+            Upload-State:
+              required: true
+              schema: {type: string, enum: [UPLOADING, READY, EXPIRED]}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      operationId: appendInputUploadChunk
+      summary: Append one binary chunk at the exact current offset
+      parameters:
+        - $ref: '#/components/parameters/UploadOffset'
+      requestBody:
+        required: true
+        content:
+          application/offset+octet-stream:
+            schema: {type: string, format: binary}
+      responses:
+        '204':
+          description: Chunk stored
+          headers:
+            Upload-Offset:
+              required: true
+              schema: {type: integer, format: int64, minimum: 0}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+    delete:
+      operationId: deleteInputUpload
+      summary: Delete an unbound upload and its object
+      responses:
+        '204': {description: Upload deleted or already absent}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /uploads/{uploadId}/complete:
+    post:
+      operationId: completeInputUpload
+      summary: Verify size and SHA-256 and make the input object immutable
+      parameters:
+        - $ref: '#/components/parameters/UploadId'
+      responses:
+        '200':
+          description: Immutable input object
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObjectView'
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+
+  /jobs:
+    post:
+      operationId: createJob
+      summary: Create or return one idempotent AI session/job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateJobRequest'
+            examples:
+              structuredText:
+                value:
+                  idempotencyKey: summarize-article-123
+                  jobKind: APPLICATION_WORK
+                  taskType: STRUCTURED_GENERATION
+                  execution:
+                    vendorId: openai
+                    model: gpt-example
+                    mode: SUBSCRIPTION
+                  input:
+                    instruction: Summarize the article in Dutch.
+                    objects: []
+                  output:
+                    resultSchema:
+                      type: object
+                      required: [text]
+                      properties:
+                        text: {type: string}
+                      additionalProperties: false
+                    artifacts: []
+                  executionTimeoutSeconds: 3600
+              transcription:
+                value:
+                  idempotencyKey: transcribe-audio-123
+                  jobKind: APPLICATION_WORK
+                  taskType: TRANSCRIPTION
+                  execution:
+                    vendorId: openai
+                    model: transcription-model
+                    mode: API
+                  input:
+                    instruction: Transcribe in Dutch and include timestamps.
+                    objects:
+                      - objectId: 00000000-0000-0000-0000-000000000001
+                        name: audio
+                        role: SOURCE
+                  output:
+                    artifacts:
+                      - name: transcript
+                        required: true
+                        mimeTypes: [text/plain, application/json]
+                        maxBytes: 1073741824
+                  executionTimeoutSeconds: 3600
+      responses:
+        '202':
+          description: Job accepted, or existing idempotent job returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobView'
+        '400': {$ref: '#/components/responses/ClientError'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    get:
+      operationId: listJobs
+      summary: Cursor-page jobs visible to the authenticated tenant
+      parameters:
+        - {in: query, name: status, schema: {$ref: '#/components/schemas/JobStatus'}}
+        - {in: query, name: cursor, schema: {type: string, maxLength: 500}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 30}}
+      responses:
+        '200':
+          description: Job page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobPage'
+
+  /jobs/{jobId}:
+    get:
+      operationId: getJob
+      summary: Get current job status
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Current job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobView'
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /jobs/{jobId}/result:
+    get:
+      operationId: getJobResult
+      summary: Get bounded JSON result and output object metadata
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Immutable successful result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobResultView'
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /jobs/{jobId}/attempts:
+    get:
+      operationId: listJobAttempts
+      summary: List technical attempts, retry reasons, usage and cost
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Attempts in chronological order
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/AttemptView'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /jobs/{jobId}/events:
+    get:
+      operationId: getJobEvents
+      summary: Cursor-page durable status and progress events
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+        - {in: query, name: afterSequence, schema: {type: integer, format: int64, minimum: 0}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+      responses:
+        '200':
+          description: Event page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobEventPage'
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /jobs/{jobId}/event-stream:
+    get:
+      operationId: streamJobEvents
+      summary: Follow job status and progress with Server-Sent Events
+      description: |
+        Optional alternative to polling. Last-Event-ID resumes after a disconnect. Visible agent
+        text, tool activity and provider-supplied reasoning summary chunks may be sent as bounded
+        LOG_MESSAGE events. Raw output-token streams, large result bytes and unavailable hidden
+        chain-of-thought are not sent on this stream.
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+        - in: header
+          name: Last-Event-ID
+          required: false
+          schema: {type: integer, format: int64, minimum: 0}
+      responses:
+        '200':
+          description: SSE stream of JobEventView payloads
+          content:
+            text/event-stream:
+              schema: {type: string}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /jobs/{jobId}/objects/{objectId}/content:
+    get:
+      operationId: downloadJobObject
+      summary: Stream one input or output object owned by the job tenant
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/ObjectId'
+        - in: header
+          name: Range
+          required: false
+          schema: {type: string, pattern: '^bytes=[0-9]*-[0-9]*$'}
+      responses:
+        '200':
+          description: Complete object
+          headers:
+            ETag: {schema: {type: string}}
+            Accept-Ranges: {schema: {type: string, const: bytes}}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '206':
+          description: Requested byte range
+          headers:
+            Content-Range: {schema: {type: string}}
+            ETag: {schema: {type: string}}
+            Accept-Ranges: {schema: {type: string, const: bytes}}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '416':
+          description: Requested range is not satisfiable
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+
+  /jobs/{jobId}/cancel:
+    post:
+      operationId: cancelJob
+      summary: Cancel queued work or request cancellation of the active attempt
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Current job after cancellation request
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/JobView'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /jobs/{jobId}/content:
+    delete:
+      operationId: deleteJobContent
+      summary: Schedule early deletion of content belonging to a terminal job
+      description: |
+        Deletes input objects, output artifacts and retained monitor logs. Job status, attempts,
+        usage and costs remain available. Running or queued jobs cannot be purged.
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '202':
+          description: Content deletion scheduled
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ContentDeletionView'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /usage/summary:
+    get:
+      operationId: getTenantUsageSummary
+      summary: Aggregate usage and cost for the authenticated tenant
+      parameters:
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/Until'
+        - $ref: '#/components/parameters/GroupBy'
+        - {in: query, name: taskType, schema: {$ref: '#/components/schemas/TaskType'}}
+        - {in: query, name: vendorId, schema: {type: string, maxLength: 100}}
+        - {in: query, name: model, schema: {type: string, maxLength: 160}}
+        - {in: query, name: mode, schema: {$ref: '#/components/schemas/ExecutionMode'}}
+      responses:
+        '200':
+          description: Aggregated rows
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UsageSummaryResponse'}
+        '400': {$ref: '#/components/responses/ClientError'}
+
+  /management/usage/summary:
+    get:
+      operationId: getManagementUsageSummary
+      summary: Aggregate usage and cost across all tenants
+      description: Requires the administrator role. Group by TENANT to produce a project overview.
+      parameters:
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/Until'
+        - $ref: '#/components/parameters/GroupBy'
+        - {in: query, name: tenantId, schema: {type: string, maxLength: 100}}
+        - {in: query, name: taskType, schema: {$ref: '#/components/schemas/TaskType'}}
+        - {in: query, name: vendorId, schema: {type: string, maxLength: 100}}
+        - {in: query, name: model, schema: {type: string, maxLength: 160}}
+        - {in: query, name: mode, schema: {$ref: '#/components/schemas/ExecutionMode'}}
+      responses:
+        '200':
+          description: Aggregated rows
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UsageSummaryResponse'}
+        '400': {$ref: '#/components/responses/ClientError'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /management/prices:
+    get:
+      operationId: listPriceRates
+      summary: List current and historical immutable price rates
+      parameters:
+        - {in: query, name: vendorId, schema: {type: string, maxLength: 100}}
+        - {in: query, name: model, schema: {type: string, maxLength: 160}}
+      responses:
+        '200':
+          description: Price rates
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/PriceRateView'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      operationId: createPriceRate
+      summary: Add a new effective-dated immutable price rate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreatePriceRateRequest'}
+      responses:
+        '201':
+          description: Price rate created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PriceRateView'}
+        '400': {$ref: '#/components/responses/ClientError'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /management/subscriptions:
+    get:
+      operationId: listSubscriptionPeriods
+      summary: List fixed subscription amounts and allocation settings
+      responses:
+        '200':
+          description: Subscription periods
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/SubscriptionPeriodView'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      operationId: createSubscriptionPeriod
+      summary: Add one subscription period for optional cost allocation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateSubscriptionPeriodRequest'}
+      responses:
+        '201':
+          description: Subscription period created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SubscriptionPeriodView'}
+        '400': {$ref: '#/components/responses/ClientError'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /workers/register:
+    post:
+      operationId: registerWorker
+      summary: Register or refresh worker capabilities
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorkerRegistrationRequest'}
+      responses:
+        '200':
+          description: Registration accepted
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkerView'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /workers/{workerId}/claims:
+    post:
+      operationId: claimJob
+      summary: Long-poll for one exact vendor/model/mode/task-compatible job
+      parameters:
+        - $ref: '#/components/parameters/WorkerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ClaimRequest'}
+      responses:
+        '200':
+          description: Claimed job and newly created attempt
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ClaimedJob'}
+        '204': {description: No compatible job available}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /workers/{workerId}/jobs/{jobId}/heartbeat:
+    post:
+      operationId: heartbeatAttempt
+      summary: Refresh the current attempt lease
+      parameters:
+        - $ref: '#/components/parameters/WorkerId'
+        - $ref: '#/components/parameters/JobId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AttemptAuth'}
+      responses:
+        '200':
+          description: Lease state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HeartbeatResponse'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /workers/{workerId}/jobs/{jobId}/progress:
+    post:
+      operationId: reportProgress
+      summary: Store bounded technical progress
+      parameters:
+        - $ref: '#/components/parameters/WorkerId'
+        - $ref: '#/components/parameters/JobId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProgressRequest'}
+      responses:
+        '204': {description: Progress accepted}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /workers/{workerId}/jobs/{jobId}/objects/{objectId}/content:
+    get:
+      operationId: downloadWorkerInputObject
+      summary: Stream a claimed job input object to the fenced worker
+      parameters:
+        - $ref: '#/components/parameters/WorkerId'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/ObjectId'
+        - $ref: '#/components/parameters/AttemptIdHeader'
+        - $ref: '#/components/parameters/FencingTokenHeader'
+      responses:
+        '200':
+          description: Complete input object
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /workers/{workerId}/jobs/{jobId}/output-objects:
+    post:
+      operationId: createWorkerOutputUpload
+      summary: Reserve a declared output artifact upload
+      parameters:
+        - $ref: '#/components/parameters/WorkerId'
+        - $ref: '#/components/parameters/JobId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateOutputUploadRequest'}
+      responses:
+        '201':
+          description: Output upload reserved
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UploadView'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+
+  /workers/{workerId}/jobs/{jobId}/output-objects/{uploadId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkerId'
+      - $ref: '#/components/parameters/JobId'
+      - $ref: '#/components/parameters/UploadId'
+      - $ref: '#/components/parameters/AttemptIdHeader'
+      - $ref: '#/components/parameters/FencingTokenHeader'
+    head:
+      operationId: getWorkerOutputUploadOffset
+      summary: Read current output upload offset
+      responses:
+        '204':
+          description: Upload offset returned in headers
+          headers:
+            Upload-Offset:
+              required: true
+              schema: {type: integer, format: int64, minimum: 0}
+            Upload-Length:
+              required: true
+              schema: {type: integer, format: int64, minimum: 1}
+        '409': {$ref: '#/components/responses/Conflict'}
+    patch:
+      operationId: appendWorkerOutputChunk
+      summary: Append one binary output chunk
+      parameters:
+        - $ref: '#/components/parameters/UploadOffset'
+      requestBody:
+        required: true
+        content:
+          application/offset+octet-stream:
+            schema: {type: string, format: binary}
+      responses:
+        '204':
+          description: Chunk stored
+          headers:
+            Upload-Offset:
+              required: true
+              schema: {type: integer, format: int64, minimum: 0}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+
+  /workers/{workerId}/jobs/{jobId}/output-objects/{uploadId}/complete:
+    post:
+      operationId: completeWorkerOutputUpload
+      summary: Verify and finalize one declared output object
+      parameters:
+        - $ref: '#/components/parameters/WorkerId'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/UploadId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AttemptAuth'}
+      responses:
+        '200':
+          description: Immutable output object
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ObjectView'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+
+  /workers/{workerId}/jobs/{jobId}/attempts/{attemptId}/usage-events:
+    post:
+      operationId: appendAttemptUsage
+      summary: Append idempotent normalized usage to the active attempt
+      parameters:
+        - $ref: '#/components/parameters/WorkerId'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/AttemptId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AppendUsageRequest'}
+      responses:
+        '204': {description: Usage stored or already present}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /workers/{workerId}/jobs/{jobId}/attempts/{attemptId}/logs:
+    post:
+      operationId: appendAttemptLog
+      summary: Append one bounded and redacted visible execution log event
+      description: |
+        Accepts visible agent text, tool activity, Runtime diagnostics and reasoning summaries that
+        a provider explicitly exposes. Raw hidden chain-of-thought is not required or promised.
+      parameters:
+        - $ref: '#/components/parameters/WorkerId'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/AttemptId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AppendLogRequest'}
+      responses:
+        '204': {description: Log event stored or already present}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+
+  /workers/{workerId}/jobs/{jobId}/attempts/{attemptId}/result:
+    post:
+      operationId: submitAttemptResult
+      summary: Validate bounded JSON and finalize the job when all declared artifacts are ready
+      description: |
+        The worker reads the mandatory /job/output/result.json and submits that bounded object here
+        after all declared output files have been uploaded. Provider stdout/stderr is not a result.
+      parameters:
+        - $ref: '#/components/parameters/WorkerId'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/AttemptId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SubmitResultRequest'}
+      responses:
+        '204': {description: Result accepted and job completed}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422':
+          description: Output rejected; server records INVALID_OUTPUT and schedules a retry when allowed
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OutputRejectedResponse'}
+
+  /workers/{workerId}/jobs/{jobId}/attempts/{attemptId}/fail:
+    post:
+      operationId: failAttempt
+      summary: Fail the active attempt and optionally schedule a retry
+      parameters:
+        - $ref: '#/components/parameters/WorkerId'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/AttemptId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/FailAttemptRequest'}
+      responses:
+        '204': {description: Failure stored}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  parameters:
+    JobId:
+      in: path
+      name: jobId
+      required: true
+      schema: {type: string, format: uuid}
+    UploadId:
+      in: path
+      name: uploadId
+      required: true
+      schema: {type: string, format: uuid}
+    ObjectId:
+      in: path
+      name: objectId
+      required: true
+      schema: {type: string, format: uuid}
+    WorkerId:
+      in: path
+      name: workerId
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 100}
+    AttemptId:
+      in: path
+      name: attemptId
+      required: true
+      schema: {type: string, format: uuid}
+    UploadOffset:
+      in: header
+      name: Upload-Offset
+      required: true
+      schema: {type: integer, format: int64, minimum: 0}
+    AttemptIdHeader:
+      in: header
+      name: X-Attempt-Id
+      required: true
+      schema: {type: string, format: uuid}
+    FencingTokenHeader:
+      in: header
+      name: X-Fencing-Token
+      required: true
+      schema: {type: string, minLength: 32, maxLength: 500}
+    From:
+      in: query
+      name: from
+      required: true
+      schema: {type: string, format: date-time}
+    Until:
+      in: query
+      name: until
+      required: true
+      schema: {type: string, format: date-time}
+    GroupBy:
+      in: query
+      name: groupBy
+      required: false
+      style: form
+      explode: false
+      schema:
+        type: array
+        maxItems: 6
+        uniqueItems: true
+        items:
+          type: string
+          enum: [TENANT, TASK_TYPE, VENDOR, MODEL, EXECUTION_MODE, STATUS]
+
+  responses:
+    ClientError:
+      description: Invalid request
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    Forbidden:
+      description: Identity is not authorized
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    NotFound:
+      description: Resource is absent or hidden by tenant isolation
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    Conflict:
+      description: Idempotency, state, offset, lease or fencing conflict
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    PayloadTooLarge:
+      description: Configured object, chunk, job or tenant quota exceeded
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    ValidationFailed:
+      description: Request or content failed semantic validation
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+
+  schemas:
+    CreateUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [filename, mimeType, sizeBytes, sha256]
+      properties:
+        filename: {$ref: '#/components/schemas/Filename'}
+        mimeType: {type: string, minLength: 1, maxLength: 160}
+        sizeBytes: {type: integer, format: int64, minimum: 1, maximum: 2147483648}
+        sha256: {$ref: '#/components/schemas/Sha256'}
+
+    UploadView:
+      type: object
+      additionalProperties: false
+      required: [uploadId, objectId, state, protocol, chunkSizeBytes, uploadUrl, offset, sizeBytes, expiresAt]
+      properties:
+        uploadId: {type: string, format: uuid}
+        objectId: {type: string, format: uuid}
+        state: {type: string, enum: [UPLOADING, READY, EXPIRED]}
+        protocol: {type: string, const: RESUMABLE_PATCH}
+        chunkSizeBytes: {type: integer, format: int64, minimum: 1048576, maximum: 67108864}
+        uploadUrl: {type: string}
+        offset: {type: integer, format: int64, minimum: 0}
+        sizeBytes: {type: integer, format: int64, minimum: 1}
+        expiresAt: {type: string, format: date-time}
+
+    ObjectView:
+      type: object
+      additionalProperties: false
+      required: [objectId, filename, mimeType, sizeBytes, sha256, state, createdAt, readyAt]
+      properties:
+        objectId: {type: string, format: uuid}
+        filename: {$ref: '#/components/schemas/Filename'}
+        mimeType: {type: string, maxLength: 160}
+        sizeBytes: {type: integer, format: int64, minimum: 1}
+        sha256: {$ref: '#/components/schemas/Sha256'}
+        state: {type: string, const: READY}
+        createdAt: {type: string, format: date-time}
+        readyAt: {type: string, format: date-time}
+
+    CreateJobRequest:
+      type: object
+      additionalProperties: false
+      required: [idempotencyKey, jobKind, taskType, execution, input, output, executionTimeoutSeconds]
+      properties:
+        idempotencyKey: {type: string, minLength: 1, maxLength: 160}
+        jobKind: {$ref: '#/components/schemas/JobKind'}
+        taskType: {$ref: '#/components/schemas/TaskType'}
+        execution: {$ref: '#/components/schemas/ExecutionSelection'}
+        input: {$ref: '#/components/schemas/JobInput'}
+        output: {$ref: '#/components/schemas/OutputContract'}
+        repositorySnapshot: {$ref: '#/components/schemas/RepositorySnapshot'}
+        repositoryRequest: {$ref: '#/components/schemas/RepositoryRequest'}
+        environmentKeys:
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          items: {type: string, pattern: '^[A-Z][A-Z0-9_]*__[A-Z][A-Z0-9_]*$'}
+        executionTimeoutSeconds: {type: integer, minimum: 30, maximum: 86400}
+
+    ExecutionSelection:
+      type: object
+      additionalProperties: false
+      required: [vendorId, model, mode]
+      properties:
+        vendorId:
+          type: string
+          pattern: '^[a-z][a-z0-9-]{0,99}$'
+          description: Use mock when mode is MOCK.
+        model:
+          type: string
+          minLength: 1
+          maxLength: 160
+          description: Use mock when mode is MOCK.
+        mode: {$ref: '#/components/schemas/ExecutionMode'}
+
+    JobInput:
+      type: object
+      additionalProperties: false
+      required: [instruction, objects]
+      properties:
+        instruction: {type: string, minLength: 1, maxLength: 65536}
+        objects:
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/InputObjectRef'}
+
+    InputObjectRef:
+      type: object
+      additionalProperties: false
+      required: [objectId, name, role]
+      properties:
+        objectId: {type: string, format: uuid}
+        name: {$ref: '#/components/schemas/LogicalName'}
+        role: {type: string, enum: [SOURCE, CONTEXT, PROMPT, IMAGE, AUDIO, VIDEO, DOCUMENT]}
+
+    OutputContract:
+      type: object
+      additionalProperties: false
+      required: [artifacts]
+      properties:
+        resultSchema:
+          description: Required for STRUCTURED_GENERATION; specialized task types can use a Runtime-defined schema.
+          type: object
+        artifacts:
+          type: array
+          maxItems: 50
+          items: {$ref: '#/components/schemas/OutputArtifactDeclaration'}
+
+    OutputArtifactDeclaration:
+      type: object
+      additionalProperties: false
+      required: [name, required, mimeTypes]
+      properties:
+        name:
+          $ref: '#/components/schemas/LogicalName'
+          description: Logical slot matched to the basename of a file under /job/output/artifacts.
+        required: {type: boolean}
+        mimeTypes:
+          type: array
+          minItems: 1
+          maxItems: 20
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 160}
+        maxBytes: {type: integer, format: int64, minimum: 1, maximum: 2147483648}
+
+    JobView:
+      type: object
+      additionalProperties: false
+      required: [id, tenantId, idempotencyKey, jobKind, taskType, execution, status, phase, attemptCount, maxAttempts, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        tenantId: {type: string, maxLength: 100}
+        idempotencyKey: {type: string, maxLength: 160}
+        jobKind: {$ref: '#/components/schemas/JobKind'}
+        taskType: {$ref: '#/components/schemas/TaskType'}
+        execution: {$ref: '#/components/schemas/ExecutionSelection'}
+        status: {$ref: '#/components/schemas/JobStatus'}
+        phase: {type: string, maxLength: 80}
+        attemptCount: {type: integer, minimum: 0}
+        maxAttempts: {type: integer, minimum: 1, maximum: 10}
+        progressPercent: {type: integer, minimum: 0, maximum: 100}
+        progressMessage: {type: string, maxLength: 1000}
+        errorCode: {type: string, maxLength: 120}
+        errorMessage: {type: string, maxLength: 2000}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+
+    JobPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/JobView'}
+        nextCursor: {type: string}
+
+    JobResultView:
+      type: object
+      additionalProperties: false
+      required: [jobId, result, artifacts, usageSummary, completedAt]
+      description: |
+        Runtime-built manifest. result is the validated content of /job/output/result.json;
+        artifacts are added after successful uploads. Consumers never access the worker directory
+        or BlobStore directly.
+      properties:
+        jobId: {type: string, format: uuid}
+        result:
+          type: object
+          description: Bounded JSON object; default maximum serialized size is 1 MiB.
+        artifacts:
+          type: array
+          items: {$ref: '#/components/schemas/OutputObjectView'}
+        usageSummary: {$ref: '#/components/schemas/JobUsageSummary'}
+        completedAt: {type: string, format: date-time}
+
+    OutputObjectView:
+      type: object
+      additionalProperties: false
+      required: [objectId, name, filename, mimeType, sizeBytes, sha256, state, createdAt, readyAt, downloadUrl]
+      properties:
+        objectId: {type: string, format: uuid}
+        name: {$ref: '#/components/schemas/LogicalName'}
+        filename: {$ref: '#/components/schemas/Filename'}
+        mimeType: {type: string, maxLength: 160}
+        sizeBytes: {type: integer, format: int64, minimum: 1}
+        sha256: {$ref: '#/components/schemas/Sha256'}
+        state: {type: string, const: READY}
+        createdAt: {type: string, format: date-time}
+        readyAt: {type: string, format: date-time}
+        downloadUrl: {type: string}
+
+    AttemptView:
+      type: object
+      additionalProperties: false
+      required: [id, jobId, number, reason, status, execution, usageQuality, usageSummary, startedAt]
+      properties:
+        id: {type: string, format: uuid}
+        jobId: {type: string, format: uuid}
+        number: {type: integer, minimum: 1}
+        reason: {$ref: '#/components/schemas/AttemptReason'}
+        status: {type: string, enum: [RUNNING, SUCCEEDED, FAILED, INVALID_OUTPUT, ABANDONED, CANCELLED]}
+        execution: {$ref: '#/components/schemas/ExecutionSelection'}
+        providerRequestId: {type: string, maxLength: 300}
+        usageQuality: {$ref: '#/components/schemas/UsageQuality'}
+        usageSummary: {$ref: '#/components/schemas/JobUsageSummary'}
+        errorCode: {type: string, maxLength: 120}
+        startedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+
+    JobEventView:
+      type: object
+      additionalProperties: false
+      required: [sequence, jobId, type, createdAt]
+      properties:
+        sequence: {type: integer, format: int64, minimum: 1}
+        jobId: {type: string, format: uuid}
+        type:
+          type: string
+          enum: [JOB_STATUS_CHANGED, ATTEMPT_STARTED, ATTEMPT_FINISHED, RETRY_SCHEDULED, PROGRESS_UPDATED, LOG_MESSAGE, OUTPUT_OBJECT_READY, JOB_FINISHED]
+        phase: {type: string, maxLength: 80}
+        message: {type: string, maxLength: 1000}
+        logKind: {type: string, enum: [AGENT_TEXT, REASONING_SUMMARY, TOOL_CALL, TOOL_OUTPUT, SYSTEM]}
+        logText:
+          type: string
+          maxLength: 8192
+          description: Visible redacted execution text or a provider-supplied reasoning-summary chunk.
+        logStreamId:
+          type: string
+          maxLength: 200
+          description: Groups ordered chunks of one streamed message or reasoning summary.
+        logFinal:
+          type: boolean
+          default: true
+          description: True when this is the final chunk for logStreamId.
+        status: {$ref: '#/components/schemas/JobStatus'}
+        progressPercent: {type: integer, minimum: 0, maximum: 100}
+        createdAt: {type: string, format: date-time}
+
+    JobEventPage:
+      type: object
+      additionalProperties: false
+      required: [items, active]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/JobEventView'}
+        nextSequence: {type: integer, format: int64, minimum: 1}
+        active: {type: boolean}
+
+    ContentDeletionView:
+      type: object
+      additionalProperties: false
+      required: [jobId, status, requestedAt]
+      properties:
+        jobId: {type: string, format: uuid}
+        status: {type: string, enum: [DELETE_PENDING, DELETED]}
+        requestedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+
+    JobUsageSummary:
+      type: object
+      additionalProperties: false
+      required: [attemptCount, usageQuality, metrics, costs]
+      properties:
+        attemptCount: {type: integer, minimum: 0}
+        usageQuality: {$ref: '#/components/schemas/UsageQuality'}
+        metrics:
+          type: array
+          items: {$ref: '#/components/schemas/UsageMetricValue'}
+        costs:
+          type: array
+          items: {$ref: '#/components/schemas/CostValue'}
+
+    UsageMetricValue:
+      type: object
+      additionalProperties: false
+      required: [metric, quantity, unit]
+      properties:
+        metric: {$ref: '#/components/schemas/UsageMetric'}
+        quantity: {$ref: '#/components/schemas/DecimalString'}
+        unit: {type: string, enum: [TOKEN, SECOND, CHARACTER, REQUEST, IMAGE]}
+
+    CostValue:
+      type: object
+      additionalProperties: false
+      required: [kind, status, amount, currency]
+      properties:
+        kind: {type: string, enum: [DIRECT, CALCULATED, ALLOCATED]}
+        status: {type: string, enum: [ESTIMATED, FINAL, RECONCILED]}
+        amount: {$ref: '#/components/schemas/DecimalString'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+
+    UsageSummaryResponse:
+      type: object
+      additionalProperties: false
+      required: [from, until, rows]
+      properties:
+        from: {type: string, format: date-time}
+        until: {type: string, format: date-time}
+        rows:
+          type: array
+          items: {$ref: '#/components/schemas/UsageSummaryRow'}
+
+    UsageSummaryRow:
+      type: object
+      additionalProperties: false
+      required: [dimensions, jobCount, attemptCount, unknownUsageAttemptCount, metrics, costs, usageShares]
+      properties:
+        dimensions:
+          type: object
+          additionalProperties: {type: string}
+        jobCount: {type: integer, format: int64, minimum: 0}
+        attemptCount: {type: integer, format: int64, minimum: 0}
+        unknownUsageAttemptCount: {type: integer, format: int64, minimum: 0}
+        metrics:
+          type: array
+          items: {$ref: '#/components/schemas/UsageMetricValue'}
+        costs:
+          type: array
+          items: {$ref: '#/components/schemas/CostValue'}
+        usageShares:
+          type: array
+          description: Percentage of total measured usage for the same vendor, model, mode and metric in the selected period.
+          items:
+            type: object
+            additionalProperties: false
+            required: [metric, percentage]
+            properties:
+              metric: {$ref: '#/components/schemas/UsageMetric'}
+              percentage: {$ref: '#/components/schemas/DecimalString'}
+
+    CreatePriceRateRequest:
+      type: object
+      additionalProperties: false
+      required: [vendorId, model, mode, taskType, metric, unitSize, unitPrice, currency, validFrom, sourceReference]
+      properties:
+        vendorId: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
+        model: {type: string, minLength: 1, maxLength: 160}
+        mode: {$ref: '#/components/schemas/ExecutionMode'}
+        taskType: {$ref: '#/components/schemas/TaskType'}
+        metric: {$ref: '#/components/schemas/UsageMetric'}
+        unitSize: {$ref: '#/components/schemas/DecimalString'}
+        unitPrice: {$ref: '#/components/schemas/DecimalString'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        validFrom: {type: string, format: date-time}
+        validUntil: {type: string, format: date-time}
+        sourceReference: {type: string, minLength: 1, maxLength: 1000}
+
+    PriceRateView:
+      type: object
+      additionalProperties: false
+      required: [id, version, vendorId, model, mode, taskType, metric, unitSize, unitPrice, currency, validFrom, sourceReference, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        version: {type: integer, minimum: 1}
+        vendorId: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
+        model: {type: string, minLength: 1, maxLength: 160}
+        mode: {$ref: '#/components/schemas/ExecutionMode'}
+        taskType: {$ref: '#/components/schemas/TaskType'}
+        metric: {$ref: '#/components/schemas/UsageMetric'}
+        unitSize: {$ref: '#/components/schemas/DecimalString'}
+        unitPrice: {$ref: '#/components/schemas/DecimalString'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        validFrom: {type: string, format: date-time}
+        validUntil: {type: string, format: date-time}
+        sourceReference: {type: string, minLength: 1, maxLength: 1000}
+        createdAt: {type: string, format: date-time}
+
+    CreateSubscriptionPeriodRequest:
+      type: object
+      additionalProperties: false
+      required: [vendorId, model, periodStart, periodEnd, amount, currency, allocationMethod]
+      properties:
+        vendorId: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
+        model: {type: string, minLength: 1, maxLength: 160}
+        periodStart: {type: string, format: date}
+        periodEnd: {type: string, format: date}
+        amount: {$ref: '#/components/schemas/DecimalString'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        allocationMethod: {type: string, enum: [NONE, WEIGHTED_TOKENS, REPORTED_QUOTA_UNITS]}
+
+    SubscriptionPeriodView:
+      type: object
+      additionalProperties: false
+      required: [id, vendorId, model, periodStart, periodEnd, amount, currency, allocationMethod, status, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        vendorId: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
+        model: {type: string, minLength: 1, maxLength: 160}
+        periodStart: {type: string, format: date}
+        periodEnd: {type: string, format: date}
+        amount: {$ref: '#/components/schemas/DecimalString'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        allocationMethod: {type: string, enum: [NONE, WEIGHTED_TOKENS, REPORTED_QUOTA_UNITS]}
+        status: {type: string, enum: [OPEN, ALLOCATED, FINAL]}
+        createdAt: {type: string, format: date-time}
+
+    WorkerRegistrationRequest:
+      type: object
+      additionalProperties: false
+      required: [workerId, bootId, executors, maxConcurrency]
+      properties:
+        workerId: {type: string, minLength: 1, maxLength: 100}
+        bootId: {type: string, minLength: 1, maxLength: 100}
+        executors:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: {$ref: '#/components/schemas/ExecutorCapability'}
+        availableEnvironmentKeys:
+          type: array
+          maxItems: 1000
+          uniqueItems: true
+          items: {type: string, pattern: '^[A-Z][A-Z0-9_]*__[A-Z][A-Z0-9_]*$'}
+        maxConcurrency: {type: integer, minimum: 1, maximum: 32}
+        versions:
+          type: object
+          additionalProperties: {type: string}
+
+    ExecutorCapability:
+      type: object
+      additionalProperties: false
+      required: [vendorId, model, mode, taskTypes]
+      properties:
+        vendorId: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
+        model: {type: string, minLength: 1, maxLength: 160}
+        mode: {$ref: '#/components/schemas/ExecutionMode'}
+        taskTypes:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/TaskType'}
+
+    WorkerView:
+      type: object
+      additionalProperties: false
+      required: [workerId, bootId, executors, maxConcurrency, lastHeartbeatAt]
+      properties:
+        workerId: {type: string}
+        bootId: {type: string}
+        executors:
+          type: array
+          items: {$ref: '#/components/schemas/ExecutorCapability'}
+        maxConcurrency: {type: integer, minimum: 1, maximum: 32}
+        lastHeartbeatAt: {type: string, format: date-time}
+
+    ClaimRequest:
+      type: object
+      additionalProperties: false
+      required: [bootId, executors, waitSeconds]
+      properties:
+        bootId: {type: string, minLength: 1, maxLength: 100}
+        executors:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: {$ref: '#/components/schemas/ExecutorCapability'}
+        waitSeconds: {type: integer, minimum: 0, maximum: 25}
+
+    ClaimedJob:
+      type: object
+      additionalProperties: false
+      required: [job, attempt, fencingToken, leaseUntil, attemptDeadline, request]
+      properties:
+        job: {$ref: '#/components/schemas/JobView'}
+        attempt: {$ref: '#/components/schemas/AttemptView'}
+        fencingToken: {type: string, minLength: 32, maxLength: 500}
+        leaseUntil: {type: string, format: date-time}
+        attemptDeadline: {type: string, format: date-time}
+        request: {$ref: '#/components/schemas/CreateJobRequest'}
+
+    AttemptAuth:
+      type: object
+      required: [attemptId, fencingToken]
+      properties:
+        attemptId: {type: string, format: uuid}
+        fencingToken: {type: string, minLength: 32, maxLength: 500}
+
+    HeartbeatResponse:
+      type: object
+      additionalProperties: false
+      required: [accepted, cancelRequested, fenced]
+      properties:
+        accepted: {type: boolean}
+        cancelRequested: {type: boolean}
+        fenced: {type: boolean}
+        leaseUntil: {type: string, format: date-time}
+
+    ProgressRequest:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: '#/components/schemas/AttemptAuth'
+        - type: object
+          required: [phase]
+          properties:
+            phase: {type: string, minLength: 1, maxLength: 80}
+            percent: {type: integer, minimum: 0, maximum: 100}
+            message: {type: string, maxLength: 1000}
+
+    CreateOutputUploadRequest:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: '#/components/schemas/AttemptAuth'
+        - type: object
+          required: [name, filename, mimeType, sizeBytes, sha256]
+          properties:
+            name: {$ref: '#/components/schemas/LogicalName'}
+            filename: {$ref: '#/components/schemas/Filename'}
+            mimeType: {type: string, minLength: 1, maxLength: 160}
+            sizeBytes: {type: integer, format: int64, minimum: 1, maximum: 2147483648}
+            sha256: {$ref: '#/components/schemas/Sha256'}
+
+    AppendUsageRequest:
+      type: object
+      additionalProperties: false
+      required: [fencingToken, eventId, observedAt, metrics, source]
+      properties:
+        fencingToken: {type: string, minLength: 32, maxLength: 500}
+        eventId: {type: string, minLength: 1, maxLength: 200}
+        observedAt: {type: string, format: date-time}
+        metrics:
+          type: array
+          minItems: 1
+          maxItems: 30
+          items: {$ref: '#/components/schemas/UsageMetricValue'}
+        providerRequestId: {type: string, maxLength: 300}
+        source: {type: string, enum: [PROVIDER_REPORTED, WORKER_MEASURED, MOCK]}
+
+    AppendLogRequest:
+      type: object
+      additionalProperties: false
+      required: [fencingToken, eventId, kind, text, observedAt]
+      properties:
+        fencingToken: {type: string, minLength: 32, maxLength: 500}
+        eventId: {type: string, minLength: 1, maxLength: 200}
+        kind: {type: string, enum: [AGENT_TEXT, REASONING_SUMMARY, TOOL_CALL, TOOL_OUTPUT, SYSTEM]}
+        text: {type: string, minLength: 1, maxLength: 8192}
+        streamId:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Required by validation for streamed REASONING_SUMMARY chunks.
+        final:
+          type: boolean
+          default: true
+          description: True when this is the final chunk for streamId.
+        observedAt: {type: string, format: date-time}
+
+    SubmitResultRequest:
+      type: object
+      additionalProperties: false
+      required: [fencingToken, result, outputObjectIds]
+      properties:
+        fencingToken: {type: string, minLength: 32, maxLength: 500}
+        result:
+          type: object
+          description: Bounded JSON object validated against the output contract.
+        outputObjectIds:
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          items: {type: string, format: uuid}
+
+    OutputRejectedResponse:
+      type: object
+      additionalProperties: false
+      required: [code, retryScheduled, validationErrors]
+      properties:
+        code: {type: string, enum: [OUTPUT_SCHEMA_INVALID, INLINE_RESULT_TOO_LARGE, REQUIRED_ARTIFACT_MISSING, ARTIFACT_CONTRACT_INVALID]}
+        retryScheduled: {type: boolean}
+        validationErrors:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/ValidationError'}
+
+    ValidationError:
+      type: object
+      additionalProperties: false
+      required: [path, code, message]
+      properties:
+        path: {type: string, maxLength: 500}
+        code: {type: string, maxLength: 100}
+        message: {type: string, maxLength: 1000}
+
+    FailAttemptRequest:
+      type: object
+      additionalProperties: false
+      required: [fencingToken, errorCode, message, retryable]
+      properties:
+        fencingToken: {type: string, minLength: 32, maxLength: 500}
+        errorCode: {type: string, minLength: 1, maxLength: 120}
+        message: {type: string, minLength: 1, maxLength: 2000}
+        retryable: {type: boolean}
+
+    RepositorySnapshot:
+      type: object
+      additionalProperties: false
+      required: [url, commitSha]
+      properties:
+        url: {type: string, pattern: '^https://'}
+        commitSha: {type: string, pattern: '^[0-9a-fA-F]{40}$'}
+
+    RepositoryRequest:
+      type: object
+      additionalProperties: false
+      required: [alias, baseBranch, publish]
+      properties:
+        alias: {type: string, minLength: 1, maxLength: 100}
+        baseBranch: {type: string, minLength: 1, maxLength: 120}
+        branchHint: {type: string, maxLength: 120}
+        publish: {type: boolean}
+
+    JobKind:
+      type: string
+      enum: [APPLICATION_WORK, REPOSITORY_WORK]
+
+    TaskType:
+      type: string
+      enum: [STRUCTURED_GENERATION, REPOSITORY_AGENT, TRANSCRIPTION, SPEECH_SYNTHESIS, WEB_SEARCH, EMBEDDING, IMAGE_GENERATION]
+
+    ExecutionMode:
+      type: string
+      enum: [SUBSCRIPTION, API, MOCK]
+
+    JobStatus:
+      type: string
+      enum: [QUEUED, WAITING_FOR_WORKER, RUNNING, SUCCEEDED, FAILED, CANCELLED]
+
+    AttemptReason:
+      type: string
+      enum: [INITIAL, INVALID_OUTPUT, PROVIDER_ERROR, TECHNICAL_ERROR]
+
+    UsageQuality:
+      type: string
+      enum: [COMPLETE, PARTIAL, UNAVAILABLE, MOCK]
+
+    UsageMetric:
+      type: string
+      enum: [INPUT_TOKENS, CACHED_INPUT_TOKENS, CACHE_WRITE_TOKENS, OUTPUT_TOKENS, REASONING_TOKENS, AUDIO_INPUT_SECONDS, AUDIO_OUTPUT_SECONDS, CHARACTERS, SEARCH_REQUESTS, EXTRACT_REQUESTS, IMAGES]
+
+    Filename:
+      type: string
+      minLength: 1
+      maxLength: 255
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+
+    LogicalName:
+      type: string
+      minLength: 1
+      maxLength: 100
+      pattern: '^[a-z][a-z0-9-]*$'
+
+    Sha256:
+      type: string
+      pattern: '^[0-9a-f]{64}$'
+
+    DecimalString:
+      type: string
+      pattern: '^-?[0-9]+(?:\\.[0-9]+)?$'
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [code, message, timestamp]
+      properties:
+        code: {type: string, maxLength: 120}
+        message: {type: string, maxLength: 2000}
+        timestamp: {type: string, format: date-time}

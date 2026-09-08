@@ -19,11 +19,13 @@ provider `MOCKED` en stelt de worker-API niet beschikbaar. Codex en Claude zijn 
 productie inzetbaar.
 
 De server beheert queue, idempotentie, attempts, leases, heartbeats, fencing, retries, harde
-deadlines, events, transcripten, JSON-schemavalidatie, resultaten, attachments en artifacts.
+deadlines, events, transcripten, JSON-schemavalidatie, resultaten, attachments en artifacts. De
+nieuwe `/v2`-API voegt hervatbare streaminguploads en -downloads, filesystemobjectopslag,
+leverancier/model/mode/task-dimensies, usage, tarieven, abonnementstoerekening en SSE-events toe.
 Consumenten leveren alleen de technische opdracht en verwerken de terminale uitkomst in hun eigen
 domein.
 
-Product Factory, HKH Autopilot en HKH hebben ieder een geïsoleerde `APPLICATION_WORK`-tenant.
+Product Factory, HKH Autopilot, HKH, PvdD en Personal News Feed hebben ieder een geïsoleerde tenant.
 Software Factory is de enige gewone consument met `REPOSITORY_WORK`. De HKH-consumenten hebben elk
 een eigen bearercredential en mogen alleen projectcredentials onder respectievelijk
 `HKH_AUTOPILOT__...` en `HKH__...` selecteren.
@@ -124,13 +126,17 @@ AR_WORKER_ID=voornaam-macbook
 AR_WORK_ROOT=work/worker
 AR_WORKER_TOKEN=<productieworkertoken>
 AR_CODEX_CREDENTIALS_DIR=/Users/<account>/.codex
+AR_CODEX_MODELS=gpt-5.6-sol
 AR_CLAUDE_OAUTH_TOKEN=<uitvoer-van-claude-setup-token>
+AR_CLAUDE_MODELS=<exacte-claude-model-id>
 ```
 
 `properties.env` staat in `.gitignore`, is een regulier bestand met mode `0600` en bevat ook alle
 eventuele `AR_REPOSITORY_<ALIAS>_URL`-instellingen. Paden zijn absoluut; `~` en `$HOME` worden niet
 uitgebreid. De Claude OAuth-token heeft voorrang op `AR_CLAUDE_CREDENTIALS_DIR`. Verwijder de
 providerregel voor een provider die deze worker niet aanbiedt.
+De v2-worker adverteert uitsluitend modellen uit `AR_CODEX_MODELS` en `AR_CLAUDE_MODELS`; zonder
+die expliciete lijst claimt hij voor die provider geen v2-job. De Runtime kiest nooit een fallbackmodel.
 
 `AR_EXECUTION_IMAGE` hoeft niet te worden ingesteld. De standaard is
 `ghcr.io/robbertvdzon/agent-runtime-execution:main`; de worker gebruikt bij iedere job
@@ -205,7 +211,20 @@ launchctl bootout gui/$(id -u)/nl.vdzon.agent-runtime.worker
 
 Het externe contract staat in
 [`agent-runtime-v1.yaml`](agent-runtime-contracts/src/main/resources/openapi/agent-runtime-v1.yaml)
-en gebruikt `/v1`.
+en gebruikt `/v1`. Deze API blijft beschikbaar voor bestaande consumers.
+
+Het nieuwe contract staat in
+[`agent-runtime-v2.yaml`](agent-runtime-contracts/src/main/resources/openapi/agent-runtime-v2.yaml)
+en gebruikt `/v2`. Iedere AI-job kiest expliciet `vendorId`, `model`, `mode` en `taskType`; er is
+geen model-fallback. `STRUCTURED_GENERATION` retourneert altijd een klein JSON-object. Grote tekst,
+markdown, audio en andere bestanden lopen vooraf via `POST /v2/uploads`, hervatbare `PATCH`-chunks
+en `POST /v2/uploads/{uploadId}/complete`. Een succesvolle `result.json` bevat de metadata en
+download-URL's van alle artifacts; de bytes blijven op de objectstore.
+
+Live status, zichtbare agenttekst, toolactiviteit en door een provider geleverde
+reasoning-samenvattingen zijn beschikbaar via `GET /v2/jobs/{jobId}/event-stream` (SSE). Verborgen
+chain-of-thought is geen onderdeel van het contract. Usage en kosten staan per job in het resultaat
+en geaggregeerd onder `/v2/usage/summary` en `/v2/management/usage/summary`.
 
 Belangrijkste consumentenroutes:
 
@@ -229,7 +248,8 @@ jobsoorten, credentials, taakdirectory, outputvalidatie en retries.
 
 De Flutter-monitor wordt uit dezelfde server-JAR geleverd. Hij toont actieve jobs, wachtrij,
 afgeronde jobs, workers en jobdetails met prompt, outputpogingen, transcript, inputattachments en
-artifacts. Afbeeldingen worden inline weergegeven en blijven downloadbaar. De monitor gebruikt in
+artifacts. De pagina **Gebruik & kosten** toont het v2-verbruik, het aandeel per project en
+beschikbare directe, berekende of abonnementskosten. Afbeeldingen worden inline weergegeven en blijven downloadbaar. De monitor gebruikt in
 productie Google-login met een server-side e-mailallowlist en heeft een ingeklapte
 beheertoken-noodroute.
 
@@ -247,3 +267,4 @@ onder `main` en een immutable `sha-...`-tag. De workflow commit daarna de server
 - [Beheerinterface](docs/beheerinterface.md)
 - [Deployment en operatie](docs/deployment-en-operatie.md)
 - [Runbook](docs/runbook.md)
+- [Specificatie uitbreidbare AI-runtime](docs/specificatie-uitbreidbare-ai-runtime.md)

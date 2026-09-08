@@ -13,6 +13,9 @@ data class RuntimeProperties(
     var hkhAutopilotToken: String = "local-hkh-autopilot-token",
     var hkhToken: String = "local-hkh-token",
     var pvddToken: String = "local-pvdd-token",
+    var personalNewsFeedToken: String = "local-personal-news-feed-token",
+    /** Comma-separated tenant=token entries, so a new consumer does not require a code change. */
+    var additionalConsumerTokens: String = "",
     var workerToken: String = "local-worker-token",
     var workerApiEnabled: Boolean = true,
     var adminToken: String = "local-admin-token",
@@ -39,11 +42,26 @@ data class RuntimeProperties(
     var hkhAutopilotModels: String = "*",
     var hkhModels: String = "*",
     var pvddModels: String = "gpt-5.6-sol",
+    var personalNewsFeedEnvironmentPrefixes: String = "PERSONAL_FEED",
+    var personalNewsFeedProviders: String = "CODEX,CLAUDE,MOCKED",
+    var personalNewsFeedModels: String = "*",
     var inputAttachmentMaxBytes: Long = 2L * 1024 * 1024,
     var jobInputAttachmentMaxBytes: Long = 10L * 1024 * 1024,
     var artifactMaxBytes: Long = 5L * 1024 * 1024,
     var jobArtifactMaxBytes: Long = 75L * 1024 * 1024,
     var transcriptMaxBytesPerJob: Long = 10L * 1024 * 1024,
+    var objectStorePath: String = "${System.getProperty("java.io.tmpdir")}/agent-runtime-objects",
+    var objectMaxBytes: Long = 2L * 1024 * 1024 * 1024,
+    var jobInputMaxBytes: Long = 5L * 1024 * 1024 * 1024,
+    var jobOutputMaxBytes: Long = 5L * 1024 * 1024 * 1024,
+    var objectStoreMinFreeBytes: Long = 0,
+    var uploadRetentionHours: Long = 24,
+    var failedContentRetentionDays: Long = 7,
+    var successfulContentRetentionDays: Long = 30,
+    var monitorLogRetentionDays: Long = 14,
+    var v2ResultMaxBytes: Long = 1024 * 1024,
+    var openAiApiKey: String = "",
+    var openAiApiBaseUrl: String = "https://api.openai.com/v1",
 ) {
     @PostConstruct
     fun validate() {
@@ -54,13 +72,14 @@ data class RuntimeProperties(
             require(allowedProviders("hkh-autopilot") == setOf("MOCKED")) { "Acceptance HKH Autopilot may only allow MOCKED." }
             require(allowedProviders("hkh") == setOf("MOCKED")) { "Acceptance HKH may only allow MOCKED." }
             require(allowedProviders("pvdd") == setOf("MOCKED")) { "Acceptance PvdD may only allow MOCKED." }
+            require(allowedProviders("personal-news-feed") == setOf("MOCKED")) { "Acceptance Personal News Feed may only allow MOCKED." }
             require(pvddModels.split(',').map(String::trim).filter(String::isNotBlank).toSet() == setOf("mock-model")) {
                 "Acceptance PvdD may only allow mock-model."
             }
         }
         if (environment == RuntimeEnvironment.PRODUCTION) {
             val unsafe = listOf(
-                productFactoryToken, softwareFactoryToken, hkhAutopilotToken, hkhToken, pvddToken,
+                productFactoryToken, softwareFactoryToken, hkhAutopilotToken, hkhToken, pvddToken, personalNewsFeedToken,
                 workerToken, adminToken, sessionSigningSecret,
             )
                 .any { it.isBlank() || it.startsWith("local-") || it.length < 24 }
@@ -71,7 +90,7 @@ data class RuntimeProperties(
             }
             require(pvddModels.isNotBlank() && pvddModels != "*") { "Production PvdD requires explicitly configured models." }
         }
-        val bearerTokens = listOf(productFactoryToken, softwareFactoryToken, hkhAutopilotToken, hkhToken, pvddToken, workerToken, adminToken)
+        val bearerTokens = consumerTokens().values.toList() + workerToken + adminToken
         require(bearerTokens.size == bearerTokens.distinct().size) { "Bearer credentials must be unique." }
         require(leaseSeconds in 30..900)
         require(recoverySeconds in leaseSeconds..86_400)
@@ -81,6 +100,10 @@ data class RuntimeProperties(
         require(inputAttachmentMaxBytes in 1..10L * 1024 * 1024)
         require(jobInputAttachmentMaxBytes in inputAttachmentMaxBytes..50L * 1024 * 1024)
         require(transcriptMaxBytesPerJob in 1L * 1024 * 1024..100L * 1024 * 1024)
+        require(objectMaxBytes in 1..2L * 1024 * 1024 * 1024)
+        require(jobInputMaxBytes >= objectMaxBytes && jobOutputMaxBytes >= objectMaxBytes)
+        require(objectStoreMinFreeBytes >= 0)
+        require(v2ResultMaxBytes in 1..5L * 1024 * 1024)
     }
 
     fun allowedAdminEmails(): Set<String> = adminEmails.split(',').map(String::trim).map(String::lowercase).filter(String::isNotBlank).toSet()
@@ -91,7 +114,8 @@ data class RuntimeProperties(
         "hkh-autopilot" -> hkhAutopilotEnvironmentPrefixes
         "hkh" -> hkhEnvironmentPrefixes
         "pvdd" -> pvddEnvironmentPrefixes
-        else -> ""
+        "personal-news-feed" -> personalNewsFeedEnvironmentPrefixes
+        else -> tenantId.uppercase().replace('-', '_')
     }.split(',').map(String::trim).filter(String::isNotBlank).toSet()
 
     fun allowedProviders(tenantId: String): Set<String> = when (tenantId) {
@@ -100,7 +124,8 @@ data class RuntimeProperties(
         "hkh-autopilot" -> hkhAutopilotProviders
         "hkh" -> hkhProviders
         "pvdd" -> pvddProviders
-        else -> ""
+        "personal-news-feed" -> personalNewsFeedProviders
+        else -> "CODEX,CLAUDE,MOCKED"
     }.split(',').map(String::trim).map(String::uppercase).filter(String::isNotBlank).toSet()
 
     fun modelAllowed(tenantId: String, model: String): Boolean {
@@ -110,8 +135,23 @@ data class RuntimeProperties(
             "hkh-autopilot" -> hkhAutopilotModels
             "hkh" -> hkhModels
             "pvdd" -> pvddModels
-            else -> ""
+            "personal-news-feed" -> personalNewsFeedModels
+            else -> "*"
         }.split(',').map(String::trim).filter(String::isNotBlank).toSet()
         return "*" in configured || model in configured
     }
+
+    fun consumerTokens(): Map<String, String> = linkedMapOf(
+        "product-factory" to productFactoryToken,
+        "software-factory" to softwareFactoryToken,
+        "hkh-autopilot" to hkhAutopilotToken,
+        "hkh" to hkhToken,
+        "pvdd" to pvddToken,
+        "personal-news-feed" to personalNewsFeedToken,
+    ) + additionalConsumerTokens.split(',').mapNotNull { entry ->
+        val separator = entry.indexOf('=')
+        if (separator <= 0) null else entry.substring(0, separator).trim().takeIf(String::isNotBlank)?.let {
+            it to entry.substring(separator + 1).trim()
+        }
+    }.toMap()
 }

@@ -10,6 +10,8 @@ resources:
   - postgres-pvc.yaml
   - postgres-deployment.yaml
   - postgres-service.yaml
+  - server-serviceaccount.yaml
+  - object-store-rolebinding.yaml
   - backup-pvc.yaml
   - backup-cronjob.yaml
 patches:
@@ -21,3 +23,15 @@ patches:
           - {name: AR_ENVIRONMENT, value: PRODUCTION}
           - {name: AR_PVDD_PROVIDERS, value: CODEX}
           - {name: AR_PVDD_MODELS, value: gpt-5.6-sol}
+          - {name: AR_OBJECT_STORE_PATH, value: /var/lib/agent-runtime-objects}
+          - {name: AR_OBJECT_STORE_MIN_FREE_BYTES, value: "536870912000"}
+      - op: add
+        path: /spec/template/spec/serviceAccountName
+        value: agent-runtime-server
+      - op: replace
+        path: /spec/template/spec/volumes/0
+        value:
+          name: object-store
+          hostPath:
+            path: /var/mnt/external-hdd/agent-runtime-objects
+            type: DirectoryOrCreate

@@ -93,6 +93,8 @@ fun main(args: Array<String>) {
     val journal = WorkerJournal(config.workRoot, mapper)
     cleanupOrphanAttempts(config.workRoot, journal.entries().map { it.claim.job.id }.toSet())
     val executor = JobExecutor(config, client, mapper, bootId, journal)
+    val v2Executor = V2WorkerExecutor(config, mapper, bootId)
+    v2Executor.register()
     executor.recoverBeforeClaiming()
     while (!Thread.currentThread().isInterrupted) {
         try {
@@ -100,17 +102,22 @@ fun main(args: Array<String>) {
                 val hadKeys = config.projectCredentials.isNotEmpty()
                 config.projectCredentials.clear()
                 SecretRedactor.configure(redactionValues(emptyMap(), config.claudeOauthToken))
-                if (hadKeys) register()
+                if (hadKeys) { register(); v2Executor.register() }
                 throw error
             }
             if (refreshed != config.projectCredentials) {
                 val keysChanged = refreshed.keys != config.projectCredentials.keys
                 config.projectCredentials.clear(); config.projectCredentials.putAll(refreshed)
                 SecretRedactor.configure(redactionValues(refreshed, config.claudeOauthToken))
-                if (keysChanged) register()
+                if (keysChanged) { register(); v2Executor.register() }
             }
-            val claimed = client.claim(ClaimRequest(bootId, capabilities, providers, emptySet(), 20))
-            if (claimed != null) executor.execute(claimed)
+            val claimedV2 = v2Executor.claim()
+            if (claimedV2 != null) {
+                v2Executor.execute(claimedV2)
+            } else {
+                val claimed = client.claim(ClaimRequest(bootId, capabilities, providers, emptySet(), 20))
+                if (claimed != null) executor.execute(claimed)
+            }
         } catch (error: Exception) {
             System.err.println("Worker loop temporarily unavailable: ${safe(error.message)}")
             Thread.sleep(5_000)
