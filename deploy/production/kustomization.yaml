@@ -28,6 +28,10 @@ patches:
       - op: add
         path: /spec/template/spec/serviceAccountName
         value: agent-runtime-server
+      # The built-in hostmount-anyuid-v2 SCC does not admit an explicit seccomp profile.
+      # runAsNonRoot, allowPrivilegeEscalation=false and dropping ALL capabilities remain active.
+      - op: remove
+        path: /spec/template/spec/containers/0/securityContext/seccompProfile
       - op: replace
         path: /spec/template/spec/volumes/0
         value:
