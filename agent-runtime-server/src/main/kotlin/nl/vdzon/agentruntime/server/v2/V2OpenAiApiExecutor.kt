@@ -51,7 +51,7 @@ class V2OpenAiApiExecutor(
             val payload=mapper.createObjectNode().put("model",job.view.execution.model).put("store",false)
             payload.set<JsonNode>("input",mapper.createArrayNode().add(mapper.createObjectNode().put("role","user").set<JsonNode>("content",content)))
             job.request.output.resultSchema?.let{schema->payload.set<JsonNode>("text",mapper.createObjectNode().set<JsonNode>("format",mapper.createObjectNode().put("type","json_schema").put("name","agent_runtime_result").put("strict",true).set<JsonNode>("schema",schema)))}
-            payload.set<JsonNode>("reasoning",mapper.createObjectNode().put("generate_summary","auto"))
+            payload.set<JsonNode>("reasoning",openAiReasoningOptions(mapper))
             payload.put("stream",true)
             payload.set<JsonNode>("stream_options",mapper.createObjectNode().put("include_obfuscation",false))
             jobs.progress(job.view.id,attempt.view.id,"CALLING_PROVIDER",25,"Calling OpenAI Responses API.")
@@ -133,3 +133,6 @@ class V2OpenAiApiExecutor(
 }
 
 class ProviderFailure(val code:String,message:String,val retryable:Boolean):IOException(message)
+
+internal fun openAiReasoningOptions(mapper:ObjectMapper):JsonNode =
+    mapper.createObjectNode().put("summary","auto")
