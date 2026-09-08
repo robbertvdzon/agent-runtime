@@ -28,6 +28,11 @@ patches:
       - op: add
         path: /spec/template/spec/serviceAccountName
         value: agent-runtime-server
+      # exFAT cannot carry a container_file_t label, so the pod needs the host label to write.
+      - op: add
+        path: /spec/template/spec/securityContext
+        value:
+          seLinuxOptions: {type: spc_t}
       # The built-in hostmount-anyuid-v2 SCC does not admit an explicit seccomp profile.
       # runAsNonRoot, allowPrivilegeEscalation=false and dropping ALL capabilities remain active.
       - op: remove
