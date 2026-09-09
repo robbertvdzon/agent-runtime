@@ -104,6 +104,99 @@ paths:
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
 
+  /execution-options:
+    get:
+      operationId: listExecutionOptions
+      summary: List exact tenant-allowed v2 execution selections
+      parameters:
+        - in: query
+          name: taskType
+          required: true
+          schema: {$ref: '#/components/schemas/TaskType'}
+      responses:
+        '200':
+          description: Options derived from current v2 worker registrations and server-side mock capability
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/ExecutionOptionView'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /environment-keys:
+    get:
+      operationId: listEnvironmentKeyOptions
+      summary: List tenant-allowed environment key names advertised by v2 workers
+      parameters:
+        - in: query
+          name: project
+          required: true
+          schema: {type: string, pattern: '^[A-Z][A-Z0-9_]*$'}
+      responses:
+        '200':
+          description: Secret names and online worker availability; never secret values
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/EnvironmentKeyOptionView'}
+        '400': {$ref: '#/components/responses/ClientError'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /test-control/mocks:
+    get:
+      operationId: listTargetedMockFixtures
+      summary: List unconsumed targeted fixtures outside production
+      responses:
+        '200':
+          description: Prepared fixtures
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/MockFixtureView'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    post:
+      operationId: createTargetedMockFixture
+      summary: Prepare one exact tenant and idempotency-key fixture outside production
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateMockFixtureRequest'}
+      responses:
+        '200':
+          description: Fixture prepared
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MockFixtureView'}
+        '400': {$ref: '#/components/responses/ClientError'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+    delete:
+      operationId: clearTargetedMockFixtures
+      summary: Clear all targeted fixtures outside production
+      responses:
+        '200': {description: Fixtures cleared}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /test-control/mocks/{fixtureId}:
+    delete:
+      operationId: deleteTargetedMockFixture
+      summary: Delete one targeted fixture outside production
+      parameters:
+        - in: path
+          name: fixtureId
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        '200': {description: Fixture deleted or already absent}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
   /jobs:
     post:
       operationId: createJob
@@ -1254,6 +1347,78 @@ components:
           items: {$ref: '#/components/schemas/ExecutorCapability'}
         maxConcurrency: {type: integer, minimum: 1, maximum: 32}
         lastHeartbeatAt: {type: string, format: date-time}
+
+    ExecutionOptionView:
+      type: object
+      additionalProperties: false
+      required: [execution, taskTypes, available, matchingOnlineWorkers, lastSeenAt]
+      properties:
+        execution: {$ref: '#/components/schemas/ExecutionSelection'}
+        taskTypes:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/TaskType'}
+        available: {type: boolean}
+        matchingOnlineWorkers: {type: integer, minimum: 0}
+        lastSeenAt: {type: string, format: date-time}
+
+    EnvironmentKeyOptionView:
+      type: object
+      additionalProperties: false
+      required: [name, projectPrefix, available, matchingOnlineWorkers, lastSeenAt]
+      properties:
+        name: {type: string, pattern: '^[A-Z][A-Z0-9_]*__[A-Z][A-Z0-9_]*$'}
+        projectPrefix: {type: string, pattern: '^[A-Z][A-Z0-9_]*$'}
+        available: {type: boolean}
+        matchingOnlineWorkers: {type: integer, minimum: 0}
+        lastSeenAt: {type: string, format: date-time}
+
+    CreateMockFixtureRequest:
+      type: object
+      additionalProperties: false
+      required: [tenantId, idempotencyKey]
+      properties:
+        tenantId: {type: string, minLength: 1, maxLength: 100}
+        idempotencyKey: {type: string, minLength: 1, maxLength: 160}
+        result: {}
+        outputSequence:
+          type: array
+          maxItems: 10
+          items: {type: string, minLength: 1, maxLength: 1048576}
+        errorCode: {type: string, minLength: 1, maxLength: 120}
+        errorMessage: {type: string, maxLength: 2000}
+        delayMillis: {type: integer, format: int64, minimum: 0, maximum: 60000}
+        outputArtifactNames:
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/LogicalName'}
+      oneOf:
+        - required: [result]
+        - required: [outputSequence]
+        - required: [errorCode]
+
+    MockFixtureView:
+      type: object
+      additionalProperties: false
+      required: [id, tenantId, idempotencyKey, outputSequence, delayMillis, outputArtifactNames, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        tenantId: {type: string}
+        idempotencyKey: {type: string}
+        result: {}
+        outputSequence:
+          type: array
+          items: {type: string}
+        errorCode: {type: string}
+        errorMessage: {type: string}
+        delayMillis: {type: integer, format: int64}
+        outputArtifactNames:
+          type: array
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/LogicalName'}
+        createdAt: {type: string, format: date-time}
 
     ClaimRequest:
       type: object

@@ -81,7 +81,8 @@ credentialbronnen read-only en geeft ze nooit door aan de Runtime-server.
 
 ## Environmentkey niet beschikbaar
 
-Controleer `GET /v1/environment-keys?project=PROJECT` en de workerstatus in de monitor. De catalogus
+Controleer voor een v1-consumer `GET /v1/environment-keys?project=PROJECT` en voor een v2-consumer
+`GET /v2/environment-keys?project=PROJECT`, plus de workerstatus in de monitor. De catalogus
 toont alleen namen. `wacht op geschikte worker` betekent dat geen online worker alle gevraagde
 keys én provider-/modelcapabilities heeft. Voeg nooit een waarde aan de jobrequest toe; herstel het
 lokale bestand en herstart de worker zodat hij de namen opnieuw registreert.

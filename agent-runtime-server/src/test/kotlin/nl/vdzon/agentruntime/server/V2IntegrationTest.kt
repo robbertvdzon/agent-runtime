@@ -12,15 +12,16 @@ import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
+import org.springframework.jdbc.core.JdbcTemplate
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.LocalDate
 import java.util.HexFormat
 import java.util.UUID
 
-@SpringBootTest(properties=["agent-runtime.environment=LOCAL","agent-runtime.object-store-min-free-bytes=0"])
+@SpringBootTest(properties=["agent-runtime.environment=LOCAL","agent-runtime.object-store-min-free-bytes=0","agent-runtime.test-control-token=local-test-control-token"])
 @AutoConfigureMockMvc
-class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private val mapper:ObjectMapper) {
+class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private val mapper:ObjectMapper,@Autowired private val jdbc:JdbcTemplate) {
     @Test
     fun `rejected oversized chunk leaves upload resumable at the original offset`() {
         val bytes = "goed".toByteArray()
@@ -50,6 +51,7 @@ class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private va
         mvc.perform(patch("/v2/uploads/$uploadId").bearer(PRODUCT).header("Upload-Offset",8).contentType("application/offset+octet-stream").content(bytes.copyOfRange(8,bytes.size))).andExpect(status().isNoContent)
         val objectView=postJson("/v2/uploads/$uploadId/complete",PRODUCT,null,200)
         val request=jobRequest(ExecutionSelection("mock","mock",ExecutionMode.MOCK),listOf(InputObjectRef(objectView.path("objectId").asText(),"source",InputRole.SOURCE)))
+        postJson("/v2/test-control/mocks",TEST_CONTROL,CreateMockFixtureRequest("product-factory",request.idempotencyKey,result=mapper.readTree("""{"text":"mock"}""")),200)
         val job=postJson("/v2/jobs",PRODUCT,request,202);val result=awaitResult(job.path("id").asText())
         assertThat(result.path("result").path("text").asText()).isEqualTo("mock")
         val download=mvc.perform(get("/v2/jobs/${job.path("id").asText()}/objects/${objectView.path("objectId").asText()}/content").bearer(PRODUCT).header("Range","bytes=2-7")).andExpect(status().isPartialContent).andReturn().response
@@ -82,11 +84,76 @@ class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private va
         assertThat(summary.path("rows").any{it.path("dimensions").path("model").asText()==model}).isTrue()
     }
 
+    @Test
+    fun `consumer catalogs are tenant filtered and based on online v2 workers`() {
+        val worker="catalog-${UUID.randomUUID()}";val boot=UUID.randomUUID().toString()
+        val openAi=ExecutorCapability("openai","gpt-5.6-sol",ExecutionMode.SUBSCRIPTION,setOf(TaskType.STRUCTURED_GENERATION))
+        val anthropic=ExecutorCapability("anthropic","claude-test",ExecutionMode.SUBSCRIPTION,setOf(TaskType.STRUCTURED_GENERATION))
+        postJson("/v2/workers/register",WORKER,WorkerRegistrationRequest(worker,boot,setOf(openAi,anthropic),setOf("PVDD__ACCEPTANCE_BASE_URL","HKH__TOKEN")),200)
+
+        val executions=getJson("/v2/execution-options?taskType=STRUCTURED_GENERATION",PVDD)
+        assertThat(executions).hasSize(1)
+        assertThat(executions.first().path("execution").path("vendorId").asText()).isEqualTo("openai")
+        assertThat(executions.first().path("matchingOnlineWorkers").asInt()).isEqualTo(1)
+        val keys=getJson("/v2/environment-keys?project=PVDD",PVDD)
+        assertThat(keys.map{it.path("name").asText()}).containsExactly("PVDD__ACCEPTANCE_BASE_URL")
+        mvc.perform(get("/v2/environment-keys?project=HKH").bearer(PVDD)).andExpect(status().isForbidden)
+        jdbc.update("UPDATE runtime_v2_worker SET last_heartbeat_at=? WHERE worker_id=?",java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).minusHours(2),worker)
+        val offline=getJson("/v2/execution-options?taskType=STRUCTURED_GENERATION",PVDD)
+        assertThat(offline.first().path("available").asBoolean()).isFalse()
+        assertThat(offline.first().path("matchingOnlineWorkers").asInt()).isZero()
+    }
+
+    @Test
+    fun `targeted mock fixture supports correction artifacts and isolated credentials`() {
+        val request=jobRequest(ExecutionSelection("mock","mock",ExecutionMode.MOCK)).copy(
+            output=OutputContract(
+                mapper.readTree("""{"type":"object","required":["text"],"properties":{"text":{"type":"string"}},"additionalProperties":false}"""),
+                listOf(OutputArtifactDeclaration("evidence-01",true,setOf("text/plain"),1024)),
+            ),
+        )
+        val fixture=CreateMockFixtureRequest(
+            tenantId="product-factory",idempotencyKey=request.idempotencyKey,
+            outputSequence=listOf("not-json","{\"text\":\"fixed\"}"),outputArtifactNames=setOf("evidence-01"),
+        )
+        mvc.perform(post("/v2/test-control/mocks").bearer(ADMIN).contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsBytes(fixture))).andExpect(status().isForbidden)
+        postJson("/v2/test-control/mocks",TEST_CONTROL,fixture,200)
+        mvc.perform(get("/v2/jobs").bearer(TEST_CONTROL)).andExpect(status().isForbidden)
+
+        val job=postJson("/v2/jobs",PRODUCT,request,202);val jobId=job.path("id").asText();val result=awaitResult(jobId)
+        assertThat(result.path("result").path("text").asText()).isEqualTo("fixed")
+        assertThat(result.path("artifacts").first().path("name").asText()).isEqualTo("evidence-01")
+        assertThat(getJson("/v2/jobs/$jobId/attempts",PRODUCT)).hasSize(2)
+    }
+
+    @Test
+    fun `mock job without exact fixture fails visibly`() {
+        val request=jobRequest(ExecutionSelection("mock","mock",ExecutionMode.MOCK))
+        val jobId=postJson("/v2/jobs",PRODUCT,request,202).path("id").asText()
+        val failed=awaitTerminal(jobId)
+        assertThat(failed.path("status").asText()).isEqualTo("FAILED")
+        assertThat(failed.path("errorCode").asText()).isEqualTo("NO_MOCK_RESPONSE_CONFIGURED")
+    }
+
+    @Test
+    fun `mock error and delay are targeted and execution never falls back`() {
+        val delayed=jobRequest(ExecutionSelection("mock","mock",ExecutionMode.MOCK))
+        postJson("/v2/test-control/mocks",TEST_CONTROL,CreateMockFixtureRequest("product-factory",delayed.idempotencyKey,errorCode="FIXTURE_FAILURE",errorMessage="safe failure",delayMillis=75),200)
+        val started=System.nanoTime();val jobId=postJson("/v2/jobs",PRODUCT,delayed,202).path("id").asText();val failed=awaitTerminal(jobId)
+        assertThat((System.nanoTime()-started)/1_000_000).isGreaterThanOrEqualTo(50)
+        assertThat(failed.path("errorCode").asText()).isEqualTo("FIXTURE_FAILURE")
+
+        val unsupported=jobRequest(ExecutionSelection("unknown-vendor","unknown-model",ExecutionMode.SUBSCRIPTION))
+        val response=mvc.perform(post("/v2/jobs").bearer(PRODUCT).contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsBytes(unsupported))).andExpect(status().isUnprocessableEntity).andReturn().response
+        assertThat(mapper.readTree(response.contentAsString).path("code").asText()).isIn("EXECUTION_NOT_ALLOWED","EXECUTION_NOT_SUPPORTED")
+    }
+
     private fun jobRequest(execution:ExecutionSelection,objects:List<InputObjectRef> = emptyList())=CreateJobRequest(UUID.randomUUID().toString(),JobKind.APPLICATION_WORK,TaskType.STRUCTURED_GENERATION,execution,JobInput("Geef het antwoord als JSON.",objects),OutputContract(mapper.readTree("""{"type":"object","required":["text"],"properties":{"text":{"type":"string"}},"additionalProperties":false}""")))
     private fun postJson(path:String,token:String,body:Any?,expected:Int):JsonNode {val builder=post(path).bearer(token).contentType(MediaType.APPLICATION_JSON);if(body!=null)builder.content(mapper.writeValueAsBytes(body));val response=mvc.perform(builder).andExpect(status().`is`(expected)).andReturn().response;return if(response.contentAsString.isBlank())mapper.createObjectNode() else mapper.readTree(response.contentAsString)}
     private fun getJson(path:String,token:String)=mapper.readTree(mvc.perform(get(path).bearer(token)).andExpect(status().isOk).andReturn().response.contentAsString)
     private fun awaitResult(id:String):JsonNode {repeat(30){val response=mvc.perform(get("/v2/jobs/$id/result").bearer(PRODUCT)).andReturn().response;if(response.status==200)return mapper.readTree(response.contentAsString);Thread.sleep(100)};error("job did not complete")}
+    private fun awaitTerminal(id:String):JsonNode {repeat(30){val result=getJson("/v2/jobs/$id",PRODUCT);if(result.path("status").asText() in setOf("SUCCEEDED","FAILED","CANCELLED"))return result;Thread.sleep(100)};error("job did not become terminal")}
     private fun sha(value:ByteArray)=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value))
     private fun org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder.bearer(token:String)=header("Authorization","Bearer $token")
-    companion object {const val PRODUCT="local-product-factory-token";const val WORKER="local-worker-token";const val ADMIN="local-admin-token"}
+    companion object {const val PRODUCT="local-product-factory-token";const val PVDD="local-pvdd-token";const val WORKER="local-worker-token";const val ADMIN="local-admin-token";const val TEST_CONTROL="local-test-control-token"}
 }

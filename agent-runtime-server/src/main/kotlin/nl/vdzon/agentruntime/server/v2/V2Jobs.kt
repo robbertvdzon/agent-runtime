@@ -213,23 +213,6 @@ class V2JobService(private val properties:RuntimeProperties,private val jobs:V2J
 }
 
 @Service
-class V2MockExecutor(private val properties:RuntimeProperties,private val jobs:V2JobStore,private val mapper:ObjectMapper) {
-    @Scheduled(fixedDelay=500)
-    fun execute() {
-        if(properties.environment==RuntimeEnvironment.PRODUCTION)return
-        jobs.queued().firstOrNull{it.view.execution.mode==ExecutionMode.MOCK}?.let { job ->
-            val result=job.request.output.resultSchema?.let{schema->mockForSchema(schema)} ?: mapper.createObjectNode().put("text","mock")
-            val now=Instant.now();val token=UUID.randomUUID().toString()+UUID.randomUUID();val attempt=jobs.createAttempt(job,"server-mock","server",token,now.plusSeconds(60),now.plusSeconds(job.request.executionTimeoutSeconds.toLong()))
-            jobs.complete(job.view.id,attempt.view.id,result,UsageQuality.MOCK)
-        }
-    }
-    private fun mockForSchema(schema:JsonNode):JsonNode {
-        val type=schema.path("type").asText("object")
-        return when(type){"object"->mapper.createObjectNode().also{node->schema.path("properties").fields().forEachRemaining{(name,child)->node.set<JsonNode>(name,mockForSchema(child))}};"array"->mapper.createArrayNode();"integer"->mapper.nodeFactory.numberNode(0);"number"->mapper.nodeFactory.numberNode(0.0);"boolean"->mapper.nodeFactory.booleanNode(false);else->mapper.nodeFactory.textNode("mock")}
-    }
-}
-
-@Service
 class V2AttemptRecovery(private val properties:RuntimeProperties,private val jobs:V2JobStore,private val uploads:V2UploadService) {
     @Scheduled(fixedDelay=30_000)
     fun recover() { jobs.expiredAttempts(Instant.now().minusSeconds(properties.recoverySeconds)).forEach{attempt->jobs.find(attempt.view.jobId)?.let{job->uploads.discardAttemptOutputs(job.view.id,attempt.view.id);jobs.failAttempt(job,attempt.view.id,"WORKER_LEASE_EXPIRED","Worker stopped heartbeating before the execution completed.",true);jobs.markAttemptAbandoned(attempt.view.id)}} }

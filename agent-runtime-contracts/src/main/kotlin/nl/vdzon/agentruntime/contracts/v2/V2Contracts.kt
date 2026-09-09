@@ -246,6 +246,43 @@ data class WorkerRegistrationRequest(
     val versions: Map<String, String> = emptyMap(),
 )
 data class WorkerView(val workerId: String, val bootId: String, val executors: Set<ExecutorCapability>, val maxConcurrency: Int, val lastHeartbeatAt: Instant)
+data class ExecutionOptionView(
+    val execution: ExecutionSelection,
+    val taskTypes: Set<TaskType>,
+    val available: Boolean,
+    val matchingOnlineWorkers: Int,
+    val lastSeenAt: Instant,
+)
+data class EnvironmentKeyOptionView(
+    val name: String,
+    val projectPrefix: String,
+    val available: Boolean,
+    val matchingOnlineWorkers: Int,
+    val lastSeenAt: Instant,
+)
+
+data class CreateMockFixtureRequest(
+    @field:NotBlank @field:Size(max = 100) val tenantId: String,
+    @field:NotBlank @field:Size(max = 160) val idempotencyKey: String,
+    val result: JsonNode? = null,
+    @field:Size(max = 10) val outputSequence: List<@NotBlank @Size(max = 1_048_576) String> = emptyList(),
+    @field:Size(max = 120) val errorCode: String? = null,
+    @field:Size(max = 2_000) val errorMessage: String? = null,
+    @field:Min(0) @field:Max(60_000) val delayMillis: Long = 0,
+    @field:Size(max = 50) val outputArtifactNames: Set<@Pattern(regexp = "[a-z][a-z0-9-]{0,99}") String> = emptySet(),
+)
+data class MockFixtureView(
+    val id: String,
+    val tenantId: String,
+    val idempotencyKey: String,
+    val result: JsonNode?,
+    val outputSequence: List<String>,
+    val errorCode: String?,
+    val errorMessage: String?,
+    val delayMillis: Long,
+    val outputArtifactNames: Set<String>,
+    val createdAt: Instant,
+)
 data class ClaimRequest(
     @field:NotBlank val bootId: String,
     @field:Valid @field:NotEmpty @field:Size(max = 100) val executors: Set<ExecutorCapability>,

@@ -126,9 +126,16 @@ Namen volgen `PROJECT__NAAM`. Beide bestanden zijn gitignored, reguliere bestand
 en alleen leesbaar door de eigenaar (`0600`). De worker registreert uitsluitend namen bij de
 server. Waarden komen niet in de request, queue, catalogus, events of monitor.
 
-`GET /v1/environment-keys?project=HKH` geeft de voor de consument zichtbare namen, actuele
-beschikbaarheid, het aantal passende online workers en `lastSeenAt`. Een job wordt alleen geclaimd
+`GET /v1/environment-keys?project=HKH` doet dit voor v1-workers;
+`GET /v2/environment-keys?project=HKH` gebruikt uitsluitend v2-workerregistraties. Beide geven de
+voor de consument zichtbare namen, actuele beschikbaarheid, het aantal passende online workers en
+`lastSeenAt`. Een job wordt alleen geclaimd
 door een worker die alle gevraagde namen heeft geregistreerd.
+
+De v2-uitvoeringscatalogus staat onder
+`GET /v2/execution-options?taskType=STRUCTURED_GENERATION`. Iedere entry is één exacte
+`vendorId`/`model`/`mode`-combinatie; de catalogus is tenantgefilterd en is nooit een
+fallbackmechanisme.
 
 Per attempt maakt de worker een tijdelijke `/job/secrets/secrets.env` met alleen de geselecteerde
 waarden. Het volledige `project-credentials.env` wordt niet gemount. Runtime-, worker- en

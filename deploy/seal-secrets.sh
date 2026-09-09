@@ -5,7 +5,7 @@ deploy_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root_dir="$(cd "$deploy_dir/.." && pwd)"
 source_file="${AR_SEAL_SOURCE:-$root_dir/secrets.env}"
 cert_file="${AR_SEAL_CERT:-$root_dir/../robberts-infrastructure/manifests/cluster-bootstrap/cluster-cert.pem}"
-required=(AR_PRODUCT_FACTORY_TOKEN AR_SOFTWARE_FACTORY_TOKEN AR_HKH_AUTOPILOT_TOKEN AR_HKH_TOKEN AR_PVDD_TOKEN AR_PVDD_ACCEPTANCE_TOKEN AR_PERSONAL_NEWS_FEED_TOKEN AR_WORKER_TOKEN AR_ADMIN_TOKEN AR_GOOGLE_CLIENT_ID AR_ADMIN_EMAILS AR_SESSION_SIGNING_SECRET AR_DB_USERNAME AR_DB_PASSWORD AR_DB_URL)
+required=(AR_PRODUCT_FACTORY_TOKEN AR_SOFTWARE_FACTORY_TOKEN AR_HKH_AUTOPILOT_TOKEN AR_HKH_TOKEN AR_PVDD_TOKEN AR_PVDD_ACCEPTANCE_TOKEN AR_PERSONAL_NEWS_FEED_TOKEN AR_WORKER_TOKEN AR_ADMIN_TOKEN AR_TEST_CONTROL_TOKEN AR_GOOGLE_CLIENT_ID AR_ADMIN_EMAILS AR_SESSION_SIGNING_SECRET AR_DB_USERNAME AR_DB_PASSWORD AR_DB_URL)
 optional=(AR_OPENAI_API_KEY)
 
 command -v kubeseal >/dev/null || { echo "kubeseal ontbreekt." >&2; exit 1; }
@@ -21,6 +21,7 @@ for namespace in agent-runtime agent-runtime-acceptance; do
     printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: agent-runtime-secrets\n  namespace: %s\ntype: Opaque\nstringData:\n' "$namespace"
     for key in "${required[@]}"; do
       [[ "$key" == AR_PVDD_ACCEPTANCE_TOKEN ]] && continue
+      [[ "$namespace" == agent-runtime && "$key" == AR_TEST_CONTROL_TOKEN ]] && continue
       value_key="$key"
       [[ "$namespace" == agent-runtime-acceptance && "$key" == AR_PVDD_TOKEN ]] && value_key=AR_PVDD_ACCEPTANCE_TOKEN
       printf '  %s: |-\n' "$key"

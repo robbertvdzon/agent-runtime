@@ -17,6 +17,7 @@ data class RuntimeProperties(
     /** Comma-separated tenant=token entries, so a new consumer does not require a code change. */
     var additionalConsumerTokens: String = "",
     var workerToken: String = "local-worker-token",
+    var testControlToken: String = "",
     var workerApiEnabled: Boolean = true,
     var adminToken: String = "local-admin-token",
     var googleClientId: String = "",
@@ -76,6 +77,9 @@ data class RuntimeProperties(
             require(pvddModels.split(',').map(String::trim).filter(String::isNotBlank).toSet() == setOf("mock-model", "mock")) {
                 "Acceptance PvdD may only allow the v1 and v2 mock models."
             }
+            require(testControlToken.isNotBlank() && !testControlToken.startsWith("local-") && testControlToken.length >= 24) {
+                "Acceptance requires a non-default test-control credential of at least 24 characters."
+            }
         }
         if (environment == RuntimeEnvironment.PRODUCTION) {
             val unsafe = listOf(
@@ -90,7 +94,7 @@ data class RuntimeProperties(
             }
             require(pvddModels.isNotBlank() && pvddModels != "*") { "Production PvdD requires explicitly configured models." }
         }
-        val bearerTokens = consumerTokens().values.toList() + workerToken + adminToken
+        val bearerTokens = consumerTokens().values.toList() + workerToken + adminToken + listOfNotNull(testControlToken.takeIf(String::isNotBlank))
         require(bearerTokens.size == bearerTokens.distinct().size) { "Bearer credentials must be unique." }
         require(leaseSeconds in 30..900)
         require(recoverySeconds in leaseSeconds..86_400)

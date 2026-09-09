@@ -225,6 +225,10 @@ Live status, zichtbare agenttekst, toolactiviteit en door een provider geleverde
 reasoning-samenvattingen zijn beschikbaar via `GET /v2/jobs/{jobId}/event-stream` (SSE). Verborgen
 chain-of-thought is geen onderdeel van het contract. Usage en kosten staan per job in het resultaat
 en geaggregeerd onder `/v2/usage/summary` en `/v2/management/usage/summary`.
+Consumers lezen exacte beschikbare combinaties via `GET /v2/execution-options` en uitsluitend
+toegestane v2-workerkeynamen via `GET /v2/environment-keys`. Buiten productie kan een afzonderlijk
+`AR_TEST_CONTROL_TOKEN`, zonder consumer-, worker- of adminrechten, gerichte fixtures onder
+`/v2/test-control/mocks` beheren. Productie bevat dit secret en deze API niet.
 
 Belangrijkste consumentenroutes:
 

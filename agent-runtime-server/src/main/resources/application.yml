@@ -42,6 +42,7 @@ agent-runtime:
   personal-news-feed-token: ${AR_PERSONAL_NEWS_FEED_TOKEN:local-personal-news-feed-token}
   additional-consumer-tokens: ${AR_ADDITIONAL_CONSUMER_TOKENS:}
   worker-token: ${AR_WORKER_TOKEN:local-worker-token}
+  test-control-token: ${AR_TEST_CONTROL_TOKEN:}
   worker-api-enabled: ${AR_WORKER_API_ENABLED:true}
   admin-token: ${AR_ADMIN_TOKEN:local-admin-token}
   google-client-id: ${AR_GOOGLE_CLIENT_ID:}

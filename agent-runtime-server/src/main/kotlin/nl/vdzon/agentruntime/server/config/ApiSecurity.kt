@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component
 import org.springframework.web.filter.OncePerRequestFilter
 import java.security.MessageDigest
 
-enum class PrincipalRole { CONSUMER, WORKER, ADMIN }
+enum class PrincipalRole { CONSUMER, WORKER, ADMIN, TEST_CONTROL }
 data class RequestIdentity(val role: PrincipalRole, val tenantId: String? = null)
 
 @Component
@@ -21,6 +21,12 @@ class ApiSecurity(private val properties: RuntimeProperties, private val adminAu
 
     override fun doFilterInternal(request: HttpServletRequest, response: HttpServletResponse, chain: FilterChain) {
         val path = request.requestURI
+        if (properties.environment == RuntimeEnvironment.PRODUCTION && path.startsWith("/v2/test-control/")) {
+            response.status = 404
+            response.contentType = MediaType.APPLICATION_JSON_VALUE
+            response.writer.write("{\"code\":\"NOT_FOUND\",\"message\":\"Not found.\"}")
+            return
+        }
         if (!properties.workerApiEnabled && (path == "/v1/workers" || path.startsWith("/v1/workers/") || path.startsWith("/v2/workers/"))) {
             response.status = 404
             response.contentType = MediaType.APPLICATION_JSON_VALUE
@@ -35,6 +41,7 @@ class ApiSecurity(private val properties: RuntimeProperties, private val adminAu
             )
             secureEquals(token, properties.workerToken) -> RequestIdentity(PrincipalRole.WORKER)
             secureEquals(token, properties.adminToken) -> RequestIdentity(PrincipalRole.ADMIN)
+            properties.testControlToken.isNotBlank() && secureEquals(token, properties.testControlToken) -> RequestIdentity(PrincipalRole.TEST_CONTROL)
             token != null && adminAuth.verifySession(token) != null -> RequestIdentity(PrincipalRole.ADMIN)
             else -> null
         }

@@ -12,6 +12,7 @@ import nl.vdzon.agentruntime.contracts.v2.JobInput
 import nl.vdzon.agentruntime.contracts.v2.JobKind as V2JobKind
 import nl.vdzon.agentruntime.contracts.v2.OutputContract
 import nl.vdzon.agentruntime.contracts.v2.TaskType
+import nl.vdzon.agentruntime.contracts.v2.CreateMockFixtureRequest
 import nl.vdzon.agentruntime.server.config.RuntimeEnvironment
 import nl.vdzon.agentruntime.server.config.RuntimeProperties
 import org.assertj.core.api.Assertions.assertThat
@@ -36,6 +37,7 @@ import java.util.UUID
     "agent-runtime.pvdd-providers=MOCKED",
     "agent-runtime.pvdd-models=mock-model,mock",
     "agent-runtime.personal-news-feed-providers=MOCKED",
+    "agent-runtime.test-control-token=acceptance-test-control-token-123456",
     "spring.datasource.url=jdbc:h2:mem:agent_runtime_acceptance_policy;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE",
 ])
 @AutoConfigureMockMvc
@@ -92,6 +94,14 @@ class AcceptancePolicyIntegrationTest(
                 .content(mapper.writeValueAsBytes(registration))
         ).andExpect(status().isNotFound).andReturn().response
         assertThat(mapper.readTree(response.contentAsString).path("code").asText()).isEqualTo("NOT_FOUND")
+    }
+
+    @Test
+    fun `acceptance test control has a separate least privilege credential`() {
+        val fixture=CreateMockFixtureRequest("product-factory",UUID.randomUUID().toString(),result=mapper.readTree("""{"text":"ok"}"""))
+        mvc.perform(post("/v2/test-control/mocks").bearer(PRODUCT_TOKEN).contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsBytes(fixture))).andExpect(status().isForbidden)
+        mvc.perform(post("/v2/test-control/mocks").bearer(TEST_CONTROL_TOKEN).contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsBytes(fixture))).andExpect(status().isOk)
+        mvc.perform(post("/v2/jobs").bearer(TEST_CONTROL_TOKEN).contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsBytes(v2MockRequest()))).andExpect(status().isForbidden)
     }
 
     @Test
@@ -162,5 +172,6 @@ class AcceptancePolicyIntegrationTest(
         const val HKH_TOKEN = "local-hkh-token"
         const val PVDD_TOKEN = "local-pvdd-token"
         const val WORKER_TOKEN = "local-worker-token"
+        const val TEST_CONTROL_TOKEN = "acceptance-test-control-token-123456"
     }
 }

@@ -46,6 +46,7 @@ Productie gebruikt onafhankelijke bearercredentials per consument en platformrol
 | `AR_PVDD_TOKEN` | Alleen eigen `APPLICATION_WORK` met environmentprefix `PVDD` beheren |
 | `AR_WORKER_TOKEN` | In lokaal en productie workers registreren, jobs claimen en actuele gefencete attempts bedienen |
 | `AR_ADMIN_TOKEN` | Managementmetadata lezen en terminale jobs opnieuw aanbieden |
+| `AR_TEST_CONTROL_TOKEN` | Alleen buiten productie gerichte v2-mockfixtures beheren; heeft geen consumer-, worker- of adminrechten |
 
 Tenant en rechten volgen uit het token. De server valideert jobsoort, provider, model,
 repositoryalias en environmentkeyprefix tegen de vaste tenantpolicy voordat een job uitvoerbaar
