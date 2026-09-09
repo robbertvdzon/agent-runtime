@@ -22,6 +22,7 @@ jobs:
       - run: flutter build web --release
         working-directory: monitor-ui
       - run: mvn -B --no-transfer-progress verify
+      - run: bash execution-images/test-run-agent.sh
       - run: |
           docker build --target build -t agent-runtime-build .
           docker build -t agent-runtime-server .

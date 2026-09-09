@@ -19,6 +19,11 @@ copy_credentials() {
   tar --exclude='./ipc' --exclude='*.sock' -C "$source" -cf - . | tar -C "$target" -xf -
 }
 
+# Maak de helper zonder side effects sourcebaar voor de regressietest.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
 # Prompt gaat via stdin, nooit als CLI-argument: een lang prompt.md (grote frozen
 # context) liet exec() eerder stuklopen op "Argument list too long" (E2BIG, exit 126).
 case "${AR_ENGINE:-}" in
