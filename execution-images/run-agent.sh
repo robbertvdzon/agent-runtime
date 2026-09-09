@@ -13,10 +13,11 @@ provider_prompt() {
 
 copy_credentials() {
   local source="$1" target="$2"
-  # Codex Desktop houdt onder .codex/ipc een Unix-socket open. Een socket kan
-  # niet uit een read-only Docker bind mount worden gekopieerd en is ook geen
-  # credential. Kopieer daarom alleen gewone bestanden en mappen.
-  tar --exclude='./ipc' --exclude='*.sock' -C "$source" -cf - . | tar -C "$target" -xf -
+  # Alleen top-level bestanden zijn credentials/configuratie. Sessies, logs en
+  # de live .codex/ipc-socket zijn niet nodig en kunnen tijdens de kopie wijzigen.
+  while IFS= read -r -d '' credential; do
+    cp -- "$credential" "$target/${credential##*/}" 2>/dev/null || true
+  done < <(find "$source" -maxdepth 1 -type f -print0)
 }
 
 # Maak de helper zonder side effects sourcebaar voor de regressietest.
