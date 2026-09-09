@@ -19,7 +19,7 @@ patches:
           - {name: AR_HKH_AUTOPILOT_PROVIDERS, value: MOCKED}
           - {name: AR_HKH_PROVIDERS, value: MOCKED}
           - {name: AR_PVDD_PROVIDERS, value: MOCKED}
-          - {name: AR_PVDD_MODELS, value: mock-model}
+          - {name: AR_PVDD_MODELS, value: "mock-model,mock"}
           - {name: AR_PERSONAL_NEWS_FEED_PROVIDERS, value: MOCKED}
           - {name: AR_DB_URL, value: "jdbc:h2:mem:agent_runtime_acceptance;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"}
           - {name: AR_DB_USERNAME, value: sa}

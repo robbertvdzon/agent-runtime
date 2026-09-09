@@ -5,6 +5,13 @@ import nl.vdzon.agentruntime.contracts.CreateJobRequest
 import nl.vdzon.agentruntime.contracts.JobKind
 import nl.vdzon.agentruntime.contracts.Provider
 import nl.vdzon.agentruntime.contracts.WorkerRegistrationRequest
+import nl.vdzon.agentruntime.contracts.v2.CreateJobRequest as CreateV2JobRequest
+import nl.vdzon.agentruntime.contracts.v2.ExecutionMode
+import nl.vdzon.agentruntime.contracts.v2.ExecutionSelection
+import nl.vdzon.agentruntime.contracts.v2.JobInput
+import nl.vdzon.agentruntime.contracts.v2.JobKind as V2JobKind
+import nl.vdzon.agentruntime.contracts.v2.OutputContract
+import nl.vdzon.agentruntime.contracts.v2.TaskType
 import nl.vdzon.agentruntime.server.config.RuntimeEnvironment
 import nl.vdzon.agentruntime.server.config.RuntimeProperties
 import org.assertj.core.api.Assertions.assertThat
@@ -27,7 +34,7 @@ import java.util.UUID
     "agent-runtime.hkh-autopilot-providers=MOCKED",
     "agent-runtime.hkh-providers=MOCKED",
     "agent-runtime.pvdd-providers=MOCKED",
-    "agent-runtime.pvdd-models=mock-model",
+    "agent-runtime.pvdd-models=mock-model,mock",
     "agent-runtime.personal-news-feed-providers=MOCKED",
     "spring.datasource.url=jdbc:h2:mem:agent_runtime_acceptance_policy;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE",
 ])
@@ -55,6 +62,10 @@ class AcceptancePolicyIntegrationTest(
                     model = "mock-model",
                     environmentKeys = listOf("PVDD__ACCEPTANCE_BASE_URL"),
                 )))
+        ).andExpect(status().isAccepted)
+        mvc.perform(
+            post("/v2/jobs").bearer(PVDD_TOKEN).contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsBytes(v2MockRequest()))
         ).andExpect(status().isAccepted)
 
         listOf(Provider.CODEX, Provider.CLAUDE).forEach { provider ->
@@ -94,7 +105,7 @@ class AcceptancePolicyIntegrationTest(
                 hkhAutopilotProviders = "MOCKED",
                 hkhProviders = "MOCKED",
                 pvddProviders = "MOCKED",
-                pvddModels = "mock-model",
+                pvddModels = "mock-model,mock",
             ).validate()
         }.hasMessage("Acceptance must have the worker API disabled.")
 
@@ -107,7 +118,7 @@ class AcceptancePolicyIntegrationTest(
                 hkhAutopilotProviders = "MOCKED",
                 hkhProviders = "MOCKED",
                 pvddProviders = "MOCKED",
-                pvddModels = "mock-model",
+                pvddModels = "mock-model,mock",
             ).validate()
         }.hasMessage("Acceptance Product Factory may only allow MOCKED.")
 
@@ -120,7 +131,7 @@ class AcceptancePolicyIntegrationTest(
                 hkhAutopilotProviders = "MOCKED,CODEX",
                 hkhProviders = "MOCKED",
                 pvddProviders = "MOCKED",
-                pvddModels = "mock-model",
+                pvddModels = "mock-model,mock",
             ).validate()
         }.hasMessage("Acceptance HKH Autopilot may only allow MOCKED.")
     }
@@ -131,6 +142,15 @@ class AcceptancePolicyIntegrationTest(
         provider = provider,
         model = "test-model",
         prompt = "Return a test answer",
+    )
+
+    private fun v2MockRequest() = CreateV2JobRequest(
+        idempotencyKey = UUID.randomUUID().toString(),
+        jobKind = V2JobKind.APPLICATION_WORK,
+        taskType = TaskType.STRUCTURED_GENERATION,
+        execution = ExecutionSelection("mock", "mock", ExecutionMode.MOCK),
+        input = JobInput("Return the required JSON."),
+        output = OutputContract(mapper.readTree("""{"type":"object"}""")),
     )
 
     private fun org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder.bearer(token: String) =

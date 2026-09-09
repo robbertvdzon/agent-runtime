@@ -44,7 +44,8 @@ PvdD gebruikt eveneens een zelfstandige consumentcredential en mag uitsluitend
 `APPLICATION_WORK` met environmentprefix `PVDD` aanvragen. `AR_PVDD_TOKEN` is het productietoken;
 `AR_PVDD_ACCEPTANCE_TOKEN` bestaat alleen in de lokale sealbron en wordt bij sealing als
 `AR_PVDD_TOKEN` in namespace `agent-runtime-acceptance` geplaatst. Acceptance staat uitsluitend
-`MOCKED`/`mock-model` toe; productie vereist expliciete echte providers en modellen.
+de v1-combinatie `MOCKED`/`mock-model` en de v2-combinatie `mock`/`mock`/`MOCK` toe; productie
+vereist expliciete echte providers en modellen.
 
 ## CI en releaseketen
 

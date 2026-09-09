@@ -73,8 +73,8 @@ data class RuntimeProperties(
             require(allowedProviders("hkh") == setOf("MOCKED")) { "Acceptance HKH may only allow MOCKED." }
             require(allowedProviders("pvdd") == setOf("MOCKED")) { "Acceptance PvdD may only allow MOCKED." }
             require(allowedProviders("personal-news-feed") == setOf("MOCKED")) { "Acceptance Personal News Feed may only allow MOCKED." }
-            require(pvddModels.split(',').map(String::trim).filter(String::isNotBlank).toSet() == setOf("mock-model")) {
-                "Acceptance PvdD may only allow mock-model."
+            require(pvddModels.split(',').map(String::trim).filter(String::isNotBlank).toSet() == setOf("mock-model", "mock")) {
+                "Acceptance PvdD may only allow the v1 and v2 mock models."
             }
         }
         if (environment == RuntimeEnvironment.PRODUCTION) {
