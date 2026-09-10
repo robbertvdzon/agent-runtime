@@ -13,6 +13,12 @@ import java.security.MessageDigest
 import java.time.Instant
 import java.util.UUID
 
+data class RegisteredV2WorkerDetails(
+    val view: WorkerView,
+    val environmentKeys: Set<String>,
+    val versions: Map<String, String>,
+)
+
 @Repository
 class V2WorkerStore(private val jdbc:JdbcTemplate,private val mapper:ObjectMapper) {
     fun register(request:WorkerRegistrationRequest):WorkerView {
@@ -29,6 +35,28 @@ class V2WorkerStore(private val jdbc:JdbcTemplate,private val mapper:ObjectMappe
     fun environmentKeys(workerId:String):Set<String> = jdbc.query("SELECT environment_keys_json FROM runtime_v2_worker WHERE worker_id=?",{rs,_->mapper.readValue(rs.getString(1),mapper.typeFactory.constructCollectionType(Set::class.java,String::class.java)) as Set<String>},workerId).firstOrNull().orEmpty()
     fun executors(workerId:String):Set<ExecutorCapability> = jdbc.query("SELECT executors_json FROM runtime_v2_worker WHERE worker_id=?",{rs,_->mapper.readValue(rs.getString(1),mapper.typeFactory.constructCollectionType(Set::class.java,ExecutorCapability::class.java)) as Set<ExecutorCapability>},workerId).firstOrNull().orEmpty()
     fun touch(workerId:String){jdbc.update("UPDATE runtime_v2_worker SET last_heartbeat_at=? WHERE worker_id=?",V2JobStore.utc(Instant.now()),workerId)}
+    fun registeredWorkers():List<RegisteredV2WorkerDetails> = jdbc.query("SELECT * FROM runtime_v2_worker ORDER BY worker_id") { rs, _ ->
+        val executors = mapper.readValue(
+            rs.getString("executors_json"),
+            mapper.typeFactory.constructCollectionType(Set::class.java, ExecutorCapability::class.java),
+        ) as Set<ExecutorCapability>
+        val environmentKeys = mapper.readValue(
+            rs.getString("environment_keys_json"),
+            mapper.typeFactory.constructCollectionType(Set::class.java, String::class.java),
+        ) as Set<String>
+        val versions = mapper.readValue(
+            rs.getString("versions_json"),
+            mapper.typeFactory.constructMapType(Map::class.java, String::class.java, String::class.java),
+        ) as Map<String, String>
+        RegisteredV2WorkerDetails(
+            WorkerView(
+                rs.getString("worker_id"), rs.getString("boot_id"), executors,
+                rs.getInt("max_concurrency"), V2JobStore.instant(rs.getObject("last_heartbeat_at")),
+            ),
+            environmentKeys,
+            versions,
+        )
+    }
 }
 
 @Service
@@ -43,6 +71,7 @@ class V2WorkerService(
     fun claim(workerId:String,request:ClaimRequest):ClaimedJob? {
         if(workers.bootId(workerId)!=request.bootId)throw ApiException("WORKER_BOOT_MISMATCH","Worker must register this boot ID.",HttpStatus.CONFLICT)
         if(request.executors!=workers.executors(workerId))throw ApiException("WORKER_CAPABILITY_MISMATCH","Claim capabilities must equal the registered capabilities.",HttpStatus.CONFLICT)
+        workers.touch(workerId)
         if(workers.activeCount(workerId,request.bootId)>=workers.maxConcurrency(workerId))return null
         val environmentKeys=workers.environmentKeys(workerId)
         val job=jobs.queued().firstOrNull{candidate->

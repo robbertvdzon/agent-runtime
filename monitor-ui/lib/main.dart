@@ -427,16 +427,16 @@ class _MonitorShellState extends State<MonitorShell> {
     try {
       final env = await api.get('/v1/management/environment');
       final path = switch (selected) {
-        ViewKind.active => '/v1/management/jobs/running',
-        ViewKind.queue => '/v1/management/queue',
+        ViewKind.active => '/v2/management/jobs/running',
+        ViewKind.queue => '/v2/management/queue',
         ViewKind.completed => _completedPath(),
-        ViewKind.workers => '/v1/management/workers',
+        ViewKind.workers => '/v2/management/workers',
         ViewKind.usage =>
           '/v2/management/usage/summary?groupBy=TENANT,VENDOR,MODEL,MODE,TASK_TYPE&from=${Uri.encodeQueryComponent(DateTime.now().toUtc().subtract(const Duration(days: 30)).toIso8601String())}&until=${Uri.encodeQueryComponent(DateTime.now().toUtc().toIso8601String())}',
       };
       final data = await api.get(path);
       if (selected == ViewKind.usage) {
-        final overview = await api.get('/v1/management/consumers');
+        final overview = await api.get('/v2/management/consumers');
         data['consumers'] = overview['items'];
         data['consumerPeriodFrom'] = overview['from'];
         data['consumerPeriodUntil'] = overview['until'];
@@ -671,7 +671,7 @@ class _MonitorShellState extends State<MonitorShell> {
     }
     if (cursor != null) parameters['cursor'] = cursor!;
     return Uri(
-      path: '/v1/management/jobs/completed',
+      path: '/v2/management/jobs/completed',
       queryParameters: parameters,
     ).toString();
   }
@@ -1227,6 +1227,7 @@ class JobDetail extends StatefulWidget {
 class _JobDetailState extends State<JobDetail> {
   Map<String, dynamic>? detail;
   final transcript = <Map<String, dynamic>>[];
+  int? transcriptCursor;
   String transcriptStatus = 'Live';
   Timer? timer;
   @override
@@ -1244,7 +1245,7 @@ class _JobDetailState extends State<JobDetail> {
 
   Future<void> load() async {
     try {
-      final value = await widget.api.get('/v1/management/jobs/${widget.id}');
+      final value = await widget.api.get('/v2/management/jobs/${widget.id}');
       if (mounted) setState(() => detail = value);
       await loadTranscript();
     } catch (_) {
@@ -1254,9 +1255,9 @@ class _JobDetailState extends State<JobDetail> {
 
   Future<void> loadTranscript() async {
     try {
-      final after = transcript.isEmpty ? null : transcript.last['sequence'];
+      final after = transcriptCursor;
       final page = await widget.api.get(
-        '/v1/management/jobs/${widget.id}/transcript${after == null ? '' : '?afterSequence=$after'}',
+        '/v2/management/jobs/${widget.id}/transcript${after == null ? '' : '?afterSequence=$after'}',
       );
       final incoming = (page['items'] as List? ?? [])
           .cast<Map<String, dynamic>>();
@@ -1266,6 +1267,7 @@ class _JobDetailState extends State<JobDetail> {
           transcript.addAll(
             incoming.where((x) => !known.contains(x['partId'])),
           );
+          transcriptCursor = page['nextSequence'] as int?;
           transcriptStatus = page['active'] == true ? 'Live' : 'Afgerond';
         });
       }
@@ -1304,7 +1306,7 @@ class _JobDetailState extends State<JobDetail> {
                       .cast<Map<String, dynamic>>(),
                   api: widget.api,
                   pathFor: (item) =>
-                      '/v1/management/jobs/${widget.id}/attachments/${item['id']}',
+                      '/v2/management/jobs/${widget.id}/attachments/${item['id']}',
                 ),
               if (detail!['errorCode'] != null)
                 _section(
@@ -1328,17 +1330,11 @@ class _JobDetailState extends State<JobDetail> {
                       .cast<Map<String, dynamic>>(),
                   api: widget.api,
                   pathFor: (item) =>
-                      '/v1/jobs/${widget.id}/artifacts/${item['id']}',
+                      '/v2/management/jobs/${widget.id}/artifacts/${item['id']}',
                 ),
               _section(
                 'Technische attempts',
                 const JsonEncoder.withIndent('  ').convert(detail!['attempts']),
-              ),
-              _section(
-                'Outputpogingen',
-                const JsonEncoder.withIndent(
-                  '  ',
-                ).convert(detail!['outputAttempts']),
               ),
               Text(
                 'Transcript · $transcriptStatus',
@@ -1755,7 +1751,7 @@ String _formatDuration(dynamic raw) {
 }
 
 String _formatJobCosts(Map<String, dynamic> job) {
-  if (job['costAvailable'] != true) return 'Niet beschikbaar (v1)';
+  if (job['costAvailable'] != true) return 'Niet beschikbaar';
   return _formatCosts(
     (job['costs'] as List? ?? const []).cast<Map<String, dynamic>>(),
   );

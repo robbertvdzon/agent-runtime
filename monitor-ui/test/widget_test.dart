@@ -123,7 +123,7 @@ void main() {
     expect(find.textContaining('Aangemaakt:'), findsOneWidget);
     expect(find.textContaining('Afgerond:'), findsOneWidget);
     expect(find.text('Looptijd: 2m 5s'), findsOneWidget);
-    expect(find.text('Kosten: Niet beschikbaar (v1)'), findsOneWidget);
+    expect(find.text('Kosten: Niet beschikbaar'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -192,7 +192,7 @@ void main() {
                 'costsInPeriod': [
                   {'currency': 'EUR', 'amount': '4.25'},
                 ],
-                'legacyJobsInPeriod': 3,
+                'legacyJobsInPeriod': 0,
                 'models': [
                   {
                     'vendorId': 'openai',
@@ -211,7 +211,7 @@ void main() {
     expect(find.text('pvdd'), findsOneWidget);
     expect(find.text('EUR 4.25'), findsOneWidget);
     expect(find.textContaining('openai / gpt-5.6-sol / API'), findsOneWidget);
-    expect(find.textContaining('3 v1-jobs'), findsOneWidget);
+    expect(find.textContaining('v1-job'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

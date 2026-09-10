@@ -53,6 +53,9 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
         return jdbc.query("SELECT * FROM runtime_v2_job$where ORDER BY created_at DESC,id DESC LIMIT ?",rowMapper(),*args.toTypedArray())
     }
 
+    fun managementList(): List<StoredV2Job> =
+        jdbc.query("SELECT * FROM runtime_v2_job ORDER BY created_at DESC,id DESC LIMIT 5000", rowMapper())
+
     fun queued(): List<StoredV2Job> = jdbc.query("""SELECT * FROM runtime_v2_job WHERE status IN ('QUEUED','WAITING_FOR_WORKER')
         AND (not_before IS NULL OR not_before<=CURRENT_TIMESTAMP) ORDER BY created_at,id""",rowMapper())
 
@@ -75,6 +78,10 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
 
     fun attempt(id: String): StoredV2Attempt? = jdbc.query("SELECT * FROM runtime_v2_attempt WHERE id=?",attemptRowMapper(),id).firstOrNull()
     fun attempts(jobId: String): List<StoredV2Attempt> = jdbc.query("SELECT * FROM runtime_v2_attempt WHERE job_id=? ORDER BY attempt_number",attemptRowMapper(),jobId)
+    fun activeAttempt(jobId: String): StoredV2Attempt? = jdbc.query(
+        "SELECT * FROM runtime_v2_attempt WHERE job_id=? AND status='RUNNING' ORDER BY attempt_number DESC LIMIT 1",
+        attemptRowMapper(), jobId,
+    ).firstOrNull()
     fun expiredAttempts(cutoff:Instant):List<StoredV2Attempt> = jdbc.query("SELECT * FROM runtime_v2_attempt WHERE status='RUNNING' AND (lease_until<? OR attempt_deadline<CURRENT_TIMESTAMP)",attemptRowMapper(),utc(cutoff))
 
     fun extendLease(attemptId: String, lease: Instant) { jdbc.update("UPDATE runtime_v2_attempt SET heartbeat_at=?,lease_until=? WHERE id=? AND status='RUNNING'",utc(Instant.now()),utc(lease),attemptId) }

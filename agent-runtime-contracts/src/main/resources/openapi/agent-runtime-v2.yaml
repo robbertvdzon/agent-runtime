@@ -451,6 +451,144 @@ paths:
               schema: {$ref: '#/components/schemas/UsageSummaryResponse'}
         '400': {$ref: '#/components/responses/ClientError'}
 
+  /management/jobs/running:
+    get:
+      operationId: listRunningManagementJobs
+      summary: List running v2 jobs across all tenants
+      responses:
+        '200':
+          description: Running v2 jobs
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ManagementJobList'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /management/queue:
+    get:
+      operationId: listQueuedManagementJobs
+      summary: List queued v2 jobs across all tenants
+      responses:
+        '200':
+          description: Queued v2 jobs
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ManagementJobList'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /management/jobs/completed:
+    get:
+      operationId: listCompletedManagementJobs
+      summary: List and filter terminal v2 jobs across all tenants
+      parameters:
+        - {in: query, name: title, schema: {type: string}}
+        - {in: query, name: consumer, schema: {type: string, maxLength: 100}}
+        - {in: query, name: from, schema: {type: string, format: date-time}}
+        - {in: query, name: until, schema: {type: string, format: date-time}}
+        - {in: query, name: cursor, schema: {type: string}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 30, default: 30}}
+      responses:
+        '200':
+          description: Terminal v2 jobs ordered from newest to oldest
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ManagementJobList'}
+        '400': {$ref: '#/components/responses/ClientError'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /management/jobs/{jobId}:
+    get:
+      operationId: getManagementJob
+      summary: Read v2 job detail, attempts, events, usage and artifacts
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Complete v2 management projection
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ManagementJobDetail'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /management/jobs/{jobId}/transcript:
+    get:
+      operationId: getManagementJobTranscript
+      summary: Read visible v2 worker log events as a paged transcript
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+        - {in: query, name: afterSequence, schema: {type: integer, format: int64, minimum: 0}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+      responses:
+        '200':
+          description: Visible log events
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ManagementTranscriptPage'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /management/jobs/{jobId}/attachments/{objectId}:
+    get:
+      operationId: downloadManagementJobInput
+      summary: Download an input object linked to a v2 job
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/ObjectId'
+      responses:
+        '200':
+          description: Input object bytes
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '206': {description: Requested byte range}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /management/jobs/{jobId}/artifacts/{objectId}:
+    get:
+      operationId: downloadManagementJobArtifact
+      summary: Download an output artifact linked to a v2 job
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/ObjectId'
+      responses:
+        '200':
+          description: Output artifact bytes
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '206': {description: Requested byte range}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /management/workers:
+    get:
+      operationId: listManagementWorkers
+      summary: List v2 workers and their active v2 jobs
+      responses:
+        '200':
+          description: Registered v2 workers
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ManagementWorkerList'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /management/consumers:
+    get:
+      operationId: listManagementConsumers
+      summary: Summarize v2 job activity, models and costs per tenant
+      parameters:
+        - {in: query, name: from, schema: {type: string, format: date-time}}
+        - {in: query, name: until, schema: {type: string, format: date-time}}
+      responses:
+        '200':
+          description: Per-tenant v2 activity and cost overview
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ManagementConsumerOverview'}
+        '400': {$ref: '#/components/responses/ClientError'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
   /management/usage/summary:
     get:
       operationId: getManagementUsageSummary
@@ -1347,6 +1485,162 @@ components:
           items: {$ref: '#/components/schemas/ExecutorCapability'}
         maxConcurrency: {type: integer, minimum: 1, maximum: 32}
         lastHeartbeatAt: {type: string, format: date-time}
+
+    ManagementJobItem:
+      type: object
+      additionalProperties: false
+      required: [id, technicalName, application, jobKind, taskType, provider, model, executionMode, status, phase, promptPreview, inputAttachmentCount, artifactCount, createdAt, updatedAt, costs, costAvailable]
+      properties:
+        id: {type: string, format: uuid}
+        technicalName: {type: string}
+        application: {type: string, maxLength: 100}
+        jobKind: {$ref: '#/components/schemas/JobKind'}
+        taskType: {$ref: '#/components/schemas/TaskType'}
+        provider: {type: string, maxLength: 100}
+        model: {type: string, maxLength: 160}
+        executionMode: {$ref: '#/components/schemas/ExecutionMode'}
+        status: {$ref: '#/components/schemas/JobStatus'}
+        phase: {type: string, maxLength: 80}
+        workerId: {type: string, maxLength: 100}
+        progressPercent: {type: integer, minimum: 0, maximum: 100}
+        progressMessage: {type: string, maxLength: 1000}
+        waitingReason: {type: string}
+        promptPreview: {type: string, maxLength: 240}
+        outputPreview: {type: string, maxLength: 240}
+        inputAttachmentCount: {type: integer, minimum: 0}
+        artifactCount: {type: integer, minimum: 0}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        durationMillis: {type: integer, format: int64, minimum: 0}
+        costs: {type: array, items: {$ref: '#/components/schemas/CostValue'}}
+        costAvailable: {type: boolean}
+
+    ManagementJobList:
+      type: object
+      additionalProperties: false
+      required: [serverTime, items, consumers]
+      properties:
+        serverTime: {type: string, format: date-time}
+        items: {type: array, items: {$ref: '#/components/schemas/ManagementJobItem'}}
+        nextCursor: {type: string}
+        previousCursor: {type: string}
+        consumers: {type: array, items: {type: string}}
+
+    ManagementObject:
+      type: object
+      additionalProperties: false
+      required: [id, name, filename, mimeType, sizeBytes, sha256, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        filename: {$ref: '#/components/schemas/Filename'}
+        mimeType: {type: string, maxLength: 160}
+        sizeBytes: {type: integer, format: int64, minimum: 1}
+        sha256: {$ref: '#/components/schemas/Sha256'}
+        createdAt: {type: string, format: date-time}
+
+    ManagementJobResult:
+      type: object
+      additionalProperties: false
+      required: [jobId, result, artifacts, usageSummary, completedAt]
+      properties:
+        jobId: {type: string, format: uuid}
+        result: {type: object}
+        artifacts: {type: array, items: {$ref: '#/components/schemas/ManagementObject'}}
+        usageSummary: {$ref: '#/components/schemas/JobUsageSummary'}
+        completedAt: {type: string, format: date-time}
+
+    ManagementJobDetail:
+      type: object
+      additionalProperties: false
+      required: [serverTime, job, prompt, inputAttachments, events, attempts]
+      properties:
+        serverTime: {type: string, format: date-time}
+        job: {$ref: '#/components/schemas/ManagementJobItem'}
+        prompt: {type: string, maxLength: 65536}
+        inputAttachments: {type: array, items: {$ref: '#/components/schemas/ManagementObject'}}
+        responseSchema: {type: object}
+        result: {$ref: '#/components/schemas/ManagementJobResult'}
+        errorCode: {type: string, maxLength: 120}
+        errorMessage: {type: string, maxLength: 2000}
+        events: {type: array, items: {$ref: '#/components/schemas/JobEventView'}}
+        attempts: {type: array, items: {$ref: '#/components/schemas/AttemptView'}}
+
+    ManagementTranscriptPart:
+      type: object
+      additionalProperties: false
+      required: [jobId, partId, sequence, createdAt, kind, text, redacted]
+      properties:
+        jobId: {type: string, format: uuid}
+        attemptId: {type: string, format: uuid}
+        partId: {type: string}
+        sequence: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        kind: {type: string, enum: [AGENT_TEXT, REASONING_SUMMARY, TOOL_CALL, TOOL_OUTPUT, SYSTEM]}
+        text: {type: string, maxLength: 8192}
+        redacted: {type: boolean}
+
+    ManagementTranscriptPage:
+      type: object
+      additionalProperties: false
+      required: [items, active]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/ManagementTranscriptPart'}}
+        nextSequence: {type: integer, format: int64, minimum: 1}
+        active: {type: boolean}
+
+    ManagementWorkerList:
+      type: object
+      additionalProperties: false
+      required: [serverTime, items, consumers]
+      properties:
+        serverTime: {type: string, format: date-time}
+        items:
+          type: array
+          items:
+            type: object
+            required: [worker, activeJobs]
+            properties:
+              worker: {type: object}
+              activeJobs: {type: integer, minimum: 0}
+              currentTechnicalName: {type: string}
+        consumers: {type: array, items: {type: string}}
+
+    ManagementConsumerOverview:
+      type: object
+      additionalProperties: false
+      required: [serverTime, from, until, items]
+      properties:
+        serverTime: {type: string, format: date-time}
+        from: {type: string, format: date-time}
+        until: {type: string, format: date-time}
+        items:
+          type: array
+          items:
+            type: object
+            required: [consumer, totalJobs, jobsLast24Hours, jobsLast7Days, jobsLast30Days, jobsInPeriod, costsInPeriod, legacyJobsInPeriod, models]
+            properties:
+              consumer: {type: string}
+              totalJobs: {type: integer, format: int64, minimum: 0}
+              jobsLast24Hours: {type: integer, format: int64, minimum: 0}
+              jobsLast7Days: {type: integer, format: int64, minimum: 0}
+              jobsLast30Days: {type: integer, format: int64, minimum: 0}
+              jobsInPeriod: {type: integer, format: int64, minimum: 0}
+              costsInPeriod: {type: array, items: {$ref: '#/components/schemas/CostValue'}}
+              legacyJobsInPeriod: {type: integer, format: int64, const: 0}
+              models:
+                type: array
+                items:
+                  type: object
+                  required: [apiVersion, vendorId, model, jobCount]
+                  properties:
+                    apiVersion: {type: string, const: v2}
+                    vendorId: {type: string}
+                    model: {type: string}
+                    mode: {$ref: '#/components/schemas/ExecutionMode'}
+                    jobCount: {type: integer, format: int64, minimum: 0}
 
     ExecutionOptionView:
       type: object

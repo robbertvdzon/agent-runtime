@@ -135,19 +135,21 @@ De Flutter-monitor gebruikt deze routes:
 
 ```text
 GET  /v1/management/environment
-GET  /v1/management/jobs/running
-GET  /v1/management/queue
-GET  /v1/management/jobs/completed?title=&consumer=&from=&until=&limit=30&cursor=
-GET  /v1/management/jobs/{jobId}
-GET  /v1/management/jobs/{jobId}/transcript?afterSequence=&beforeSequence=&limit=
-GET  /v1/management/jobs/{jobId}/attachments/{attachmentId}
-GET  /v1/management/workers
-GET  /v1/management/consumers?from=&until=
+GET  /v2/management/jobs/running
+GET  /v2/management/queue
+GET  /v2/management/jobs/completed?title=&consumer=&from=&until=&limit=30&cursor=
+GET  /v2/management/jobs/{jobId}
+GET  /v2/management/jobs/{jobId}/transcript?afterSequence=&limit=
+GET  /v2/management/jobs/{jobId}/attachments/{objectId}
+GET  /v2/management/jobs/{jobId}/artifacts/{objectId}
+GET  /v2/management/workers
+GET  /v2/management/consumers?from=&until=
 GET  /v2/management/usage/summary?from=&until=&groupBy=TENANT,VENDOR,MODEL,MODE,TASK_TYPE
 ```
 
-De server biedt daarnaast managementroutes voor resultaat, samenvatting en het opnieuw aanbieden
-van een `FAILED` of `CANCELLED` job. Deze routes gebruiken dezelfde adminidentiteit.
+De oude `/v1/management`-routes blijven tijdelijk beschikbaar voor compatibiliteit, maar de
+beheerinterface toont uitsluitend v2-jobs, v2-workers en v2-statistieken. Alle managementroutes
+gebruiken dezelfde adminidentiteit.
 
 ## Vormgeving en toegankelijkheid
 
