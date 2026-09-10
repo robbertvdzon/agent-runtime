@@ -4,7 +4,9 @@ import jakarta.servlet.http.HttpServletRequest
 import nl.vdzon.agentruntime.contracts.*
 import nl.vdzon.agentruntime.server.config.*
 import nl.vdzon.agentruntime.server.jobs.*
+import nl.vdzon.agentruntime.server.v2.V2UsageService
 import nl.vdzon.agentruntime.server.workers.*
+import nl.vdzon.agentruntime.contracts.v2.CostValue
 import org.springframework.core.io.ByteArrayResource
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
@@ -13,6 +15,8 @@ import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import java.nio.charset.StandardCharsets
 import java.time.Instant
+import java.time.temporal.ChronoUnit
+import java.math.BigDecimal
 import java.util.Base64
 
 data class ManagementJobItem(
@@ -21,8 +25,13 @@ data class ManagementJobItem(
     val workerId: String?, val progressPercent: Int?, val progressMessage: String?, val waitingReason: String?,
     val promptPreview: String, val outputPreview: String?, val inputAttachmentCount: Int, val artifactCount: Int,
     val createdAt: Instant, val updatedAt: Instant, val completedAt: Instant?,
+    val startedAt: Instant?, val durationMillis: Long?, val costs: List<CostValue> = emptyList(),
+    val costAvailable: Boolean = false,
 )
-data class ManagementList<T>(val serverTime: Instant, val items: List<T>, val nextCursor: String? = null, val previousCursor: String? = null)
+data class ManagementList<T>(
+    val serverTime: Instant, val items: List<T>, val nextCursor: String? = null,
+    val previousCursor: String? = null, val consumers: List<String> = emptyList(),
+)
 data class ManagementEnvironment(val serverTime: Instant, val environment: String, val version: String = "0.1.0")
 data class ManagementWorker(val worker: WorkerView, val activeJobs: Int, val currentTechnicalName: String?)
 data class ManagementOutputAttempt(
@@ -41,6 +50,17 @@ data class ManagementJobDetail(
     val attempts: List<AttemptSummary>, val outputAttempts: List<ManagementOutputAttempt>,
     val cancelledAt: Instant?, val cancelledBy: String?,
 )
+data class ManagementModelUsage(
+    val apiVersion: String, val vendorId: String, val model: String, val mode: String?, val jobCount: Long,
+)
+data class ManagementConsumerItem(
+    val consumer: String, val totalJobs: Long, val jobsLast24Hours: Long, val jobsLast7Days: Long,
+    val jobsLast30Days: Long, val jobsInPeriod: Long, val costsInPeriod: List<CostValue>,
+    val legacyJobsInPeriod: Long, val models: List<ManagementModelUsage>,
+)
+data class ManagementConsumerOverview(
+    val serverTime: Instant, val from: Instant, val until: Instant, val items: List<ManagementConsumerItem>,
+)
 
 @RestController
 @RequestMapping("/v1/management")
@@ -51,6 +71,8 @@ class AdminController(
     private val transcripts: TranscriptStore,
     private val attachments: InputAttachmentStore,
     private val properties: RuntimeProperties,
+    private val analytics: ManagementAnalyticsStore,
+    private val v2Usage: V2UsageService,
 ) {
     @GetMapping("/environment")
     fun environment(request: HttpServletRequest): ManagementEnvironment {
@@ -77,15 +99,33 @@ class AdminController(
     @GetMapping("/jobs/completed")
     fun completed(
         @RequestParam(defaultValue = "") search: String,
+        @RequestParam(defaultValue = "") title: String,
+        @RequestParam(required = false) consumer: String?,
+        @RequestParam(required = false) from: Instant?,
+        @RequestParam(required = false) until: Instant?,
         @RequestParam(required = false) cursor: String?,
         @RequestParam(defaultValue = "30") limit: Int,
         request: HttpServletRequest,
     ): ManagementList<ManagementJobItem> {
         admin(request)
+        if (from != null && until != null && !until.isAfter(from)) {
+            throw ApiException("INVALID_PERIOD", "until must be after from.")
+        }
         val bounded = limit.coerceIn(1, 30)
-        val all = jobs.list(null, null, 5000)
+        val terminalJobs = jobs.list(null, null, 5000)
             .filter { it.view.status in setOf(JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED) }
-            .filter { search.isBlank() || listOf(it.view.id, technicalName(it), it.view.tenantId).any { value -> value.contains(search, true) } }
+        val consumers = (properties.consumerTokens().keys + terminalJobs.map { it.view.tenantId }).distinct().sorted()
+        val all = terminalJobs
+            .filter { consumer.isNullOrBlank() || it.view.tenantId == consumer }
+            .filter { from == null || !it.view.createdAt.isBefore(from) }
+            .filter { until == null || it.view.createdAt.isBefore(until) }
+            .filter {
+                when {
+                    title.isNotBlank() -> listOf(it.view.id, technicalName(it)).any { value -> value.contains(title, true) }
+                    search.isNotBlank() -> listOf(it.view.id, technicalName(it), it.view.tenantId).any { value -> value.contains(search, true) }
+                    else -> true
+                }
+            }
             .sortedWith(compareByDescending<StoredJob> { it.completedAt ?: it.view.updatedAt }.thenByDescending { it.view.id })
         val offset = decodeCursor(cursor).coerceIn(0, all.size)
         val page = all.drop(offset).take(bounded).map(::item)
@@ -93,7 +133,46 @@ class AdminController(
             Instant.now(), page,
             (offset + page.size).takeIf { it < all.size }?.let(::encodeCursor),
             (offset - bounded).coerceAtLeast(0).takeIf { offset > 0 }?.let(::encodeCursor),
+            consumers,
         )
+    }
+
+    @GetMapping("/consumers")
+    fun consumers(
+        @RequestParam(required = false) from: Instant?,
+        @RequestParam(required = false) until: Instant?,
+        request: HttpServletRequest,
+    ): ManagementConsumerOverview {
+        admin(request)
+        val periodUntil = until ?: Instant.now()
+        val periodFrom = from ?: periodUntil.minus(30, ChronoUnit.DAYS)
+        if (!periodUntil.isAfter(periodFrom)) throw ApiException("INVALID_PERIOD", "until must be after from.")
+
+        val now = Instant.now()
+        val facts = analytics.jobFacts()
+        val usageRows = v2Usage.summary(periodFrom, periodUntil, null, setOf("TENANT"), emptyMap()).rows
+        val costsByConsumer = usageRows.associate { row ->
+            row.dimensions.getValue("tenantId") to row.costs
+        }
+        val consumerIds = (properties.consumerTokens().keys + facts.map { it.consumer }).distinct().sorted()
+        val items = consumerIds.map { id ->
+            val own = facts.filter { it.consumer == id }
+            val period = own.filter { !it.createdAt.isBefore(periodFrom) && it.createdAt.isBefore(periodUntil) }
+            ManagementConsumerItem(
+                id,
+                own.size.toLong(),
+                own.count { !it.createdAt.isBefore(now.minus(24, ChronoUnit.HOURS)) }.toLong(),
+                own.count { !it.createdAt.isBefore(now.minus(7, ChronoUnit.DAYS)) }.toLong(),
+                own.count { !it.createdAt.isBefore(now.minus(30, ChronoUnit.DAYS)) }.toLong(),
+                period.size.toLong(),
+                aggregateCosts(costsByConsumer[id].orEmpty()),
+                period.count { it.apiVersion == "v1" }.toLong(),
+                own.groupBy { listOf(it.apiVersion, it.vendorId, it.model, it.mode ?: "") }
+                    .map { (key, values) -> ManagementModelUsage(key[0], key[1], key[2], key[3].ifBlank { null }, values.size.toLong()) }
+                    .sortedWith(compareByDescending<ManagementModelUsage> { it.jobCount }.thenBy { it.vendorId }.thenBy { it.model }),
+            )
+        }
+        return ManagementConsumerOverview(now, periodFrom, periodUntil, items)
     }
 
     @GetMapping("/jobs/{id}")
@@ -177,14 +256,25 @@ class AdminController(
 
     private fun item(job: StoredJob, waitingReason: String? = null): ManagementJobItem {
         val active = workers.activeForJob(job.view.id)
+        val startedAt = workers.attemptsForJob(job.view.id).minOfOrNull { it.startedAt }
+        val durationUntil = job.completedAt ?: if (job.view.status == JobStatus.RUNNING) Instant.now() else null
+        val durationMillis = startedAt?.let { start -> durationUntil?.let { end -> java.time.Duration.between(start, end).toMillis().coerceAtLeast(0) } }
         return ManagementJobItem(
             job.view.id, technicalName(job), job.view.tenantId, job.view.jobKind, job.view.provider, job.view.model,
             job.view.status, job.view.phase, active?.workerId, job.view.progressPercent, job.view.progressMessage,
             waitingReason, preview(job.request.prompt), job.result?.toString()?.let(::preview),
             attachments.count(job.view.id), jobs.artifactCount(job.view.id),
             job.view.createdAt, job.view.updatedAt, job.completedAt,
+            startedAt, durationMillis,
         )
     }
+
+    private fun aggregateCosts(costs: List<CostValue>): List<CostValue> = costs
+        .groupBy { Triple(it.kind, it.status, it.currency) }
+        .map { (key, values) ->
+            CostValue(key.first, key.second, values.fold(BigDecimal.ZERO) { total, cost -> total + BigDecimal(cost.amount) }.stripTrailingZeros().toPlainString(), key.third)
+        }
+        .sortedWith(compareBy<CostValue> { it.currency }.thenBy { it.kind.name })
 
     private fun attachmentItem(value: StoredInputAttachment) = ManagementInputAttachment(
         value.id, value.filename, value.mimeType, value.sizeBytes, value.sha256, value.createdAt,

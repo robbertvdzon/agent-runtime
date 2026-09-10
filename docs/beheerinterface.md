@@ -14,12 +14,13 @@ gebruikt `AR_ADMIN_TOKEN`. Een verlopen of ongeldig sessietoken opent de login o
 
 ## Navigatie
 
-De monitor heeft vier lijsten en een jobdetail:
+De monitor heeft vier operationele lijsten, een gebruiksoverzicht en een jobdetail:
 
 - **Actieve jobs**;
 - **Wachtrij**;
 - **Afgeronde jobs**;
 - **Workers**;
+- **Gebruik & kosten**;
 - **Jobdetail**, bereikbaar door een jobkaart te openen.
 
 Op desktop staat de navigatie links. Onder 760 pixels gebruikt de interface een onderste
@@ -36,7 +37,11 @@ Iedere jobkaart toont:
 - de eerste 240 tekens van de prompt;
 - de eerste 240 tekens van het resultaat wanneer aanwezig;
 - het aantal meegegeven inputattachments;
-- het aantal teruggekomen outputartifacts.
+- het aantal teruggekomen outputartifacts;
+- de lokale aanmaak- en afrondtijd, de looptijd vanaf de eerste workerattempt en de kostenstatus.
+
+Historische v1-jobs hebben doorgaans geen betrouwbare kostenregistratie. De monitor toont daarvoor
+expliciet **Niet beschikbaar (v1)** en behandelt dit niet als een bedrag van nul.
 
 De actieve lijst bevat uitsluitend `RUNNING`. De wachtrij bevat `QUEUED` en
 `WAITING_FOR_WORKER`, gesorteerd op serverprioriteit en aanmaaktijd. De server levert als reden
@@ -51,8 +56,23 @@ verbindingsindicator.
 De afgeronde lijst bevat `SUCCEEDED`, `FAILED` en `CANCELLED`, nieuwste eerst. De server levert
 maximaal dertig regels per pagina. **Vorige** en **Volgende** gebruiken een opaak cursorveld.
 
-Zoeken gebeurt server-side op job-ID, technische naam en applicatie. Zoekterm en cursor staan in de
-browser-URL, zodat een refresh dezelfde pagina opent.
+Filteren gebeurt server-side op consumer, aanmaaktijd en titel (technische naam of job-ID). De
+bestaande parameter `search` blijft compatibel en zoekt ook op applicatie. Filters en cursor staan
+in de browser-URL, zodat een refresh dezelfde selectie opent. `from` is inclusief en `until`
+exclusief; beide gebruiken een ISO-8601-tijdstip.
+
+## Gebruik, kosten en consumers
+
+**Gebruik & kosten** begint met alle geconfigureerde en historisch aangetroffen consumers, ook als
+een consumer nog geen jobs heeft. Per consumer toont de monitor het totale aantal jobs, aantallen
+over de laatste 24 uur, 7 dagen en 30 dagen, kosten over de laatste 30 dagen en alle gebruikte
+vendor-/model-/mode-combinaties met jobaantallen.
+
+Jobaantallen en modellen combineren v1 en v2. Bedragen komen uit de v2-kostenadministratie,
+inclusief berekende API-kosten en waar van toepassing toegewezen abonnementskosten. Het aantal
+v1-jobs zonder betrouwbare kostenregistratie wordt daarom apart vermeld. Onder het
+consumeroverzicht blijft de bestaande v2-uitsplitsing per vendor, model, mode en opdrachttype
+zichtbaar.
 
 ## Workers
 
@@ -117,11 +137,13 @@ De Flutter-monitor gebruikt deze routes:
 GET  /v1/management/environment
 GET  /v1/management/jobs/running
 GET  /v1/management/queue
-GET  /v1/management/jobs/completed?search=&limit=30&cursor=
+GET  /v1/management/jobs/completed?title=&consumer=&from=&until=&limit=30&cursor=
 GET  /v1/management/jobs/{jobId}
 GET  /v1/management/jobs/{jobId}/transcript?afterSequence=&beforeSequence=&limit=
 GET  /v1/management/jobs/{jobId}/attachments/{attachmentId}
 GET  /v1/management/workers
+GET  /v1/management/consumers?from=&until=
+GET  /v2/management/usage/summary?from=&until=&groupBy=TENANT,VENDOR,MODEL,MODE,TASK_TYPE
 ```
 
 De server biedt daarnaast managementroutes voor resultaat, samenvatting en het opnieuw aanbieden

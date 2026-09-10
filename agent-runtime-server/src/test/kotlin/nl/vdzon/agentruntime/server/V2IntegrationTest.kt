@@ -82,6 +82,11 @@ class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private va
         assertThat(events.any{it.path("logKind").asText()=="REASONING_SUMMARY"}).isTrue()
         val summary=getJson("/v2/management/usage/summary?groupBy=TENANT,VENDOR,MODEL",ADMIN)
         assertThat(summary.path("rows").any{it.path("dimensions").path("model").asText()==model}).isTrue()
+        val overview=getJson("/v1/management/consumers",ADMIN)
+        val productFactory=overview.path("items").first{it.path("consumer").asText()=="product-factory"}
+        assertThat(productFactory.path("models").any{it.path("model").asText()==model&&it.path("mode").asText()=="SUBSCRIPTION"}).isTrue()
+        assertThat(productFactory.path("costsInPeriod").any{it.path("kind").asText()=="CALCULATED"&&it.path("amount").asText()=="1"}).isTrue()
+        assertThat(productFactory.path("costsInPeriod").any{it.path("kind").asText()=="ALLOCATED"&&it.path("amount").asText()=="100"}).isTrue()
     }
 
     @Test

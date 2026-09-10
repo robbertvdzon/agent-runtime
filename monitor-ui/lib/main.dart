@@ -361,13 +361,24 @@ class MonitorShell extends StatefulWidget {
 
 class _MonitorShellState extends State<MonitorShell> {
   final api = ApiClient();
+  late final TextEditingController searchController;
   ViewKind selected = ViewKind.active;
   Map<String, dynamic>? snapshot;
   String environment = '…';
   String? error;
   DateTime? snapshotAt;
   Timer? timer;
-  String search = Uri.base.queryParameters['search'] ?? '';
+  String search =
+      Uri.base.queryParameters['title'] ??
+      Uri.base.queryParameters['search'] ??
+      '';
+  String consumerFilter = Uri.base.queryParameters['consumer'] ?? '';
+  DateTime? completedFrom = DateTime.tryParse(
+    Uri.base.queryParameters['from'] ?? '',
+  )?.toLocal();
+  DateTime? completedUntil = DateTime.tryParse(
+    Uri.base.queryParameters['until'] ?? '',
+  )?.toLocal();
   String? cursor = Uri.base.queryParameters['cursor'];
   String? previousCursor;
   String? nextCursor;
@@ -376,6 +387,7 @@ class _MonitorShellState extends State<MonitorShell> {
   @override
   void initState() {
     super.initState();
+    searchController = TextEditingController(text: search);
     timer = Timer.periodic(const Duration(seconds: 5), (_) {
       if (selected == ViewKind.active || selected == ViewKind.queue) {
         refresh(silent: true);
@@ -389,6 +401,7 @@ class _MonitorShellState extends State<MonitorShell> {
   @override
   void dispose() {
     timer?.cancel();
+    searchController.dispose();
     super.dispose();
   }
 
@@ -416,13 +429,18 @@ class _MonitorShellState extends State<MonitorShell> {
       final path = switch (selected) {
         ViewKind.active => '/v1/management/jobs/running',
         ViewKind.queue => '/v1/management/queue',
-        ViewKind.completed =>
-          '/v1/management/jobs/completed?limit=30&search=${Uri.encodeQueryComponent(search)}${cursor == null ? '' : '&cursor=${Uri.encodeQueryComponent(cursor!)}'}',
+        ViewKind.completed => _completedPath(),
         ViewKind.workers => '/v1/management/workers',
         ViewKind.usage =>
-          '/v2/management/usage/summary?groupBy=TENANT,VENDOR,MODEL,MODE,TASK_TYPE',
+          '/v2/management/usage/summary?groupBy=TENANT,VENDOR,MODEL,MODE,TASK_TYPE&from=${Uri.encodeQueryComponent(DateTime.now().toUtc().subtract(const Duration(days: 30)).toIso8601String())}&until=${Uri.encodeQueryComponent(DateTime.now().toUtc().toIso8601String())}',
       };
       final data = await api.get(path);
+      if (selected == ViewKind.usage) {
+        final overview = await api.get('/v1/management/consumers');
+        data['consumers'] = overview['items'];
+        data['consumerPeriodFrom'] = overview['from'];
+        data['consumerPeriodUntil'] = overview['until'];
+      }
       if (!mounted) return;
       setState(() {
         environment = env['environment']?.toString() ?? '…';
@@ -494,7 +512,11 @@ class _MonitorShellState extends State<MonitorShell> {
               label: 'Afgerond',
             ),
             NavigationDestination(icon: Icon(Icons.computer), label: 'Workers'),
-            NavigationDestination(icon: Icon(Icons.euro), label: 'Gebruik'),
+            NavigationDestination(
+              icon: Icon(Icons.payments_outlined),
+              selectedIcon: Icon(Icons.payments),
+              label: 'Gebruik',
+            ),
           ],
         ),
       );
@@ -503,6 +525,7 @@ class _MonitorShellState extends State<MonitorShell> {
       body: Row(
         children: [
           NavigationRail(
+            minWidth: 154,
             backgroundColor: const Color(0xffeef8f4),
             indicatorColor: const Color(0xffbde8db),
             selectedIconTheme: const IconThemeData(
@@ -543,7 +566,8 @@ class _MonitorShellState extends State<MonitorShell> {
                 label: Text('Workers'),
               ),
               NavigationRailDestination(
-                icon: Icon(Icons.euro),
+                icon: Icon(Icons.payments_outlined),
+                selectedIcon: Icon(Icons.payments),
                 label: Text('Gebruik & kosten'),
               ),
             ],
@@ -561,30 +585,37 @@ class _MonitorShellState extends State<MonitorShell> {
     if (selected == ViewKind.usage) {
       final rows = (snapshot!['rows'] as List? ?? const [])
           .cast<Map<String, dynamic>>();
-      return UsageList(rows: rows);
+      final consumers = (snapshot!['consumers'] as List? ?? const [])
+          .cast<Map<String, dynamic>>();
+      return UsageList(rows: rows, consumers: consumers);
     }
     final items = (snapshot!['items'] as List? ?? const [])
         .cast<Map<String, dynamic>>();
     if (selected == ViewKind.completed) {
+      final consumers = (snapshot!['consumers'] as List? ?? const [])
+          .map((value) => value.toString())
+          .toList();
       return Column(
         children: [
-          SearchBar(
-            hintText: 'Zoek op job-ID, technische naam of applicatie',
-            leading: const Icon(Icons.search),
-            onSubmitted: (value) {
-              search = value;
-              cursor = null;
-              _writeUrl();
-              refresh();
-            },
+          _CompletedFilters(
+            searchController: searchController,
+            consumer: consumerFilter,
+            consumers: consumers,
+            from: completedFrom,
+            until: completedUntil,
+            onSearch: (value) => _changeCompletedFilters(search: value),
+            onConsumer: (value) => _changeCompletedFilters(consumer: value),
+            onFrom: () => _pickCompletedDateTime(isFrom: true),
+            onUntil: () => _pickCompletedDateTime(isFrom: false),
+            onClear: _clearCompletedFilters,
           ),
           const SizedBox(height: 16),
           Expanded(
             child: JobList(
               items: items,
-              emptyText: search.isEmpty
+              emptyText: !_hasCompletedFilters
                   ? 'Er zijn nog geen afgeronde jobs'
-                  : 'Geen jobs gevonden voor deze zoekterm',
+                  : 'Geen jobs gevonden met deze filters',
               api: api,
             ),
           ),
@@ -622,9 +653,98 @@ class _MonitorShellState extends State<MonitorShell> {
     refresh();
   }
 
-  void _writeUrl() => BrowserPlatform.replaceQuery(
-    'search=${Uri.encodeQueryComponent(search)}${cursor == null ? '' : '&cursor=${Uri.encodeQueryComponent(cursor!)}'}',
-  );
+  bool get _hasCompletedFilters =>
+      search.isNotEmpty ||
+      consumerFilter.isNotEmpty ||
+      completedFrom != null ||
+      completedUntil != null;
+
+  String _completedPath() {
+    final parameters = <String, String>{'limit': '30'};
+    if (search.isNotEmpty) parameters['title'] = search;
+    if (consumerFilter.isNotEmpty) parameters['consumer'] = consumerFilter;
+    if (completedFrom != null) {
+      parameters['from'] = completedFrom!.toUtc().toIso8601String();
+    }
+    if (completedUntil != null) {
+      parameters['until'] = completedUntil!.toUtc().toIso8601String();
+    }
+    if (cursor != null) parameters['cursor'] = cursor!;
+    return Uri(
+      path: '/v1/management/jobs/completed',
+      queryParameters: parameters,
+    ).toString();
+  }
+
+  void _changeCompletedFilters({String? search, String? consumer}) {
+    setState(() {
+      if (search != null) this.search = search.trim();
+      if (consumer != null) consumerFilter = consumer;
+      cursor = null;
+    });
+    _writeUrl();
+    refresh();
+  }
+
+  Future<void> _pickCompletedDateTime({required bool isFrom}) async {
+    final initial = (isFrom ? completedFrom : completedUntil) ?? DateTime.now();
+    final date = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(initial),
+    );
+    if (time == null || !mounted) return;
+    final value = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      time.hour,
+      time.minute,
+    );
+    setState(() {
+      if (isFrom) {
+        completedFrom = value;
+      } else {
+        completedUntil = value;
+      }
+      cursor = null;
+    });
+    _writeUrl();
+    refresh();
+  }
+
+  void _clearCompletedFilters() {
+    searchController.clear();
+    setState(() {
+      search = '';
+      consumerFilter = '';
+      completedFrom = null;
+      completedUntil = null;
+      cursor = null;
+    });
+    _writeUrl();
+    refresh();
+  }
+
+  void _writeUrl() {
+    final parameters = <String, String>{};
+    if (search.isNotEmpty) parameters['title'] = search;
+    if (consumerFilter.isNotEmpty) parameters['consumer'] = consumerFilter;
+    if (completedFrom != null) {
+      parameters['from'] = completedFrom!.toUtc().toIso8601String();
+    }
+    if (completedUntil != null) {
+      parameters['until'] = completedUntil!.toUtc().toIso8601String();
+    }
+    if (cursor != null) parameters['cursor'] = cursor!;
+    BrowserPlatform.replaceQuery(Uri(queryParameters: parameters).query);
+  }
 }
 
 class _Header extends StatelessWidget {
@@ -682,6 +802,96 @@ class _Header extends StatelessWidget {
           ],
         ),
       ),
+    ),
+  );
+}
+
+class _CompletedFilters extends StatelessWidget {
+  final TextEditingController searchController;
+  final String consumer;
+  final List<String> consumers;
+  final DateTime? from;
+  final DateTime? until;
+  final ValueChanged<String> onSearch;
+  final ValueChanged<String> onConsumer;
+  final VoidCallback onFrom;
+  final VoidCallback onUntil;
+  final VoidCallback onClear;
+
+  const _CompletedFilters({
+    required this.searchController,
+    required this.consumer,
+    required this.consumers,
+    required this.from,
+    required this.until,
+    required this.onSearch,
+    required this.onConsumer,
+    required this.onFrom,
+    required this.onUntil,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) => Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        SizedBox(
+          width: constraints.maxWidth < 480 ? constraints.maxWidth : 480,
+          child: SearchBar(
+            controller: searchController,
+            hintText: 'Filter op titel of job-ID',
+            leading: const Icon(Icons.search),
+            trailing: [
+              IconButton(
+                tooltip: 'Zoeken',
+                onPressed: () => onSearch(searchController.text),
+                icon: const Icon(Icons.arrow_forward),
+              ),
+            ],
+            onSubmitted: onSearch,
+          ),
+        ),
+        SizedBox(
+          width: constraints.maxWidth < 250 ? constraints.maxWidth : 250,
+          child: DropdownButtonFormField<String>(
+            key: ValueKey('consumer-$consumer-${consumers.join(',')}'),
+            initialValue: consumer,
+            decoration: const InputDecoration(
+              labelText: 'Consumer',
+              border: OutlineInputBorder(),
+            ),
+            items: [
+              const DropdownMenuItem(value: '', child: Text('Alle consumers')),
+              ...consumers.map(
+                (value) => DropdownMenuItem(value: value, child: Text(value)),
+              ),
+            ],
+            onChanged: (value) => onConsumer(value ?? ''),
+          ),
+        ),
+        OutlinedButton.icon(
+          onPressed: onFrom,
+          icon: const Icon(Icons.calendar_today_outlined),
+          label: Text(
+            from == null ? 'Vanaf' : 'Vanaf ${_formatFilterDateTime(from!)}',
+          ),
+        ),
+        OutlinedButton.icon(
+          onPressed: onUntil,
+          icon: const Icon(Icons.event_outlined),
+          label: Text(
+            until == null ? 'Tot' : 'Tot ${_formatFilterDateTime(until!)}',
+          ),
+        ),
+        TextButton.icon(
+          onPressed: onClear,
+          icon: const Icon(Icons.filter_alt_off_outlined),
+          label: const Text('Wis filters'),
+        ),
+      ],
     ),
   );
 }
@@ -762,6 +972,34 @@ class JobList extends StatelessWidget {
                         )
                         .join(' · '),
                   ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 16,
+                    runSpacing: 8,
+                    children: [
+                      _JobFact(
+                        icon: Icons.schedule,
+                        label: 'Aangemaakt',
+                        value: _formatInstant(item['createdAt']),
+                      ),
+                      if (item['completedAt'] != null)
+                        _JobFact(
+                          icon: Icons.event_available_outlined,
+                          label: 'Afgerond',
+                          value: _formatInstant(item['completedAt']),
+                        ),
+                      _JobFact(
+                        icon: Icons.timer_outlined,
+                        label: 'Looptijd',
+                        value: _formatDuration(item['durationMillis']),
+                      ),
+                      _JobFact(
+                        icon: Icons.payments_outlined,
+                        label: 'Kosten',
+                        value: _formatJobCosts(item),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 12),
                   _ListPreview(
                     label: 'Prompt · eerste 240 tekens',
@@ -801,6 +1039,34 @@ class JobList extends StatelessWidget {
       },
     );
   }
+}
+
+class _JobFact extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  const _JobFact({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) => ConstrainedBox(
+    constraints: const BoxConstraints(maxWidth: 320),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Icon(icon, size: 17, color: const Color(0xff31564c)),
+        ),
+        const SizedBox(width: 5),
+        Flexible(child: Text('$label: $value')),
+      ],
+    ),
+  );
 }
 
 class _ListPreview extends StatelessWidget {
@@ -1227,83 +1493,243 @@ class _FileItemState extends State<_FileItem> {
 
 class UsageList extends StatelessWidget {
   final List<Map<String, dynamic>> rows;
-  const UsageList({super.key, required this.rows});
+  final List<Map<String, dynamic>> consumers;
+  const UsageList({super.key, required this.rows, required this.consumers});
 
   @override
   Widget build(BuildContext context) {
-    if (rows.isEmpty) {
-      return const Center(
-        child: Text('Er is in deze periode nog geen v2-gebruik gemeten'),
-      );
+    if (rows.isEmpty && consumers.isEmpty) {
+      return const Center(child: Text('Er is nog geen gebruik gemeten'));
     }
-    return ListView.separated(
-      itemCount: rows.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 12),
-      itemBuilder: (context, index) {
-        final row = rows[index];
-        final dimensions = (row['dimensions'] as Map? ?? const {}).map(
-          (key, value) => MapEntry(key.toString(), value.toString()),
-        );
-        final metrics = (row['metrics'] as List? ?? const [])
-            .cast<Map<String, dynamic>>();
-        final shares = (row['usageShares'] as List? ?? const [])
-            .cast<Map<String, dynamic>>();
-        final costs = (row['costs'] as List? ?? const [])
-            .cast<Map<String, dynamic>>();
-        String dimension(String key) => dimensions[key] ?? '—';
-        final metricText = metrics
-            .map((metric) {
-              final share = shares
-                  .where((item) => item['metric'] == metric['metric'])
-                  .firstOrNull;
-              final suffix = share == null ? '' : ' (${share['percentage']}%)';
-              return '${metric['metric']}: ${metric['quantity']} ${metric['unit']}$suffix';
-            })
-            .join(' · ');
-        final costText = costs.isEmpty
-            ? 'Geen eurobedrag beschikbaar'
-            : costs
-                  .map(
-                    (cost) =>
-                        '${cost['currency']} ${cost['amount']} (${cost['kind']})',
-                  )
-                  .join(' · ');
-        return Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return ListView(
+      children: [
+        Text(
+          'Consumers',
+          style: Theme.of(
+            context,
+          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Jobaantallen per consumer en kosten over de afgelopen 30 dagen.',
+        ),
+        const SizedBox(height: 14),
+        ...consumers.expand(
+          (consumer) => [
+            _ConsumerUsageCard(consumer: consumer),
+            const SizedBox(height: 12),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(
+          'Gebruik per model · afgelopen 30 dagen',
+          style: Theme.of(
+            context,
+          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 14),
+        if (rows.isEmpty)
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Er is in deze periode nog geen v2-gebruik gemeten.'),
+            ),
+          ),
+        ...rows.expand((row) {
+          final dimensions = (row['dimensions'] as Map? ?? const {}).map(
+            (key, value) => MapEntry(key.toString(), value.toString()),
+          );
+          final metrics = (row['metrics'] as List? ?? const [])
+              .cast<Map<String, dynamic>>();
+          final shares = (row['usageShares'] as List? ?? const [])
+              .cast<Map<String, dynamic>>();
+          final costs = (row['costs'] as List? ?? const [])
+              .cast<Map<String, dynamic>>();
+          String dimension(String key) => dimensions[key] ?? '—';
+          final metricText = metrics
+              .map((metric) {
+                final share = shares
+                    .where((item) => item['metric'] == metric['metric'])
+                    .firstOrNull;
+                final suffix = share == null
+                    ? ''
+                    : ' (${share['percentage']}%)';
+                return '${metric['metric']}: ${metric['quantity']} ${metric['unit']}$suffix';
+              })
+              .join(' · ');
+          final costText = costs.isEmpty
+              ? 'Geen eurobedrag beschikbaar'
+              : costs
+                    .map(
+                      (cost) =>
+                          '${cost['currency']} ${cost['amount']} (${cost['kind']})',
+                    )
+                    .join(' · ');
+          return [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      dimension('tenantId'),
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${dimension('vendorId')} · ${dimension('model')} · ${dimension('mode')} · ${dimension('taskType')}',
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '${row['jobCount']} jobs · ${row['attemptCount']} uitvoeringen · ${row['unknownUsageAttemptCount']} zonder meetbare usage',
+                    ),
+                    if (metricText.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(metricText),
+                    ],
+                    const SizedBox(height: 6),
+                    Text(
+                      costText,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ];
+        }),
+      ],
+    );
+  }
+}
+
+class _ConsumerUsageCard extends StatelessWidget {
+  final Map<String, dynamic> consumer;
+  const _ConsumerUsageCard({required this.consumer});
+
+  @override
+  Widget build(BuildContext context) {
+    final models = (consumer['models'] as List? ?? const [])
+        .cast<Map<String, dynamic>>();
+    final costs = (consumer['costsInPeriod'] as List? ?? const [])
+        .cast<Map<String, dynamic>>();
+    final legacyJobs = consumer['legacyJobsInPeriod'] as int? ?? 0;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              consumer['consumer']?.toString() ?? 'Onbekende consumer',
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 20,
+              runSpacing: 10,
               children: [
-                Text(
-                  dimension('tenantId'),
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                _Statistic(label: 'Totaal', value: '${consumer['totalJobs']}'),
+                _Statistic(
+                  label: '24 uur',
+                  value: '${consumer['jobsLast24Hours']}',
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  '${dimension('vendorId')} · ${dimension('model')} · ${dimension('mode')} · ${dimension('taskType')}',
+                _Statistic(
+                  label: '7 dagen',
+                  value: '${consumer['jobsLast7Days']}',
                 ),
-                const SizedBox(height: 12),
-                Text(
-                  '${row['jobCount']} jobs · ${row['attemptCount']} uitvoeringen · ${row['unknownUsageAttemptCount']} zonder meetbare usage',
+                _Statistic(
+                  label: '30 dagen',
+                  value: '${consumer['jobsLast30Days']}',
                 ),
-                if (metricText.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Text(metricText),
-                ],
-                const SizedBox(height: 6),
-                Text(
-                  costText,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
+                _Statistic(
+                  label: 'Kosten 30 dagen',
+                  value: _formatCosts(costs),
                 ),
               ],
             ),
-          ),
-        );
-      },
+            const SizedBox(height: 12),
+            Text(
+              models.isEmpty
+                  ? 'Nog geen modellen gebruikt'
+                  : 'Modellen: ${models.map((model) => '${model['vendorId']} / ${model['model']}${model['mode'] == null ? '' : ' / ${model['mode']}'} (${model['jobCount']})').join(' · ')}',
+            ),
+            if (legacyJobs > 0) ...[
+              const SizedBox(height: 6),
+              Text(
+                '$legacyJobs v1-${legacyJobs == 1 ? 'job heeft' : 'jobs hebben'} geen betrouwbare kostenregistratie.',
+                style: const TextStyle(color: Color(0xff6b5440)),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
+}
+
+class _Statistic extends StatelessWidget {
+  final String label;
+  final String value;
+  const _Statistic({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(label, style: const TextStyle(color: Color(0xff52665f))),
+      Text(
+        value,
+        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+      ),
+    ],
+  );
+}
+
+String _formatInstant(dynamic raw) {
+  final value = DateTime.tryParse(raw?.toString() ?? '')?.toLocal();
+  return value == null ? 'Onbekend' : _formatDateTime(value);
+}
+
+String _formatDateTime(DateTime value) =>
+    '${value.day.toString().padLeft(2, '0')}-${value.month.toString().padLeft(2, '0')}-${value.year} '
+    '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}:${value.second.toString().padLeft(2, '0')}';
+
+String _formatFilterDateTime(DateTime value) =>
+    '${value.day.toString().padLeft(2, '0')}-${value.month.toString().padLeft(2, '0')} '
+    '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+
+String _formatDuration(dynamic raw) {
+  final milliseconds = raw is num ? raw.toInt() : int.tryParse('$raw');
+  if (milliseconds == null) return 'Niet beschikbaar';
+  final duration = Duration(milliseconds: milliseconds);
+  final parts = <String>[];
+  if (duration.inHours > 0) parts.add('${duration.inHours}u');
+  final minutes = duration.inMinutes.remainder(60);
+  if (minutes > 0 || duration.inHours > 0) parts.add('${minutes}m');
+  final seconds = duration.inSeconds.remainder(60);
+  parts.add('${seconds}s');
+  return parts.join(' ');
+}
+
+String _formatJobCosts(Map<String, dynamic> job) {
+  if (job['costAvailable'] != true) return 'Niet beschikbaar (v1)';
+  return _formatCosts(
+    (job['costs'] as List? ?? const []).cast<Map<String, dynamic>>(),
+  );
+}
+
+String _formatCosts(List<Map<String, dynamic>> costs) {
+  if (costs.isEmpty) return 'Geen bedrag beschikbaar';
+  return costs
+      .map((cost) => '${cost['currency']} ${cost['amount']}')
+      .join(' · ');
 }
 
 String _formatBytes(int bytes) {

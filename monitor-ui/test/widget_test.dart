@@ -105,6 +105,10 @@ void main() {
                 'outputPreview': '{"screenshot":"pagina.png"}',
                 'inputAttachmentCount': 1,
                 'artifactCount': 2,
+                'createdAt': '2026-09-10T05:30:15Z',
+                'completedAt': '2026-09-10T05:32:20Z',
+                'durationMillis': 125000,
+                'costAvailable': false,
               },
             ],
           ),
@@ -116,6 +120,10 @@ void main() {
     expect(find.text('Output · eerste 240 tekens'), findsOneWidget);
     expect(find.text('1 attachment'), findsOneWidget);
     expect(find.text('2 artifacts'), findsOneWidget);
+    expect(find.textContaining('Aangemaakt:'), findsOneWidget);
+    expect(find.textContaining('Afgerond:'), findsOneWidget);
+    expect(find.text('Looptijd: 2m 5s'), findsOneWidget);
+    expect(find.text('Kosten: Niet beschikbaar (v1)'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -149,6 +157,10 @@ void main() {
                   'outputPreview': '{"ok":"ja"}',
                   'inputAttachmentCount': 1,
                   'artifactCount': 1,
+                  'createdAt': '2026-09-10T05:30:15Z',
+                  'completedAt': '2026-09-10T05:30:16Z',
+                  'durationMillis': 1000,
+                  'costAvailable': false,
                 },
               ],
             ),
@@ -159,6 +171,47 @@ void main() {
 
     expect(find.text('1 attachment'), findsOneWidget);
     expect(find.text('1 artifact'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('gebruiksoverzicht toont statistieken en modellen per consumer', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: UsageList(
+            rows: const [],
+            consumers: const [
+              {
+                'consumer': 'pvdd',
+                'totalJobs': 42,
+                'jobsLast24Hours': 2,
+                'jobsLast7Days': 12,
+                'jobsLast30Days': 30,
+                'costsInPeriod': [
+                  {'currency': 'EUR', 'amount': '4.25'},
+                ],
+                'legacyJobsInPeriod': 3,
+                'models': [
+                  {
+                    'vendorId': 'openai',
+                    'model': 'gpt-5.6-sol',
+                    'mode': 'API',
+                    'jobCount': 30,
+                  },
+                ],
+              },
+            ],
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('pvdd'), findsOneWidget);
+    expect(find.text('EUR 4.25'), findsOneWidget);
+    expect(find.textContaining('openai / gpt-5.6-sol / API'), findsOneWidget);
+    expect(find.textContaining('3 v1-jobs'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

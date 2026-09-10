@@ -105,6 +105,24 @@ class AgentRuntimeIntegrationTest(
         assertThat(completed.path("inputAttachmentCount").asInt()).isZero()
         assertThat(completed.path("promptPreview").asText()).startsWith("Return a test answer")
         assertThat(completed.path("outputPreview").asText()).contains("yes")
+        assertThat(completed.path("createdAt").asText()).isNotBlank()
+        assertThat(completed.path("startedAt").asText()).isNotBlank()
+        assertThat(completed.path("durationMillis").asLong()).isGreaterThanOrEqualTo(0)
+        assertThat(completed.path("costAvailable").asBoolean()).isFalse()
+
+        val filtered = getJson(
+            "/v1/management/jobs/completed?consumer=product-factory&title=${id.take(8)}&from=${Instant.now().minus(Duration.ofDays(1))}&until=${Instant.now().plus(Duration.ofDays(1))}",
+            ADMIN_TOKEN,
+        )
+        assertThat(filtered.path("items").map { it.path("id").asText() }).contains(id)
+        assertThat(filtered.path("consumers").map(JsonNode::asText)).contains("product-factory")
+
+        val overview = getJson("/v1/management/consumers", ADMIN_TOKEN)
+        val productFactory = overview.path("items").first { it.path("consumer").asText() == "product-factory" }
+        assertThat(productFactory.path("totalJobs").asLong()).isPositive()
+        assertThat(productFactory.path("jobsLast30Days").asLong()).isPositive()
+        assertThat(productFactory.path("legacyJobsInPeriod").asLong()).isPositive()
+        assertThat(productFactory.path("models").any { it.path("model").asText() == model }).isTrue()
         val transcript = getJson("/v1/management/jobs/$id/transcript", ADMIN_TOKEN)
         assertThat(transcript.path("items")).hasSize(1)
     }
