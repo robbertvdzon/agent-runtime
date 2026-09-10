@@ -513,8 +513,8 @@ class _MonitorShellState extends State<MonitorShell> {
             ),
             NavigationDestination(icon: Icon(Icons.computer), label: 'Workers'),
             NavigationDestination(
-              icon: Icon(Icons.payments_outlined),
-              selectedIcon: Icon(Icons.payments),
+              icon: Icon(Icons.bar_chart_outlined),
+              selectedIcon: Icon(Icons.bar_chart),
               label: 'Gebruik',
             ),
           ],
@@ -566,8 +566,8 @@ class _MonitorShellState extends State<MonitorShell> {
                 label: Text('Workers'),
               ),
               NavigationRailDestination(
-                icon: Icon(Icons.payments_outlined),
-                selectedIcon: Icon(Icons.payments),
+                icon: Icon(Icons.bar_chart_outlined),
+                selectedIcon: Icon(Icons.bar_chart),
                 label: Text('Gebruik & kosten'),
               ),
             ],
@@ -994,7 +994,7 @@ class JobList extends StatelessWidget {
                         value: _formatDuration(item['durationMillis']),
                       ),
                       _JobFact(
-                        icon: Icons.payments_outlined,
+                        icon: Icons.attach_money,
                         label: 'Kosten',
                         value: _formatJobCosts(item),
                       ),
