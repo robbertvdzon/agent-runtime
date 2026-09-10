@@ -513,8 +513,8 @@ class _MonitorShellState extends State<MonitorShell> {
             ),
             NavigationDestination(icon: Icon(Icons.computer), label: 'Workers'),
             NavigationDestination(
-              icon: Icon(Icons.bar_chart_outlined),
-              selectedIcon: Icon(Icons.bar_chart),
+              icon: UsageCostsIcon(),
+              selectedIcon: UsageCostsIcon(selected: true),
               label: 'Gebruik',
             ),
           ],
@@ -566,8 +566,8 @@ class _MonitorShellState extends State<MonitorShell> {
                 label: Text('Workers'),
               ),
               NavigationRailDestination(
-                icon: Icon(Icons.bar_chart_outlined),
-                selectedIcon: Icon(Icons.bar_chart),
+                icon: UsageCostsIcon(),
+                selectedIcon: UsageCostsIcon(selected: true),
                 label: Text('Gebruik & kosten'),
               ),
             ],
@@ -744,6 +744,42 @@ class _MonitorShellState extends State<MonitorShell> {
     }
     if (cursor != null) parameters['cursor'] = cursor!;
     BrowserPlatform.replaceQuery(Uri(queryParameters: parameters).query);
+  }
+}
+
+class UsageCostsIcon extends StatelessWidget {
+  final bool selected;
+  const UsageCostsIcon({super.key, this.selected = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? const Color(0xff004f3f) : const Color(0xff245348);
+    Widget bar(double height) => Container(
+      width: 5,
+      height: height,
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(2),
+      ),
+    );
+    return Semantics(
+      label: 'Gebruik en kosten',
+      child: SizedBox(
+        width: 28,
+        height: 28,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            bar(10),
+            const SizedBox(width: 3),
+            bar(18),
+            const SizedBox(width: 3),
+            bar(25),
+          ],
+        ),
+      ),
+    );
   }
 }
 
