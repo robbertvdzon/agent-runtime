@@ -143,6 +143,21 @@ paths:
         '400': {$ref: '#/components/responses/ClientError'}
         '403': {$ref: '#/components/responses/Forbidden'}
 
+  /repository-aliases:
+    get:
+      operationId: listRepositoryAliasOptions
+      summary: List tenant-allowed repository aliases and online worker availability
+      description: Returns alias names only. Repository URLs and credentials are never exposed.
+      responses:
+        '200':
+          description: Allowlisted repository aliases and worker availability
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/RepositoryAliasOptionView'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
   /test-control/mocks:
     get:
       operationId: listTargetedMockFixtures
@@ -250,6 +265,33 @@ paths:
                         required: true
                         mimeTypes: [text/plain, application/json]
                         maxBytes: 1073741824
+                  executionTimeoutSeconds: 3600
+              repositoryAgent:
+                value:
+                  idempotencyKey: story-SF-123-development-1
+                  jobKind: REPOSITORY_WORK
+                  taskType: REPOSITORY_AGENT
+                  execution:
+                    vendorId: openai
+                    model: gpt-5.6-sol
+                    mode: SUBSCRIPTION
+                  input:
+                    instruction: Implement the requested story on the existing branch.
+                    objects: []
+                  output:
+                    resultSchema:
+                      type: object
+                      required: [status, summary]
+                      properties:
+                        status: {type: string}
+                        summary: {type: string}
+                      additionalProperties: false
+                    artifacts: []
+                  repositoryCheckout:
+                    alias: pvdd
+                    branch: software-factory/SF-123
+                    publicationMode: COMMIT_AND_PUSH
+                  environmentKeys: []
                   executionTimeoutSeconds: 3600
       responses:
         '202':
@@ -916,6 +958,66 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/OutputRejectedResponse'}
 
+  /workers/{workerId}/jobs/{jobId}/attempts/{attemptId}/repository-publication:
+    post:
+      operationId: prepareRepositoryPublication
+      summary: Durably prepare one validated repository commit before its external push
+      description: |
+        Stores the validated agent result, uploaded output object IDs and intended commit before
+        the worker pushes. Repeating the same request is idempotent; conflicting commit metadata
+        is rejected. The endpoint is worker-internal and protected by attempt fencing.
+      parameters:
+        - $ref: '#/components/parameters/WorkerId'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/AttemptId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PrepareRepositoryPublicationRequest'}
+      responses:
+        '200':
+          description: Durable publication intent
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryPublicationIntentView'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+
+  /workers/{workerId}/jobs/{jobId}/attempts/{attemptId}/repository-publication/confirm:
+    post:
+      operationId: confirmRepositoryPublication
+      summary: Confirm a prepared commit is remote and atomically complete the job
+      parameters:
+        - $ref: '#/components/parameters/WorkerId'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/AttemptId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ConfirmRepositoryPublicationRequest'}
+      responses:
+        '204': {description: Publication finalized and job completed}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /workers/{workerId}/jobs/{jobId}/attempts/{attemptId}/repository-publication/discard:
+    post:
+      operationId: discardRepositoryPublication
+      summary: Discard a prepared intent after proving the commit was not pushed
+      parameters:
+        - $ref: '#/components/parameters/WorkerId'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/AttemptId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DiscardRepositoryPublicationRequest'}
+      responses:
+        '204': {description: Publication intent and attempt uploads discarded}
+        '409': {$ref: '#/components/responses/Conflict'}
+
   /workers/{workerId}/jobs/{jobId}/attempts/{attemptId}/fail:
     post:
       operationId: failAttempt
@@ -1079,6 +1181,11 @@ components:
     CreateJobRequest:
       type: object
       additionalProperties: false
+      description: |
+        repositorySnapshot and repositoryCheckout are mutually exclusive. REPOSITORY_WORK requires
+        REPOSITORY_AGENT plus COMMIT_AND_PUSH. Read-only branch agents use APPLICATION_WORK,
+        REPOSITORY_AGENT and NONE. The branch must already exist; the Runtime never creates a
+        branch, pull request or fallback checkout.
       required: [idempotencyKey, jobKind, taskType, execution, input, output, executionTimeoutSeconds]
       properties:
         idempotencyKey: {type: string, minLength: 1, maxLength: 160}
@@ -1088,7 +1195,7 @@ components:
         input: {$ref: '#/components/schemas/JobInput'}
         output: {$ref: '#/components/schemas/OutputContract'}
         repositorySnapshot: {$ref: '#/components/schemas/RepositorySnapshot'}
-        repositoryRequest: {$ref: '#/components/schemas/RepositoryRequest'}
+        repositoryCheckout: {$ref: '#/components/schemas/RepositoryCheckout'}
         environmentKeys:
           type: array
           maxItems: 50
@@ -1209,6 +1316,7 @@ components:
         result:
           type: object
           description: Bounded JSON object; default maximum serialized size is 1 MiB.
+        repositoryResult: {$ref: '#/components/schemas/RepositoryResult'}
         artifacts:
           type: array
           items: {$ref: '#/components/schemas/OutputObjectView'}
@@ -1454,6 +1562,11 @@ components:
           maxItems: 1000
           uniqueItems: true
           items: {type: string, pattern: '^[A-Z][A-Z0-9_]*__[A-Z][A-Z0-9_]*$'}
+        availableRepositoryAliases:
+          type: array
+          maxItems: 200
+          uniqueItems: true
+          items: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
         maxConcurrency: {type: integer, minimum: 1, maximum: 32}
         versions:
           type: object
@@ -1476,13 +1589,17 @@ components:
     WorkerView:
       type: object
       additionalProperties: false
-      required: [workerId, bootId, executors, maxConcurrency, lastHeartbeatAt]
+      required: [workerId, bootId, executors, availableRepositoryAliases, maxConcurrency, lastHeartbeatAt]
       properties:
         workerId: {type: string}
         bootId: {type: string}
         executors:
           type: array
           items: {$ref: '#/components/schemas/ExecutorCapability'}
+        availableRepositoryAliases:
+          type: array
+          uniqueItems: true
+          items: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
         maxConcurrency: {type: integer, minimum: 1, maximum: 32}
         lastHeartbeatAt: {type: string, format: date-time}
 
@@ -1499,6 +1616,12 @@ components:
         provider: {type: string, maxLength: 100}
         model: {type: string, maxLength: 160}
         executionMode: {$ref: '#/components/schemas/ExecutionMode'}
+        repositoryAlias: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
+        repositoryBranch: {type: string, minLength: 1, maxLength: 240}
+        repositoryPublicationMode: {$ref: '#/components/schemas/RepositoryPublicationMode'}
+        checkoutCommitSha: {$ref: '#/components/schemas/GitCommitSha'}
+        publishedCommitSha: {$ref: '#/components/schemas/GitCommitSha'}
+        repositoryPublicationStatus: {$ref: '#/components/schemas/RepositoryPublicationStatus'}
         status: {$ref: '#/components/schemas/JobStatus'}
         phase: {type: string, maxLength: 80}
         workerId: {type: string, maxLength: 100}
@@ -1548,6 +1671,7 @@ components:
       properties:
         jobId: {type: string, format: uuid}
         result: {type: object}
+        repositoryResult: {$ref: '#/components/schemas/RepositoryResult'}
         artifacts: {type: array, items: {$ref: '#/components/schemas/ManagementObject'}}
         usageSummary: {$ref: '#/components/schemas/JobUsageSummary'}
         completedAt: {type: string, format: date-time}
@@ -1599,14 +1723,41 @@ components:
         serverTime: {type: string, format: date-time}
         items:
           type: array
-          items:
-            type: object
-            required: [worker, activeJobs]
-            properties:
-              worker: {type: object}
-              activeJobs: {type: integer, minimum: 0}
-              currentTechnicalName: {type: string}
+          items: {$ref: '#/components/schemas/ManagementWorker'}
         consumers: {type: array, items: {type: string}}
+
+    ManagementWorker:
+      type: object
+      additionalProperties: false
+      required: [worker, activeJobs]
+      properties:
+        worker: {$ref: '#/components/schemas/ManagementWorkerView'}
+        activeJobs: {type: integer, minimum: 0}
+        currentTechnicalName: {type: string}
+
+    ManagementWorkerView:
+      type: object
+      additionalProperties: false
+      required: [workerId, bootId, status, capabilities, providers, models, availableEnvironmentKeys, availableRepositoryAliases, maxConcurrency, lastHeartbeatAt, executors, versions]
+      properties:
+        workerId: {type: string, minLength: 1, maxLength: 100}
+        bootId: {type: string, minLength: 1, maxLength: 100}
+        status: {type: string, enum: [ONLINE, STALE, OFFLINE]}
+        capabilities: {type: array, uniqueItems: true, items: {type: string}}
+        providers: {type: array, uniqueItems: true, items: {type: string}}
+        models: {type: array, uniqueItems: true, items: {type: string}}
+        availableEnvironmentKeys:
+          type: array
+          uniqueItems: true
+          items: {type: string, pattern: '^[A-Z][A-Z0-9_]*__[A-Z][A-Z0-9_]*$'}
+        availableRepositoryAliases:
+          type: array
+          uniqueItems: true
+          items: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
+        maxConcurrency: {type: integer, minimum: 1, maximum: 32}
+        lastHeartbeatAt: {type: string, format: date-time}
+        executors: {type: array, items: {$ref: '#/components/schemas/ExecutorCapability'}}
+        versions: {type: object, additionalProperties: {type: string}}
 
     ManagementConsumerOverview:
       type: object
@@ -1668,6 +1819,16 @@ components:
         matchingOnlineWorkers: {type: integer, minimum: 0}
         lastSeenAt: {type: string, format: date-time}
 
+    RepositoryAliasOptionView:
+      type: object
+      additionalProperties: false
+      required: [alias, available, matchingOnlineWorkers]
+      properties:
+        alias: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
+        available: {type: boolean}
+        matchingOnlineWorkers: {type: integer, minimum: 0}
+        lastSeenAt: {type: string, format: date-time}
+
     CreateMockFixtureRequest:
       type: object
       additionalProperties: false
@@ -1688,6 +1849,7 @@ components:
           maxItems: 50
           uniqueItems: true
           items: {$ref: '#/components/schemas/LogicalName'}
+        repositoryResult: {$ref: '#/components/schemas/RepositoryResult'}
       oneOf:
         - required: [result]
         - required: [outputSequence]
@@ -1712,6 +1874,7 @@ components:
           type: array
           uniqueItems: true
           items: {$ref: '#/components/schemas/LogicalName'}
+        repositoryResult: {$ref: '#/components/schemas/RepositoryResult'}
         createdAt: {type: string, format: date-time}
 
     ClaimRequest:
@@ -1738,6 +1901,7 @@ components:
         leaseUntil: {type: string, format: date-time}
         attemptDeadline: {type: string, format: date-time}
         request: {$ref: '#/components/schemas/CreateJobRequest'}
+        repositoryPublication: {$ref: '#/components/schemas/RepositoryPublicationIntentView'}
 
     AttemptAuth:
       type: object
@@ -1830,6 +1994,57 @@ components:
           maxItems: 50
           uniqueItems: true
           items: {type: string, format: uuid}
+        repositoryResult: {$ref: '#/components/schemas/RepositoryResult'}
+
+    PrepareRepositoryPublicationRequest:
+      type: object
+      additionalProperties: false
+      required: [fencingToken, result, outputObjectIds, repositoryResult]
+      properties:
+        fencingToken: {type: string, minLength: 32, maxLength: 500}
+        result:
+          type: object
+          description: Bounded JSON object validated against the output contract before persistence.
+        outputObjectIds:
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        repositoryResult:
+          allOf:
+            - $ref: '#/components/schemas/RepositoryResult'
+          description: Must have publicationStatus PUSHED and identify the intended local commit.
+
+    ConfirmRepositoryPublicationRequest:
+      type: object
+      additionalProperties: false
+      required: [fencingToken, commitSha]
+      properties:
+        fencingToken: {type: string, minLength: 32, maxLength: 500}
+        commitSha: {$ref: '#/components/schemas/GitCommitSha'}
+
+    DiscardRepositoryPublicationRequest:
+      type: object
+      additionalProperties: false
+      required: [fencingToken, commitSha]
+      properties:
+        fencingToken: {type: string, minLength: 32, maxLength: 500}
+        commitSha: {$ref: '#/components/schemas/GitCommitSha'}
+
+    RepositoryPublicationIntentView:
+      type: object
+      additionalProperties: false
+      required: [jobId, attemptId, alias, branch, checkoutCommitSha, intendedCommitSha, status, preparedAt]
+      properties:
+        jobId: {type: string, format: uuid}
+        attemptId: {type: string, format: uuid}
+        alias: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
+        branch: {type: string, minLength: 1, maxLength: 240}
+        checkoutCommitSha: {$ref: '#/components/schemas/GitCommitSha'}
+        intendedCommitSha: {$ref: '#/components/schemas/GitCommitSha'}
+        status: {type: string, enum: [PREPARED, PUSHED, FINALIZED]}
+        preparedAt: {type: string, format: date-time}
+        pushedAt: {type: string, format: date-time}
 
     OutputRejectedResponse:
       type: object
@@ -1870,15 +2085,43 @@ components:
         url: {type: string, pattern: '^https://'}
         commitSha: {type: string, pattern: '^[0-9a-fA-F]{40}$'}
 
-    RepositoryRequest:
+    RepositoryCheckout:
       type: object
       additionalProperties: false
-      required: [alias, baseBranch, publish]
+      required: [alias, branch, publicationMode]
       properties:
-        alias: {type: string, minLength: 1, maxLength: 100}
-        baseBranch: {type: string, minLength: 1, maxLength: 120}
-        branchHint: {type: string, maxLength: 120}
-        publish: {type: boolean}
+        alias: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
+        branch:
+          type: string
+          minLength: 1
+          maxLength: 240
+          description: Existing remote branch; additionally validated with git check-ref-format --branch semantics.
+        publicationMode: {$ref: '#/components/schemas/RepositoryPublicationMode'}
+
+    RepositoryResult:
+      type: object
+      additionalProperties: false
+      description: Runtime-managed Git evidence stored separately from the consumer-defined result object.
+      required: [alias, branch, checkoutCommitSha, publicationStatus]
+      properties:
+        alias: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
+        branch: {type: string, minLength: 1, maxLength: 240}
+        checkoutCommitSha: {$ref: '#/components/schemas/GitCommitSha'}
+        publicationStatus: {$ref: '#/components/schemas/RepositoryPublicationStatus'}
+        commitSha: {$ref: '#/components/schemas/GitCommitSha'}
+        diffStat: {type: string, maxLength: 20000}
+
+    RepositoryPublicationMode:
+      type: string
+      enum: [NONE, COMMIT_AND_PUSH]
+
+    RepositoryPublicationStatus:
+      type: string
+      enum: [NONE, NO_CHANGES, PUSHED]
+
+    GitCommitSha:
+      type: string
+      pattern: '^[0-9a-f]{40}$'
 
     JobKind:
       type: string

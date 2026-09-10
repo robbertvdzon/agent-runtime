@@ -41,12 +41,12 @@ class V2MockFixtureStore(private val jdbc: JdbcTemplate, private val mapper: Obj
         val id = UUID.randomUUID().toString()
         try {
             jdbc.update(
-                """INSERT INTO runtime_v2_mock_fixture(id,tenant_id,idempotency_key,result_json,output_sequence_json,error_code,error_message,delay_millis,output_artifact_names_json,created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                """INSERT INTO runtime_v2_mock_fixture(id,tenant_id,idempotency_key,result_json,output_sequence_json,error_code,error_message,delay_millis,output_artifact_names_json,repository_result_json,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 id, request.tenantId, request.idempotencyKey, request.result?.toString(),
                 request.outputSequence.takeIf(List<String>::isNotEmpty)?.let(mapper::writeValueAsString),
                 request.errorCode, request.errorMessage, request.delayMillis,
-                mapper.writeValueAsString(request.outputArtifactNames), V2JobStore.utc(Instant.now()),
+                mapper.writeValueAsString(request.outputArtifactNames), request.repositoryResult?.let(mapper::writeValueAsString), V2JobStore.utc(Instant.now()),
             )
         } catch (_: DuplicateKeyException) {
             throw ApiException("MOCK_FIXTURE_CONFLICT", "A fixture already exists for this exact tenant and idempotency key.", HttpStatus.CONFLICT)
@@ -81,6 +81,7 @@ class V2MockFixtureStore(private val jdbc: JdbcTemplate, private val mapper: Obj
             rs.getString("output_sequence_json")?.let { mapper.readValue(it, mapper.typeFactory.constructCollectionType(List::class.java, String::class.java)) as List<String> } ?: emptyList(),
             rs.getString("error_code"), rs.getString("error_message"), rs.getLong("delay_millis"),
             mapper.readValue(rs.getString("output_artifact_names_json"), mapper.typeFactory.constructCollectionType(Set::class.java, String::class.java)) as Set<String>,
+            rs.getString("repository_result_json")?.let { mapper.readValue(it, nl.vdzon.agentruntime.contracts.v2.RepositoryResult::class.java) },
             V2JobStore.instant(rs.getObject("created_at")),
         )
     }
@@ -133,14 +134,28 @@ class V2TargetedMockExecutor(
             }
             val outputIds = createArtifacts(current, attempt.view.id, fixture.outputArtifactNames)
             val fresh = jobs.find(job.view.id)!!
-            val errors = jobService.validateResult(fresh, result, outputIds)
+            val repositoryResult = fixture.repositoryResult ?: deterministicRepositoryResult(fresh)
+            val errors = jobService.validateResult(fresh, result, outputIds) + jobService.validateRepositoryResult(fresh, repositoryResult)
             if (errors.isNotEmpty()) {
                 uploads.discardAttemptOutputs(job.view.id, attempt.view.id)
                 jobs.rejectOutput(fresh, attempt.view.id, if (errors.any { it.code == "required" }) "MISSING_REQUIRED_ARTIFACT" else "MODEL_OUTPUT_SCHEMA_INVALID", errors.joinToString("; ") { it.message })
                 continue
             }
-            jobs.complete(job.view.id, attempt.view.id, result, UsageQuality.MOCK)
+            jobs.complete(job.view.id, attempt.view.id, result, repositoryResult, UsageQuality.MOCK)
             return
+        }
+    }
+
+    private fun deterministicRepositoryResult(job: StoredV2Job): nl.vdzon.agentruntime.contracts.v2.RepositoryResult? {
+        val checkout = job.request.repositoryCheckout ?: return null
+        val checkoutSha = MessageDigest.getInstance("SHA-1").digest("${job.view.id}:checkout".toByteArray()).joinToString("") { "%02x".format(it) }
+        return when (checkout.publicationMode) {
+            nl.vdzon.agentruntime.contracts.v2.RepositoryPublicationMode.NONE -> nl.vdzon.agentruntime.contracts.v2.RepositoryResult(
+                checkout.alias, checkout.branch, checkoutSha, nl.vdzon.agentruntime.contracts.v2.RepositoryPublicationStatus.NONE,
+            )
+            nl.vdzon.agentruntime.contracts.v2.RepositoryPublicationMode.COMMIT_AND_PUSH -> nl.vdzon.agentruntime.contracts.v2.RepositoryResult(
+                checkout.alias, checkout.branch, checkoutSha, nl.vdzon.agentruntime.contracts.v2.RepositoryPublicationStatus.NO_CHANGES,
+            )
         }
     }
 

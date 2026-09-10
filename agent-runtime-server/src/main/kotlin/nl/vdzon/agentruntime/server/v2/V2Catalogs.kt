@@ -8,6 +8,7 @@ import nl.vdzon.agentruntime.contracts.v2.ExecutionOptionView
 import nl.vdzon.agentruntime.contracts.v2.ExecutionSelection
 import nl.vdzon.agentruntime.contracts.v2.ExecutorCapability
 import nl.vdzon.agentruntime.contracts.v2.TaskType
+import nl.vdzon.agentruntime.contracts.v2.RepositoryAliasOptionView
 import nl.vdzon.agentruntime.server.config.ApiException
 import nl.vdzon.agentruntime.server.config.RuntimeEnvironment
 import nl.vdzon.agentruntime.server.config.RuntimeProperties
@@ -24,15 +25,17 @@ import java.time.Instant
 data class RegisteredV2Worker(
     val executors: Set<ExecutorCapability>,
     val environmentKeys: Set<String>,
+    val repositoryAliases: Set<String>,
     val lastHeartbeatAt: Instant,
 )
 
 @Repository
 class V2CatalogStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMapper) {
-    fun workers(): List<RegisteredV2Worker> = jdbc.query("SELECT executors_json,environment_keys_json,last_heartbeat_at FROM runtime_v2_worker") { rs, _ ->
+    fun workers(): List<RegisteredV2Worker> = jdbc.query("SELECT executors_json,environment_keys_json,repository_aliases_json,last_heartbeat_at FROM runtime_v2_worker") { rs, _ ->
         RegisteredV2Worker(
             mapper.readValue(rs.getString("executors_json"), mapper.typeFactory.constructCollectionType(Set::class.java, ExecutorCapability::class.java)) as Set<ExecutorCapability>,
             mapper.readValue(rs.getString("environment_keys_json"), mapper.typeFactory.constructCollectionType(Set::class.java, String::class.java)) as Set<String>,
+            mapper.readValue(rs.getString("repository_aliases_json"), mapper.typeFactory.constructCollectionType(Set::class.java, String::class.java)) as Set<String>,
             V2JobStore.instant(rs.getObject("last_heartbeat_at")),
         )
     }
@@ -81,6 +84,17 @@ class V2CatalogService(private val properties: RuntimeProperties, private val st
             }.sortedBy { it.name }
     }
 
+    fun repositoryAliases(tenantId: String): List<RepositoryAliasOptionView> {
+        val allowed = properties.allowedRepositoryAliases(tenantId)
+        val onlineSince = Instant.now().minusSeconds(properties.recoverySeconds)
+        val workers = store.workers()
+        return allowed.map { alias ->
+            val matching = workers.filter { alias in it.repositoryAliases }
+            val online = matching.count { !it.lastHeartbeatAt.isBefore(onlineSince) }
+            RepositoryAliasOptionView(alias, online > 0, online, matching.maxOfOrNull { it.lastHeartbeatAt })
+        }.sortedBy { it.alias }
+    }
+
     private fun allowed(tenantId: String, capability: ExecutorCapability, taskType: TaskType): Boolean {
         val providerName = when (capability.vendorId) {
             "openai" -> "CODEX"
@@ -109,4 +123,8 @@ class V2CatalogController(private val catalogs: V2CatalogService) {
     @GetMapping("/environment-keys")
     fun environmentKeys(@RequestParam("project") projectPrefix: String, request: HttpServletRequest): List<EnvironmentKeyOptionView> =
         catalogs.environmentKeys(request.consumerTenant(), projectPrefix)
+
+    @GetMapping("/repository-aliases")
+    fun repositoryAliases(request: HttpServletRequest): List<RepositoryAliasOptionView> =
+        catalogs.repositoryAliases(request.consumerTenant())
 }

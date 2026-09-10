@@ -1036,6 +1036,33 @@ class JobList extends StatelessWidget {
                       ),
                     ],
                   ),
+                  if (item['repositoryAlias'] != null) ...[
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 16,
+                      runSpacing: 8,
+                      children: [
+                        _JobFact(
+                          icon: Icons.source_outlined,
+                          label: 'Repository',
+                          value: item['repositoryAlias'].toString(),
+                        ),
+                        _JobFact(
+                          icon: Icons.account_tree_outlined,
+                          label: 'Branch',
+                          value: item['repositoryBranch']?.toString() ?? '-',
+                        ),
+                        _JobFact(
+                          icon: Icons.publish_outlined,
+                          label: 'Publicatie',
+                          value:
+                              item['repositoryPublicationStatus']?.toString() ??
+                              item['repositoryPublicationMode']?.toString() ??
+                              '-',
+                        ),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   _ListPreview(
                     label: 'Prompt · eerste 240 tekens',
@@ -1196,7 +1223,7 @@ class WorkerList extends StatelessWidget {
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
             subtitle: Text(
-              'Capaciteit ${wrapper['activeJobs']}/${worker['maxConcurrency']}\nProviders: ${(worker['providers'] as List? ?? []).join(', ')}\nCapabilities: ${(worker['capabilities'] as List? ?? []).join(', ')}\nActuele job: ${wrapper['currentTechnicalName'] ?? 'geen'}',
+              'Capaciteit ${wrapper['activeJobs']}/${worker['maxConcurrency']}\nProviders: ${(worker['providers'] as List? ?? []).join(', ')}\nCapabilities: ${(worker['capabilities'] as List? ?? []).join(', ')}\nRepositoryaliases: ${(worker['availableRepositoryAliases'] as List? ?? []).isEmpty ? 'geen' : (worker['availableRepositoryAliases'] as List).join(', ')}\nActuele job: ${wrapper['currentTechnicalName'] ?? 'geen'}',
             ),
             trailing: StatusLabel(worker['status'].toString()),
           ),
@@ -1319,6 +1346,13 @@ class _JobDetailState extends State<JobDetail> {
                   const JsonEncoder.withIndent(
                     '  ',
                   ).convert(detail!['result']['result']),
+                ),
+              if (detail!['result']?['repositoryResult'] != null)
+                _section(
+                  'Repositorypublicatie',
+                  const JsonEncoder.withIndent(
+                    '  ',
+                  ).convert(detail!['result']['repositoryResult']),
                 ),
               if (detail!['result'] != null &&
                   (detail!['result']['artifacts'] as List? ?? const [])

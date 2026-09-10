@@ -16,6 +16,7 @@ patches:
           - {name: AR_WORKER_API_ENABLED, value: "false"}
           - {name: AR_PRODUCT_FACTORY_PROVIDERS, value: MOCKED}
           - {name: AR_SOFTWARE_FACTORY_PROVIDERS, value: MOCKED}
+          - {name: AR_SOFTWARE_FACTORY_REPOSITORY_ALIASES, value: "software-factory,agent-runtime,test-repository,pvdd,hkh,hkh-autopilot,product-factory,personal-news-feed,robberts-assistent"}
           - {name: AR_HKH_AUTOPILOT_PROVIDERS, value: MOCKED}
           - {name: AR_HKH_PROVIDERS, value: MOCKED}
           - {name: AR_PVDD_PROVIDERS, value: MOCKED}

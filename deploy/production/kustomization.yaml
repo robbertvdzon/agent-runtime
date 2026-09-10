@@ -23,6 +23,7 @@ patches:
           - {name: AR_ENVIRONMENT, value: PRODUCTION}
           - {name: AR_PVDD_PROVIDERS, value: CODEX}
           - {name: AR_PVDD_MODELS, value: gpt-5.6-sol}
+          - {name: AR_SOFTWARE_FACTORY_REPOSITORY_ALIASES, value: "software-factory,agent-runtime,test-repository,pvdd,hkh,hkh-autopilot,product-factory,personal-news-feed,robberts-assistent"}
           - {name: AR_OBJECT_STORE_PATH, value: /var/lib/agent-runtime-objects}
           - {name: AR_OBJECT_STORE_MIN_FREE_BYTES, value: "536870912000"}
       - op: add

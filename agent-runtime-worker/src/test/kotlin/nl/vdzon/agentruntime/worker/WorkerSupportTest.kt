@@ -15,6 +15,10 @@ import java.nio.file.attribute.PosixFilePermission
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import kotlin.io.path.createSymbolicLinkPointingTo
 import kotlin.io.path.exists
+import kotlin.io.path.createDirectories
+import nl.vdzon.agentruntime.contracts.v2.RepositoryCheckout
+import nl.vdzon.agentruntime.contracts.v2.RepositoryPublicationMode
+import nl.vdzon.agentruntime.contracts.v2.RepositoryPublicationStatus
 
 class WorkerSupportTest {
     @Test
@@ -136,5 +140,107 @@ class WorkerSupportTest {
         assertThat(active.exists()).isTrue()
         assertThat(orphan.exists()).isFalse()
         assertThat(root.resolve("journal").exists()).isTrue()
+    }
+
+    @Test
+    fun `v2 repository jobs checkout and push the exact existing story branch`(@TempDir root: Path) {
+        val fixture=gitFixture(root)
+        val support=V2RepositorySupport(mapOf("test-repository" to fixture.remote.toString()))
+        val checkout=RepositoryCheckout("test-repository",fixture.branch,RepositoryPublicationMode.COMMIT_AND_PUSH)
+        val first=root.resolve("first")
+        val state=support.checkout(checkout,first,root)
+        assertThat(state.branch).isEqualTo(fixture.branch)
+        assertThat(state.checkoutCommitSha).isEqualTo(fixture.initialStorySha)
+        first.resolve("implemented.txt").writeText("implemented\n")
+        support.verifyAgentDidNotMutate(state,first)
+        val publication=support.prepareCommit(checkout,state,first,"job-123")
+        assertThat(publication.publicationStatus).isEqualTo(RepositoryPublicationStatus.PUSHED)
+        support.push(checkout,state,first)
+
+        val second=root.resolve("second")
+        val secondState=support.checkout(checkout,second,root)
+        assertThat(secondState.checkoutCommitSha).isEqualTo(publication.commitSha)
+        assertThat(second.resolve("implemented.txt").readText()).isEqualTo("implemented\n")
+        assertThat(support.remotePublicationState(state,second,publication.commitSha!!,"job-123")).isEqualTo(RemotePublicationState.PRESENT)
+        assertThat(git(second,"log","--format=%s",fixture.initialStorySha+"..HEAD").lineSequence().count(String::isNotBlank)).isEqualTo(1)
+    }
+
+    @Test
+    fun `v2 repository no changes missing branch and metadata mutation have stable outcomes`(@TempDir root: Path) {
+        val fixture=gitFixture(root)
+        val support=V2RepositorySupport(mapOf("test-repository" to fixture.remote.toString()))
+        val checkout=RepositoryCheckout("test-repository",fixture.branch,RepositoryPublicationMode.COMMIT_AND_PUSH)
+        val workspace=root.resolve("workspace")
+        val state=support.checkout(checkout,workspace,root)
+        assertThat(support.prepareCommit(checkout,state,workspace,"job-empty").publicationStatus).isEqualTo(RepositoryPublicationStatus.NO_CHANGES)
+        git(workspace,"checkout","-b","forbidden-agent-branch")
+        assertThatThrownBy { support.verifyAgentDidNotMutate(state,workspace) }
+            .isInstanceOf(JobFailure::class.java).extracting("code").isEqualTo("GIT_METADATA_MUTATED")
+
+        val missing=RepositoryCheckout("test-repository","software-factory/missing",RepositoryPublicationMode.COMMIT_AND_PUSH)
+        assertThatThrownBy { support.checkout(missing,root.resolve("missing"),root) }
+            .isInstanceOf(JobFailure::class.java).extracting("code").isEqualTo("REMOTE_BRANCH_NOT_FOUND")
+    }
+
+    @Test
+    fun `v2 repository never force pushes when story branch changes remotely`(@TempDir root: Path) {
+        val fixture=gitFixture(root)
+        val support=V2RepositorySupport(mapOf("test-repository" to fixture.remote.toString()))
+        val checkout=RepositoryCheckout("test-repository",fixture.branch,RepositoryPublicationMode.COMMIT_AND_PUSH)
+        val stale=root.resolve("stale");val staleState=support.checkout(checkout,stale,root)
+        val concurrent=root.resolve("concurrent");support.checkout(checkout,concurrent,root)
+        concurrent.resolve("human.txt").writeText("human\n");git(concurrent,"add","--all");git(concurrent,"-c","user.name=Human","-c","user.email=human@example.test","commit","-m","human change");git(concurrent,"push","origin","HEAD:refs/heads/${fixture.branch}")
+        stale.resolve("agent.txt").writeText("agent\n");support.prepareCommit(checkout,staleState,stale,"job-stale")
+        assertThatThrownBy { support.push(checkout,staleState,stale) }
+            .isInstanceOf(JobFailure::class.java).extracting("code").isEqualTo("BRANCH_CHANGED")
+        val verify=root.resolve("verify");support.checkout(checkout,verify,root)
+        assertThat(verify.resolve("human.txt").exists()).isTrue()
+        assertThat(verify.resolve("agent.txt").exists()).isFalse()
+    }
+
+    @Test
+    fun `v2 publication reconciliation proves whether the intended commit is remote`(@TempDir root: Path) {
+        val fixture=gitFixture(root)
+        val support=V2RepositorySupport(mapOf("test-repository" to fixture.remote.toString()))
+        val checkout=RepositoryCheckout("test-repository",fixture.branch,RepositoryPublicationMode.COMMIT_AND_PUSH)
+        val workspace=root.resolve("workspace");val state=support.checkout(checkout,workspace,root)
+        workspace.resolve("candidate.txt").writeText("candidate\n")
+        val publication=support.prepareCommit(checkout,state,workspace,"job-reconcile")
+        assertThat(support.remotePublicationState(state,workspace,publication.commitSha!!,"job-reconcile")).isEqualTo(RemotePublicationState.ABSENT)
+        support.push(checkout,state,workspace)
+        assertThat(support.remotePublicationState(state,workspace,publication.commitSha!!,"job-reconcile")).isEqualTo(RemotePublicationState.PRESENT)
+    }
+
+    @Test
+    fun `v2 repository blocks unsafe output paths before staging`(@TempDir root: Path) {
+        val fixture=gitFixture(root)
+        val support=V2RepositorySupport(mapOf("test-repository" to fixture.remote.toString()))
+        val checkout=RepositoryCheckout("test-repository",fixture.branch,RepositoryPublicationMode.COMMIT_AND_PUSH)
+        val workspace=root.resolve("workspace");val state=support.checkout(checkout,workspace,root)
+        workspace.resolve("secrets.env").writeText("TOKEN=unsafe\n")
+        assertThatThrownBy { support.prepareCommit(checkout,state,workspace,"job-secret") }
+            .isInstanceOf(JobFailure::class.java).extracting("code").isEqualTo("UNSAFE_REPOSITORY_OUTPUT")
+
+        Files.deleteIfExists(workspace.resolve("secrets.env"))
+        workspace.resolve("ordinary.txt").writeText("the-selected-secret\n")
+        assertThatThrownBy { support.prepareCommit(checkout,state,workspace,"job-secret-value",setOf("the-selected-secret")) }
+            .isInstanceOf(JobFailure::class.java).extracting("code").isEqualTo("UNSAFE_REPOSITORY_OUTPUT")
+    }
+
+    private data class GitFixture(val remote:Path,val branch:String,val initialStorySha:String)
+
+    private fun gitFixture(root:Path):GitFixture {
+        val remote=root.resolve("remote.git");git(root,"init","--bare",remote.toString())
+        val seed=root.resolve("seed");seed.createDirectories();git(seed,"init");git(seed,"config","user.name","Test");git(seed,"config","user.email","test@example.test")
+        seed.resolve("README.md").writeText("main\n");git(seed,"add","README.md");git(seed,"commit","-m","initial");git(seed,"branch","-M","main");git(seed,"remote","add","origin",remote.toString());git(seed,"push","-u","origin","main")
+        val branch="software-factory/SF-123";git(seed,"checkout","-b",branch);seed.resolve("story.txt").writeText("story\n");git(seed,"add","story.txt");git(seed,"commit","-m","story branch");git(seed,"push","-u","origin",branch)
+        return GitFixture(remote,branch,git(seed,"rev-parse","HEAD").trim())
+    }
+
+    private fun git(cwd:Path,vararg args:String):String {
+        val process=ProcessBuilder(listOf("git")+args).directory(cwd.toFile()).redirectErrorStream(true).start()
+        val output=process.inputStream.bufferedReader().readText()
+        check(process.waitFor()==0){"git ${args.joinToString(" ")} failed: $output"}
+        return output
     }
 }

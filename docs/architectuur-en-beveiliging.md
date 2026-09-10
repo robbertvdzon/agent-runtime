@@ -13,7 +13,7 @@ flowchart LR
   HKHA[HKH Autopilot] -->|APPLICATION_WORK| API
   HKH[HKH] -->|APPLICATION_WORK| API
   PVDD[PvdD Commissie-assistent] -->|APPLICATION_WORK| API
-  SF[Software Factory] -->|REPOSITORY_WORK| API
+  SF[Software Factory] -->|bestaande storybranch + REPOSITORY_WORK| API
   API --> DB[(PostgreSQL)]
   API --> MOCK[Centrale mockexecutor]
   WORKER[MacBook-worker] -->|uitgaande HTTPS long-poll| API
@@ -110,9 +110,13 @@ De container krijgt vaste read-only input-, documentatie- en secretmounts, een s
 outputdirectory en een aparte `/work`-worktree. Alleen technische job- en attemptidentifiers staan
 in containerlabels. Fencing tokens en andere credentials staan niet in labels.
 
-Bij `APPLICATION_WORK` verwijdert de worker de Gitremote na een detached read-only checkout. Bij
-`REPOSITORY_WORK` krijgt de agent geen Git-publicatiecredential. De worker controleert de worktree,
-maakt de commit, pusht de vaste jobbranch en opent het pull request.
+Bij een bestaand `repositorySnapshot` verwijdert de worker de Gitremote na een detached checkout.
+Bij een v2-`repositoryCheckout` maakt de worker een verse clone van exact de bestaande remote
+branch. De `.git`-directory is genest read-only gemount, `GIT_OPTIONAL_LOCKS=0` houdt read-only
+inspectie bruikbaar en de agent krijgt geen Git-publicatiecredential. De worker controleert na de
+agent branch, HEAD, refs en relevante configuratie. Alleen na deze postconditie en de bestaande
+outputcontroles maakt hij zo nodig één commit en pusht hij zonder force naar dezelfde branch.
+Agent Runtime maakt in v2 geen branch of pull request.
 
 ## Betrouwbaarheid
 
@@ -125,6 +129,11 @@ maakt de commit, pusht de vaste jobbranch en opent het pull request.
 - Na een verlopen herstelvenster gebruikt de server begrensde exponentiële retryback-off.
 - Resultaten, artifacts, transcripten en voortgang worden alleen voor de actuele gefencete attempt
   geaccepteerd.
+- Voor een muterende repositoryjob bewaart de server vóór de push een duurzame, gefencete
+  publicatie-intentie met het gevalideerde AI-resultaat en de bedoelde commit. Herstel verifieert
+  de remote branch en finaliseert een al gepushte commit zonder de agent opnieuw uit te voeren.
+- Een non-fast-forward push wordt `BRANCH_CHANGED`; er wordt nooit geforceerd of automatisch een
+  andere branch gekozen.
 - De attemptdeadline wordt door server en worker onafhankelijk afgedwongen en nooit verlengd.
 - Events en transcriptdelen zijn append-only. Een geslaagd resultaat en zijn artifacts zijn
   onveranderlijk.
@@ -140,7 +149,8 @@ en standaardlimieten van 2 MB per bestand, 10 MB per job en tien bestanden. Outp
 directe reguliere bestanden met maximaal 5 MB per bestand, 25 MB per job en 25 bestanden. Symlinks,
 apparaten, padtraversal en bekende projectcredentialwaarden worden geweigerd.
 
-De managementlijsten bevatten alleen prompt-/outputpreviews, aantallen en bestandsmetadata.
+De managementlijsten bevatten alleen prompt-/outputpreviews, aantallen, bestandsmetadata en
+repositoryalias/branch/SHA/publicatiestatus zonder remote-URL.
 Attachment- en artifactbytes worden pas via een afzonderlijke geauthenticeerde route geladen.
 
 ## Database en herstel

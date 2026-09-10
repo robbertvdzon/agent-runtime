@@ -109,6 +109,10 @@ void main() {
                 'completedAt': '2026-09-10T05:32:20Z',
                 'durationMillis': 125000,
                 'costAvailable': false,
+                'repositoryAlias': 'product-factory',
+                'repositoryBranch': 'software-factory/SF-123',
+                'repositoryPublicationMode': 'COMMIT_AND_PUSH',
+                'repositoryPublicationStatus': 'PUSHED',
               },
             ],
           ),
@@ -124,6 +128,9 @@ void main() {
     expect(find.textContaining('Afgerond:'), findsOneWidget);
     expect(find.text('Looptijd: 2m 5s'), findsOneWidget);
     expect(find.text('Kosten: Niet beschikbaar'), findsOneWidget);
+    expect(find.text('Repository: product-factory'), findsOneWidget);
+    expect(find.text('Branch: software-factory/SF-123'), findsOneWidget);
+    expect(find.text('Publicatie: PUSHED'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

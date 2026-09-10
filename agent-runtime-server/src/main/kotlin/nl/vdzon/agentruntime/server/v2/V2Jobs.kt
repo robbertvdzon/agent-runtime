@@ -19,7 +19,13 @@ import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.UUID
 
-data class StoredV2Job(val view: JobView, val request: CreateJobRequest, val result: JsonNode?, val cancelRequested: Boolean)
+data class StoredV2Job(
+    val view: JobView,
+    val request: CreateJobRequest,
+    val result: JsonNode?,
+    val repositoryResult: RepositoryResult?,
+    val cancelRequested: Boolean,
+)
 data class StoredV2Attempt(
     val view: AttemptView, val workerId: String, val workerBootId: String, val fencingTokenHash: String,
     val leaseUntil: Instant, val attemptDeadline: Instant,
@@ -90,22 +96,22 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
         addEvent(jobId,attemptId,EventType.PROGRESS_UPDATED,phase,message,percent=percent)
     }
 
-    fun complete(jobId:String,attemptId:String,result:JsonNode,quality:UsageQuality) {
+    fun complete(jobId:String,attemptId:String,result:JsonNode,repositoryResult:RepositoryResult?,quality:UsageQuality) {
         val now=Instant.now()
         jdbc.update("UPDATE runtime_v2_attempt SET status='SUCCEEDED',usage_quality=?,completed_at=? WHERE id=? AND status='RUNNING'",quality.name,utc(now),attemptId)
-        jdbc.update("UPDATE runtime_v2_job SET status='SUCCEEDED',phase='COMPLETED',progress_percent=100,result_json=?,completed_at=?,updated_at=? WHERE id=? AND status='RUNNING'",result.toString(),utc(now),utc(now),jobId)
+        jdbc.update("UPDATE runtime_v2_job SET status='SUCCEEDED',phase='COMPLETED',progress_percent=100,result_json=?,repository_result_json=?,completed_at=?,updated_at=? WHERE id=? AND status='RUNNING'",result.toString(),repositoryResult?.let(mapper::writeValueAsString),utc(now),utc(now),jobId)
         addEvent(jobId,attemptId,EventType.ATTEMPT_FINISHED,"COMPLETED","Attempt succeeded.",status=JobStatus.SUCCEEDED,percent=100)
         addEvent(jobId,attemptId,EventType.JOB_FINISHED,"COMPLETED","Job completed successfully.",status=JobStatus.SUCCEEDED,percent=100)
     }
 
-    fun completeMock(jobId:String,result:JsonNode) {
+    fun completeMock(jobId:String,result:JsonNode,repositoryResult:RepositoryResult?=null) {
         val now=Instant.now()
-        jdbc.update("UPDATE runtime_v2_job SET status='SUCCEEDED',phase='COMPLETED',progress_percent=100,result_json=?,completed_at=?,updated_at=? WHERE id=? AND status IN ('QUEUED','WAITING_FOR_WORKER')",result.toString(),utc(now),utc(now),jobId)
+        jdbc.update("UPDATE runtime_v2_job SET status='SUCCEEDED',phase='COMPLETED',progress_percent=100,result_json=?,repository_result_json=?,completed_at=?,updated_at=? WHERE id=? AND status IN ('QUEUED','WAITING_FOR_WORKER')",result.toString(),repositoryResult?.let(mapper::writeValueAsString),utc(now),utc(now),jobId)
         addEvent(jobId,null,EventType.JOB_FINISHED,"COMPLETED","Mock job completed.",status=JobStatus.SUCCEEDED,percent=100)
     }
 
-    fun failAttempt(job:StoredV2Job,attemptId:String,code:String,message:String,retryable:Boolean) {
-        val now=Instant.now(); val mayRetry=retryable && job.view.attemptCount < job.view.maxAttempts
+    fun failAttempt(job:StoredV2Job,attemptId:String,code:String,message:String,retryable:Boolean,forceRetry:Boolean=false) {
+        val now=Instant.now(); val mayRetry=retryable && (job.view.attemptCount < job.view.maxAttempts || forceRetry)
         if(code=="CANCELLED"||job.cancelRequested){
             jdbc.update("UPDATE runtime_v2_attempt SET status='CANCELLED',error_code='CANCELLED',completed_at=? WHERE id=? AND status='RUNNING'",utc(now),attemptId)
             jdbc.update("UPDATE runtime_v2_job SET status='CANCELLED',phase='CANCELLED',error_code=NULL,error_message=NULL,completed_at=?,updated_at=? WHERE id=?",utc(now),utc(now),job.view.id)
@@ -151,8 +157,15 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
     fun requestContentDelete(jobId:String):Instant { val now=Instant.now(); jdbc.update("UPDATE runtime_v2_job SET content_delete_requested_at=? WHERE id=?",utc(now),jobId); return now }
 
     private fun rowMapper() = org.springframework.jdbc.core.RowMapper<StoredV2Job> { rs,_ ->
-        val request=mapper.readValue(rs.getString("request_json"),CreateJobRequest::class.java)
-        StoredV2Job(JobView(rs.getString("id"),rs.getString("tenant_id"),rs.getString("idempotency_key"),JobKind.valueOf(rs.getString("job_kind")),TaskType.valueOf(rs.getString("task_type")),ExecutionSelection(rs.getString("vendor_id"),rs.getString("model"),ExecutionMode.valueOf(rs.getString("execution_mode"))),JobStatus.valueOf(rs.getString("status")),rs.getString("phase"),rs.getInt("attempt_count"),rs.getInt("max_attempts"),rs.getObject("progress_percent") as? Int,rs.getString("progress_message"),rs.getString("error_code"),rs.getString("error_message"),instant(rs.getObject("created_at")),instant(rs.getObject("updated_at")),rs.getObject("completed_at")?.let(::instant)),request,rs.getString("result_json")?.let(mapper::readTree),rs.getBoolean("cancel_requested"))
+        val requestTree=mapper.readTree(rs.getString("request_json")).also { if(it.isObject)(it as com.fasterxml.jackson.databind.node.ObjectNode).remove("repositoryRequest") }
+        val request=mapper.treeToValue(requestTree,CreateJobRequest::class.java)
+        StoredV2Job(
+            JobView(rs.getString("id"),rs.getString("tenant_id"),rs.getString("idempotency_key"),JobKind.valueOf(rs.getString("job_kind")),TaskType.valueOf(rs.getString("task_type")),ExecutionSelection(rs.getString("vendor_id"),rs.getString("model"),ExecutionMode.valueOf(rs.getString("execution_mode"))),JobStatus.valueOf(rs.getString("status")),rs.getString("phase"),rs.getInt("attempt_count"),rs.getInt("max_attempts"),rs.getObject("progress_percent") as? Int,rs.getString("progress_message"),rs.getString("error_code"),rs.getString("error_message"),instant(rs.getObject("created_at")),instant(rs.getObject("updated_at")),rs.getObject("completed_at")?.let(::instant)),
+            request,
+            rs.getString("result_json")?.let(mapper::readTree),
+            rs.getString("repository_result_json")?.let { mapper.readValue(it,RepositoryResult::class.java) },
+            rs.getBoolean("cancel_requested"),
+        )
     }
     private fun attemptRowMapper()=org.springframework.jdbc.core.RowMapper<StoredV2Attempt>{rs,_->
         val quality=UsageQuality.valueOf(rs.getString("usage_quality")); val view=AttemptView(rs.getString("id"),rs.getString("job_id"),rs.getInt("attempt_number"),AttemptReason.valueOf(rs.getString("reason")),AttemptStatus.valueOf(rs.getString("status")),ExecutionSelection(rs.getString("vendor_id"),rs.getString("model"),ExecutionMode.valueOf(rs.getString("execution_mode"))),rs.getString("provider_request_id"),quality,JobUsageSummary(rs.getInt("attempt_number"),quality),rs.getString("error_code"),instant(rs.getObject("started_at")),rs.getObject("completed_at")?.let(::instant))
@@ -172,9 +185,7 @@ class V2JobService(private val properties:RuntimeProperties,private val jobs:V2J
         validateSelection(tenantId,request)
         validator.validateSchema(request.output.resultSchema)
         if(request.taskType in setOf(TaskType.STRUCTURED_GENERATION,TaskType.REPOSITORY_AGENT) && request.output.resultSchema==null) throw ApiException("RESULT_SCHEMA_REQUIRED","Structured and repository jobs require resultSchema.")
-        if(request.jobKind==JobKind.REPOSITORY_WORK && request.repositoryRequest==null) throw ApiException("INVALID_REPOSITORY_REQUEST","repositoryRequest is required for repository work.")
-        if(request.jobKind==JobKind.APPLICATION_WORK && request.repositoryRequest!=null) throw ApiException("INVALID_REPOSITORY_REQUEST","repositoryRequest is only valid for repository work.")
-        if((request.taskType==TaskType.REPOSITORY_AGENT)!=(request.jobKind==JobKind.REPOSITORY_WORK)) throw ApiException("INVALID_TASK_TYPE","REPOSITORY_AGENT and REPOSITORY_WORK must be selected together.")
+        validateRepositoryRequest(tenantId, request)
         val prefixes=properties.allowedEnvironmentPrefixes(tenantId)
         request.environmentKeys.forEach { key -> if(key.substringBefore("__") !in prefixes) throw ApiException("ENVIRONMENT_KEY_NOT_ALLOWED","Environment key $key is outside the tenant policy.") }
         if(request.output.artifacts.map{it.name}.distinct().size!=request.output.artifacts.size) throw ApiException("DUPLICATE_OUTPUT_NAME","Output artifact names must be unique.")
@@ -217,10 +228,64 @@ class V2JobService(private val properties:RuntimeProperties,private val jobs:V2J
         if(outputs.size!=outputIds.size) errors+=ValidationError("$.outputObjectIds","ownership","One or more output objects are not ready for this job.")
         return errors.take(25)
     }
+
+    fun validateRepositoryResult(job: StoredV2Job, value: RepositoryResult?): List<ValidationError> {
+        val checkout = job.request.repositoryCheckout
+        if (checkout == null) return if (value == null) emptyList() else listOf(
+            ValidationError("$.repositoryResult", "forbidden", "Repository metadata is forbidden without repositoryCheckout."),
+        )
+        if (value == null) return listOf(ValidationError("$.repositoryResult", "required", "Repository metadata is required."))
+        val errors = mutableListOf<ValidationError>()
+        if (value.alias != checkout.alias) errors += ValidationError("$.repositoryResult.alias", "const", "Alias differs from the request.")
+        if (value.branch != checkout.branch) errors += ValidationError("$.repositoryResult.branch", "const", "Branch differs from the request.")
+        when (checkout.publicationMode) {
+            RepositoryPublicationMode.NONE -> {
+                if (value.publicationStatus != RepositoryPublicationStatus.NONE) errors += ValidationError("$.repositoryResult.publicationStatus", "const", "Read-only checkout requires NONE.")
+                if (value.commitSha != null) errors += ValidationError("$.repositoryResult.commitSha", "forbidden", "Read-only checkout has no published commit.")
+            }
+            RepositoryPublicationMode.COMMIT_AND_PUSH -> when (value.publicationStatus) {
+                RepositoryPublicationStatus.NONE -> errors += ValidationError("$.repositoryResult.publicationStatus", "enum", "Mutating checkout requires NO_CHANGES or PUSHED.")
+                RepositoryPublicationStatus.NO_CHANGES -> if (value.commitSha != null) errors += ValidationError("$.repositoryResult.commitSha", "forbidden", "NO_CHANGES has no new commit.")
+                RepositoryPublicationStatus.PUSHED -> if (value.commitSha == null) errors += ValidationError("$.repositoryResult.commitSha", "required", "PUSHED requires commitSha.")
+            }
+        }
+        return errors
+    }
+
+    private fun validateRepositoryRequest(tenantId: String, request: CreateJobRequest) {
+        val checkout = request.repositoryCheckout
+        if (checkout != null && request.repositorySnapshot != null) throw ApiException("INVALID_REPOSITORY_CHECKOUT", "repositorySnapshot and repositoryCheckout are mutually exclusive.")
+        if (checkout != null) {
+            if (tenantId != "software-factory") throw ApiException("REPOSITORY_ALIAS_NOT_ALLOWED", "Only software-factory may request repositoryCheckout.", HttpStatus.FORBIDDEN)
+            if (checkout.alias !in properties.allowedRepositoryAliases(tenantId)) throw ApiException("REPOSITORY_ALIAS_NOT_ALLOWED", "Repository alias is outside the tenant policy.", HttpStatus.FORBIDDEN)
+            if (!validBranch(checkout.branch)) throw ApiException("INVALID_REPOSITORY_CHECKOUT", "Branch name is not a valid Git branch.")
+        }
+        when (request.jobKind) {
+            JobKind.REPOSITORY_WORK -> {
+                if (request.taskType != TaskType.REPOSITORY_AGENT || checkout == null || checkout.publicationMode != RepositoryPublicationMode.COMMIT_AND_PUSH) {
+                    throw ApiException("INVALID_REPOSITORY_CHECKOUT", "REPOSITORY_WORK requires REPOSITORY_AGENT and COMMIT_AND_PUSH checkout.")
+                }
+            }
+            JobKind.APPLICATION_WORK -> {
+                if (checkout != null && (request.taskType != TaskType.REPOSITORY_AGENT || checkout.publicationMode != RepositoryPublicationMode.NONE)) {
+                    throw ApiException("INVALID_REPOSITORY_CHECKOUT", "APPLICATION_WORK checkout requires REPOSITORY_AGENT and publication mode NONE.")
+                }
+                if (request.taskType == TaskType.REPOSITORY_AGENT && checkout == null) {
+                    throw ApiException("INVALID_REPOSITORY_CHECKOUT", "REPOSITORY_AGENT application work requires a read-only checkout.")
+                }
+            }
+        }
+    }
+
+    private fun validBranch(branch: String): Boolean {
+        if (branch.isBlank() || branch.length > 240 || branch.startsWith('-') || branch.startsWith('/') || branch.endsWith('/') || branch.endsWith('.') || branch.contains("..") || branch.contains("@{") || branch.contains("//")) return false
+        if (branch.any { it.code < 32 || it.code == 127 || it in " ~^:?*[\\" }) return false
+        return branch.split('/').all { part -> part.isNotBlank() && part !in setOf(".", "..") && !part.startsWith('.') && !part.endsWith(".lock") }
+    }
 }
 
 @Service
-class V2AttemptRecovery(private val properties:RuntimeProperties,private val jobs:V2JobStore,private val uploads:V2UploadService) {
+class V2AttemptRecovery(private val properties:RuntimeProperties,private val jobs:V2JobStore,private val uploads:V2UploadService,private val publications:V2RepositoryPublicationStore) {
     @Scheduled(fixedDelay=30_000)
-    fun recover() { jobs.expiredAttempts(Instant.now().minusSeconds(properties.recoverySeconds)).forEach{attempt->jobs.find(attempt.view.jobId)?.let{job->uploads.discardAttemptOutputs(job.view.id,attempt.view.id);jobs.failAttempt(job,attempt.view.id,"WORKER_LEASE_EXPIRED","Worker stopped heartbeating before the execution completed.",true);jobs.markAttemptAbandoned(attempt.view.id)}} }
+    fun recover() { jobs.expiredAttempts(Instant.now().minusSeconds(properties.recoverySeconds)).forEach{attempt->jobs.find(attempt.view.jobId)?.let{job->val hasPublication=publications.find(job.view.id)!=null;if(!hasPublication)uploads.discardAttemptOutputs(job.view.id,attempt.view.id);jobs.failAttempt(job,attempt.view.id,"WORKER_LEASE_EXPIRED","Worker stopped heartbeating before the execution completed.",true,hasPublication);jobs.markAttemptAbandoned(attempt.view.id)}} }
 }

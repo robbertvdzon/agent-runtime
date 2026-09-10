@@ -40,6 +40,7 @@ data class RuntimeProperties(
     var pvddProviders: String = "CODEX",
     var productFactoryModels: String = "*",
     var softwareFactoryModels: String = "*",
+    var softwareFactoryRepositoryAliases: String = "software-factory,agent-runtime,test-repository,pvdd,hkh,hkh-autopilot,product-factory,personal-news-feed,robberts-assistent",
     var hkhAutopilotModels: String = "*",
     var hkhModels: String = "*",
     var pvddModels: String = "gpt-5.6-sol",
@@ -144,6 +145,10 @@ data class RuntimeProperties(
         }.split(',').map(String::trim).filter(String::isNotBlank).toSet()
         return "*" in configured || model in configured
     }
+
+    fun allowedRepositoryAliases(tenantId: String): Set<String> = if (tenantId == "software-factory") {
+        softwareFactoryRepositoryAliases.split(',').map(String::trim).filter(String::isNotBlank).toSet()
+    } else emptySet()
 
     fun consumerTokens(): Map<String, String> = linkedMapOf(
         "product-factory" to productFactoryToken,

@@ -7,6 +7,7 @@ import nl.vdzon.agentruntime.contracts.v2.CostValue
 import nl.vdzon.agentruntime.contracts.v2.JobEventView
 import nl.vdzon.agentruntime.contracts.v2.JobStatus
 import nl.vdzon.agentruntime.contracts.v2.JobUsageSummary
+import nl.vdzon.agentruntime.contracts.v2.RepositoryResult
 import nl.vdzon.agentruntime.contracts.v2.UsageQuality
 import nl.vdzon.agentruntime.server.config.ApiException
 import nl.vdzon.agentruntime.server.config.RuntimeProperties
@@ -44,6 +45,12 @@ data class V2ManagementJobItem(
     val provider: String,
     val model: String,
     val executionMode: String,
+    val repositoryAlias: String?,
+    val repositoryBranch: String?,
+    val repositoryPublicationMode: String?,
+    val checkoutCommitSha: String?,
+    val publishedCommitSha: String?,
+    val repositoryPublicationStatus: String?,
     val status: String,
     val phase: String,
     val workerId: String?,
@@ -76,6 +83,7 @@ data class V2ManagementObject(
 data class V2ManagementResult(
     val jobId: String,
     val result: JsonNode,
+    val repositoryResult: RepositoryResult?,
     val artifacts: List<V2ManagementObject>,
     val usageSummary: JobUsageSummary,
     val completedAt: Instant,
@@ -119,6 +127,7 @@ data class V2ManagementWorkerView(
     val providers: Set<String>,
     val models: Set<String>,
     val availableEnvironmentKeys: Set<String>,
+    val availableRepositoryAliases: Set<String>,
     val maxConcurrency: Int,
     val lastHeartbeatAt: Instant,
     val executors: Set<nl.vdzon.agentruntime.contracts.v2.ExecutorCapability>,
@@ -206,7 +215,7 @@ class V2AdminController(
         val usageSummary = usage.jobSummary(id)
         val completedAt = job.view.completedAt
         val result = if (job.view.status == JobStatus.SUCCEEDED && job.result != null && completedAt != null) {
-            V2ManagementResult(id, job.result, outputObjects, usageSummary, completedAt)
+            V2ManagementResult(id, job.result, job.repositoryResult, outputObjects, usageSummary, completedAt)
         } else null
         val attempts = jobs.attempts(id).map { attempt ->
             val summary = usage.attemptSummary(attempt.view.id)
@@ -307,6 +316,8 @@ class V2AdminController(
         return V2ManagementJobItem(
             job.view.id, technicalName(job), job.view.tenantId, job.view.jobKind.name, job.view.taskType.name,
             job.view.execution.vendorId, job.view.execution.model, job.view.execution.mode.name,
+            job.request.repositoryCheckout?.alias, job.request.repositoryCheckout?.branch, job.request.repositoryCheckout?.publicationMode?.name,
+            job.repositoryResult?.checkoutCommitSha, job.repositoryResult?.commitSha, job.repositoryResult?.publicationStatus?.name,
             job.view.status.name, job.view.phase, active?.workerId, job.view.progressPercent, job.view.progressMessage,
             waitingReason, preview(job.request.input.instruction), job.result?.toString()?.let(::preview),
             objects.inputObjects(job.view.id).size, objects.outputObjects(job.view.id).size,
@@ -346,7 +357,7 @@ class V2AdminController(
             record.view.workerId, record.view.bootId, status,
             record.view.executors.flatMap { it.taskTypes }.map { it.name }.toSet(),
             record.view.executors.map { it.vendorId }.toSet(), record.view.executors.map { it.model }.toSet(),
-            record.environmentKeys, record.view.maxConcurrency, last, record.view.executors, record.versions,
+            record.environmentKeys, record.repositoryAliases, record.view.maxConcurrency, last, record.view.executors, record.versions,
         )
     }
 
@@ -358,7 +369,8 @@ class V2AdminController(
                 worker.view.executors.any { executor ->
                     executor.vendorId == job.view.execution.vendorId && executor.model == job.view.execution.model &&
                         executor.mode == job.view.execution.mode && job.view.taskType in executor.taskTypes
-                } && job.request.environmentKeys.all(worker.environmentKeys::contains)
+                } && job.request.environmentKeys.all(worker.environmentKeys::contains) &&
+                job.request.repositoryCheckout?.alias?.let(worker.repositoryAliases::contains) != false
         }
         return if (matching) "klaar om te claimen" else "wacht op geschikte worker"
     }

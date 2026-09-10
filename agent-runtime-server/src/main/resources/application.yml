@@ -65,6 +65,7 @@ agent-runtime:
   pvdd-providers: ${AR_PVDD_PROVIDERS:CODEX}
   product-factory-models: ${AR_PRODUCT_FACTORY_MODELS:*}
   software-factory-models: ${AR_SOFTWARE_FACTORY_MODELS:*}
+  software-factory-repository-aliases: ${AR_SOFTWARE_FACTORY_REPOSITORY_ALIASES:software-factory,agent-runtime,test-repository,pvdd,hkh,hkh-autopilot,product-factory,personal-news-feed,robberts-assistent}
   hkh-autopilot-models: ${AR_HKH_AUTOPILOT_MODELS:*}
   hkh-models: ${AR_HKH_MODELS:*}
   pvdd-models: ${AR_PVDD_MODELS:gpt-5.6-sol}

@@ -74,29 +74,52 @@ pas definitief nadat alle artifacts zijn geüpload.
 
 ## `REPOSITORY_WORK`
 
-`REPOSITORY_WORK` bevat een `repositoryRequest`:
+De onderstaande beschrijving geldt voor het nieuwe `/v2`-contract. Het bestaande `/v1`-contract
+blijft voor oude consumers ongewijzigd.
+
+`REPOSITORY_WORK` bevat een `repositoryCheckout` met een geregistreerde alias en een remote branch
+die de consumer al heeft aangemaakt:
 
 ```json
 {
-  "repositoryRequest": {
+  "repositoryCheckout": {
     "alias": "agent-runtime",
-    "baseBranch": "main",
-    "branchHint": "monitor-verbetering",
-    "publish": true
+    "branch": "software-factory/SF-123",
+    "publicationMode": "COMMIT_AND_PUSH"
   }
 }
 ```
 
-De Software Factory-policy accepteert de geregistreerde aliases `software-factory`,
-`agent-runtime` en `test-repository`. De worker vertaalt een alias via een lokale
+De Software Factory-policy accepteert alleen een server-side allowlist van geregistreerde aliases.
+De worker vertaalt een alias via een lokale
 `AR_REPOSITORY_<ALIAS>_URL`-instelling naar een repository-URL. De agent wijzigt alleen de worktree
-onder `/work`; hij krijgt geen Git-publicatiecredential en commit of pusht niet zelf.
+onder `/work`; `.git` is genest read-only gemount en de agent krijgt geen
+Git-publicatiecredential. Checkout, commit, push, PR en merge worden uitsluitend buiten de
+agentcontainer afgehandeld.
 
-Na de agentuitvoering controleert de worker paden, symlinks, geheime bestandsnamen en bestanden
-groter dan 20 MB. Vervolgens maakt de worker de commit. Bij `publish: true` pusht hij een branch met
-naam `agent-runtime/<job-id>` en probeert hij een pull request naar `baseBranch` te openen. Het
-resultaat bevat branch, commit-SHA, diffstatistiek, publicatiestatus en, wanneer aangemaakt, de
-pull-request-URL.
+Iedere attempt clonet exact de bestaande remote branch opnieuw. Na de agentuitvoering controleert
+de worker Gitmetadata, paden, symlinks, geheime bestandsnamen en bestanden groter dan 20 MB. Bij
+een wijziging maakt de worker één commit met een `Agent-Runtime-Job`-trailer en pusht hij normaal,
+zonder force, naar exact dezelfde branch. Bij een gelijktijdige remotewijziging volgt
+`BRANCH_CHANGED`. Een lege diff is een geldig `NO_CHANGES`-resultaat. Agent Runtime maakt nooit de
+storybranch of een pull request; Software Factory is daarvan eigenaar.
+
+Een read-only repositoryagent gebruikt `APPLICATION_WORK`, `taskType=REPOSITORY_AGENT` en
+`publicationMode=NONE`. De tijdelijke worktree blijft bruikbaar voor builds en tests, maar wordt
+na de attempt weggegooid en nooit gepubliceerd. De worker registreert zijn beschikbare aliases;
+claimselectie vereist naast provider, model, mode, tasktype en environmentkeys ook de gevraagde
+alias. `GET /v2/repository-aliases` geeft de toegestane namen en actuele beschikbaarheid terug,
+nooit URL's of credentials.
+
+Het verplichte `/job/output/result.json` blijft het door de consumer gespecificeerde en
+gevalideerde AI-resultaat. Gitbewijs staat afzonderlijk in `repositoryResult`, met alias, branch,
+opgehaalde commit, publicatiestatus, eventuele workercommit en diffstatistiek. Voor een push legt
+de server eerst duurzaam de gevalideerde output en bedoelde commit vast. Na een onzekere response
+controleert de worker de remote commit en rondt dezelfde intentie af of begint veilig opnieuw;
+een geslaagde push kan daardoor niet stilzwijgend een tweede commit opleveren.
+Wanneer de normale technische-attemptlimiet al is bereikt, mag de server nog een
+reconciliatie-attempt plannen. Die voert geen nieuwe AI-run uit: hij bevestigt uitsluitend een
+aantoonbaar gepushte commit of eindigt wanneer de commit aantoonbaar niet remote staat.
 
 ## Projectcredentials
 
@@ -136,6 +159,10 @@ De v2-uitvoeringscatalogus staat onder
 `GET /v2/execution-options?taskType=STRUCTURED_GENERATION`. Iedere entry is één exacte
 `vendorId`/`model`/`mode`-combinatie; de catalogus is tenantgefilterd en is nooit een
 fallbackmechanisme.
+
+De v2-repositorycatalogus staat onder `GET /v2/repository-aliases`. De serverallowlist bepaalt wat
+de Software Factory mag aanvragen; de workeradvertentie bepaalt welke online worker de alias
+daadwerkelijk kan uitvoeren. Beide controles moeten slagen.
 
 Per attempt maakt de worker een tijdelijke `/job/secrets/secrets.env` met alleen de geselecteerde
 waarden. Het volledige `project-credentials.env` wordt niet gemount. Runtime-, worker- en
@@ -217,7 +244,8 @@ gefencet. De server registreert `EXECUTION_TIMEOUT` en gebruikt dezelfde technis
 
 Een job doorloopt `QUEUED`, `WAITING_FOR_WORKER`, `RUNNING` en een terminale status `SUCCEEDED`,
 `FAILED` of `CANCELLED`. De consumenten-API levert actuele status, append-only events en na succes
-een onveranderlijk JSON-resultaat met artifactmetadata.
+een onveranderlijk JSON-resultaat met artifactmetadata en, bij branchjobs, afzonderlijke
+`repositoryResult`-metadata.
 
 De worker publiceert zichtbare prompt-, correctie- en provideruitvoer als append-only
 transcriptdelen. De worker en server redigeren bekende bearer- en key/valuepatronen. Verborgen

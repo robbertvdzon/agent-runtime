@@ -1,6 +1,6 @@
 # Agent Runtime — prerequisite voor Software Factory v2
 
-Status: implementatieplan, nog niet uitgevoerd
+Status: uitgevoerd in Agent Runtime op 2026-09-10
 
 Peildatum: 2026-09-10
 
@@ -13,7 +13,7 @@ v2 de Runtime kan gebruiken voor werk aan Git-repositories. Het document is zelf
 Een implementerende agent hoeft de voorafgaande ontwerpgesprekken niet te kennen.
 
 De bredere Software Factory-migratie staat in
-`../softwarefactory/docs/software-factory-v2/stappenplan.md`. Dat document is aanvullende context,
+`../../softwarefactory/docs/software-factory-v2/stappenplan.md`. Dat document is aanvullende context,
 maar de eisen aan Agent Runtime staan volledig in dit document.
 
 ## Besloten eindtoestand
@@ -74,9 +74,9 @@ netwerkschijf, gedeelde checkout, permanente worktree of checkout in Software Fa
 Agent Runtime kent geen story-, approval-, PR-, merge-, preview- of deploysemantiek. Software
 Factory kent geen providercredentials, Dockeruitvoering of lokale repositoryworkspace.
 
-## Huidige afwijkingen
+## Voor implementatie geconstateerde afwijkingen
 
-De huidige v2-implementatie voldoet nog niet aan dit protocol:
+De oorspronkelijke v2-implementatie voldeed nog niet aan dit protocol:
 
 - `RepositoryRequest` bevat `baseBranch`, `branchHint` en `publish`;
 - `V2Worker` checkt de base branch uit en maakt altijd `agent-runtime/<job-id>`;
@@ -94,7 +94,7 @@ De huidige v2-implementatie voldoet nog niet aan dit protocol:
 - een crash nadat een push is gelukt maar voordat het resultaat is bevestigd, kan tot een
   onduidelijke retry leiden.
 
-De relevante huidige code staat hoofdzakelijk in:
+De relevante code staat hoofdzakelijk in:
 
 - `agent-runtime-contracts/src/main/kotlin/nl/vdzon/agentruntime/contracts/v2/V2Contracts.kt`;
 - `agent-runtime-contracts/src/main/resources/openapi/agent-runtime-v2.yaml`;

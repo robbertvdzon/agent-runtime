@@ -9,8 +9,8 @@ De runtime ondersteunt:
 
 - `APPLICATION_WORK`: een complete prompt uitvoeren en een betrouwbaar JSON-resultaat plus
   artifacts teruggeven;
-- `REPOSITORY_WORK`: een geregistreerde Git-repository aanpassen, controleren, committen, pushen
-  en een pull request openen;
+- `REPOSITORY_WORK`: een bestaande, door de consumer aangemaakte branch van een geregistreerde
+  Git-repository aanpassen, controleren, door de worker committen en normaal pushen;
 - `MOCKED`: dezelfde job- en resultaatketen server-side uitvoeren in lokale en
   acceptatieomgevingen.
 
@@ -226,9 +226,18 @@ reasoning-samenvattingen zijn beschikbaar via `GET /v2/jobs/{jobId}/event-stream
 chain-of-thought is geen onderdeel van het contract. Usage en kosten staan per job in het resultaat
 en geaggregeerd onder `/v2/usage/summary` en `/v2/management/usage/summary`.
 Consumers lezen exacte beschikbare combinaties via `GET /v2/execution-options` en uitsluitend
-toegestane v2-workerkeynamen via `GET /v2/environment-keys`. Buiten productie kan een afzonderlijk
+toegestane v2-workerkeynamen via `GET /v2/environment-keys`. Software Factory leest de
+toegestane repositoryaliases en actuele workerbeschikbaarheid via `GET /v2/repository-aliases`;
+deze route geeft nooit repository-URL's of credentials terug. Buiten productie kan een afzonderlijk
 `AR_TEST_CONTROL_TOKEN`, zonder consumer-, worker- of adminrechten, gerichte fixtures onder
 `/v2/test-control/mocks` beheren. Productie bevat dit secret en deze API niet.
+
+Een v2-repositoryjob bevat `repositoryCheckout.alias`, de reeds bestaande remote `branch` en
+`publicationMode`. Software Factory maakt de storybranch en de ene pull request; Agent Runtime
+maakt voor v2 geen branch of PR. Iedere attempt gebruikt een verse clone. De agent ziet `.git`
+read-only en alleen de worker kan na veiligheidscontroles één commit naar exact dezelfde branch
+pushen. Het gevalideerde AI-resultaat blijft in `result` staan; alias, begin-SHA, eventuele
+commit-SHA en `NONE`, `NO_CHANGES` of `PUSHED` staan afzonderlijk in `repositoryResult`.
 
 Belangrijkste consumentenroutes:
 

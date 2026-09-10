@@ -28,6 +28,9 @@ enum class CostKind { DIRECT, CALCULATED, ALLOCATED }
 enum class CostStatus { ESTIMATED, FINAL, RECONCILED }
 enum class AllocationMethod { NONE, WEIGHTED_TOKENS, REPORTED_QUOTA_UNITS }
 enum class SubscriptionStatus { OPEN, ALLOCATED, FINAL }
+enum class RepositoryPublicationMode { NONE, COMMIT_AND_PUSH }
+enum class RepositoryPublicationStatus { NONE, NO_CHANGES, PUSHED }
+enum class RepositoryPublicationIntentStatus { PREPARED, PUSHED, FINALIZED }
 
 data class ExecutionSelection(
     @field:Pattern(regexp = "[a-z][a-z0-9-]{0,99}") val vendorId: String,
@@ -63,11 +66,19 @@ data class RepositorySnapshot(
     @field:Pattern(regexp = "[0-9a-fA-F]{40}") val commitSha: String,
 )
 
-data class RepositoryRequest(
-    @field:NotBlank @field:Size(max = 100) val alias: String,
-    @field:NotBlank @field:Size(max = 120) val baseBranch: String,
-    @field:Size(max = 120) val branchHint: String? = null,
-    val publish: Boolean = true,
+data class RepositoryCheckout(
+    @field:Pattern(regexp = "[a-z][a-z0-9-]{0,99}") val alias: String,
+    @field:NotBlank @field:Size(max = 240) val branch: String,
+    val publicationMode: RepositoryPublicationMode,
+)
+
+data class RepositoryResult(
+    @field:Pattern(regexp = "[a-z][a-z0-9-]{0,99}") val alias: String,
+    @field:NotBlank @field:Size(max = 240) val branch: String,
+    @field:Pattern(regexp = "[0-9a-f]{40}") val checkoutCommitSha: String,
+    val publicationStatus: RepositoryPublicationStatus,
+    @field:Pattern(regexp = "[0-9a-f]{40}") val commitSha: String? = null,
+    @field:Size(max = 20_000) val diffStat: String? = null,
 )
 
 data class CreateJobRequest(
@@ -78,7 +89,7 @@ data class CreateJobRequest(
     @field:Valid val input: JobInput,
     @field:Valid val output: OutputContract,
     @field:Valid val repositorySnapshot: RepositorySnapshot? = null,
-    @field:Valid val repositoryRequest: RepositoryRequest? = null,
+    @field:Valid val repositoryCheckout: RepositoryCheckout? = null,
     @field:Size(max = 50) val environmentKeys: List<@Pattern(regexp = "[A-Z][A-Z0-9_]*__[A-Z][A-Z0-9_]*") String> = emptyList(),
     @field:Min(30) @field:Max(86_400) val executionTimeoutSeconds: Int = 3_600,
 )
@@ -161,6 +172,7 @@ data class OutputObjectView(
 data class JobResultView(
     val jobId: String,
     val result: JsonNode,
+    val repositoryResult: RepositoryResult? = null,
     val artifacts: List<OutputObjectView>,
     val usageSummary: JobUsageSummary,
     val completedAt: Instant,
@@ -242,10 +254,18 @@ data class WorkerRegistrationRequest(
     @field:NotBlank val bootId: String,
     @field:Valid @field:NotEmpty @field:Size(max = 100) val executors: Set<ExecutorCapability>,
     @field:Size(max = 1_000) val availableEnvironmentKeys: Set<String> = emptySet(),
+    @field:Size(max = 200) val availableRepositoryAliases: Set<@Pattern(regexp = "[a-z][a-z0-9-]{0,99}") String> = emptySet(),
     @field:Min(1) @field:Max(32) val maxConcurrency: Int = 1,
     val versions: Map<String, String> = emptyMap(),
 )
-data class WorkerView(val workerId: String, val bootId: String, val executors: Set<ExecutorCapability>, val maxConcurrency: Int, val lastHeartbeatAt: Instant)
+data class WorkerView(
+    val workerId: String,
+    val bootId: String,
+    val executors: Set<ExecutorCapability>,
+    val availableRepositoryAliases: Set<String> = emptySet(),
+    val maxConcurrency: Int,
+    val lastHeartbeatAt: Instant,
+)
 data class ExecutionOptionView(
     val execution: ExecutionSelection,
     val taskTypes: Set<TaskType>,
@@ -260,6 +280,12 @@ data class EnvironmentKeyOptionView(
     val matchingOnlineWorkers: Int,
     val lastSeenAt: Instant,
 )
+data class RepositoryAliasOptionView(
+    val alias: String,
+    val available: Boolean,
+    val matchingOnlineWorkers: Int,
+    val lastSeenAt: Instant?,
+)
 
 data class CreateMockFixtureRequest(
     @field:NotBlank @field:Size(max = 100) val tenantId: String,
@@ -270,6 +296,7 @@ data class CreateMockFixtureRequest(
     @field:Size(max = 2_000) val errorMessage: String? = null,
     @field:Min(0) @field:Max(60_000) val delayMillis: Long = 0,
     @field:Size(max = 50) val outputArtifactNames: Set<@Pattern(regexp = "[a-z][a-z0-9-]{0,99}") String> = emptySet(),
+    @field:Valid val repositoryResult: RepositoryResult? = null,
 )
 data class MockFixtureView(
     val id: String,
@@ -281,6 +308,7 @@ data class MockFixtureView(
     val errorMessage: String?,
     val delayMillis: Long,
     val outputArtifactNames: Set<String>,
+    val repositoryResult: RepositoryResult?,
     val createdAt: Instant,
 )
 data class ClaimRequest(
@@ -295,6 +323,7 @@ data class ClaimedJob(
     val leaseUntil: Instant,
     val attemptDeadline: Instant,
     val request: CreateJobRequest,
+    val repositoryPublication: RepositoryPublicationIntentView? = null,
 )
 data class AttemptAuth(val attemptId: String, @field:NotBlank val fencingToken: String)
 data class HeartbeatResponse(val accepted: Boolean, val cancelRequested: Boolean, val fenced: Boolean, val leaseUntil: Instant?)
@@ -313,7 +342,37 @@ data class AppendLogRequest(
     @field:NotBlank @field:Size(max = 8_192) val text: String,
     val streamId: String? = null, val final: Boolean = true, val observedAt: Instant,
 )
-data class SubmitResultRequest(val fencingToken: String, val result: JsonNode, @field:Size(max = 50) val outputObjectIds: Set<String> = emptySet())
+data class SubmitResultRequest(
+    val fencingToken: String,
+    val result: JsonNode,
+    @field:Size(max = 50) val outputObjectIds: Set<String> = emptySet(),
+    @field:Valid val repositoryResult: RepositoryResult? = null,
+)
+data class PrepareRepositoryPublicationRequest(
+    val fencingToken: String,
+    val result: JsonNode,
+    @field:Size(max = 50) val outputObjectIds: Set<String> = emptySet(),
+    @field:Valid val repositoryResult: RepositoryResult,
+)
+data class ConfirmRepositoryPublicationRequest(
+    val fencingToken: String,
+    @field:Pattern(regexp = "[0-9a-f]{40}") val commitSha: String,
+)
+data class DiscardRepositoryPublicationRequest(
+    val fencingToken: String,
+    @field:Pattern(regexp = "[0-9a-f]{40}") val commitSha: String,
+)
+data class RepositoryPublicationIntentView(
+    val jobId: String,
+    val attemptId: String,
+    val alias: String,
+    val branch: String,
+    val checkoutCommitSha: String,
+    val intendedCommitSha: String,
+    val status: RepositoryPublicationIntentStatus,
+    val preparedAt: Instant,
+    val pushedAt: Instant? = null,
+)
 data class ValidationError(val path: String, val code: String, val message: String)
 data class OutputRejectedResponse(val code: String, val retryScheduled: Boolean, val validationErrors: List<ValidationError>)
 data class FailAttemptRequest(val fencingToken: String, val errorCode: String, val message: String, val retryable: Boolean)
