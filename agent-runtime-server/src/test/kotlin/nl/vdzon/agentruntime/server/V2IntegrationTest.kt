@@ -265,12 +265,82 @@ class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private va
         assertThat(result.path("repositoryResult").path("commitSha").asText()).isEqualTo("b".repeat(40))
     }
 
+    @Test
+    fun `repository verification is validated and direct green is visible`() {
+        val tooShort = verifiedRepositoryJob().copy(executionTimeoutSeconds = 599)
+        postJson("/v2/jobs", SOFTWARE, tooShort, 400)
+
+        val request = verifiedRepositoryJob()
+        postJson("/v2/test-control/mocks", TEST_CONTROL, CreateMockFixtureRequest("software-factory", request.idempotencyKey, result = mapper.readTree("""{"text":"green"}""")), 200)
+        val jobId = postJson("/v2/jobs", SOFTWARE, request, 202).path("id").asText()
+        val result = awaitResult(jobId, SOFTWARE)
+        assertThat(result.path("verificationResult").path("status").asText()).isEqualTo("PASSED")
+        assertThat(result.path("verificationResult").path("agentRounds").asInt()).isEqualTo(1)
+        assertThat(result.path("repositoryResult").path("publicationStatus").asText()).isEqualTo("PUSHED")
+        val item = getJson("/v2/management/jobs/$jobId", ADMIN).path("job")
+        assertThat(item.path("verificationStatus").asText()).isEqualTo("PASSED")
+        assertThat(item.path("verificationAgentRounds").asInt()).isEqualTo(1)
+    }
+
+    @Test
+    fun `mock verification can model repair no changes and permanent red atomically`() {
+        val repaired = verifiedRepositoryJob()
+        val repairedResult = VerificationResult(
+            VerificationStatus.PASSED, 1, 2,
+            listOf(VerificationCommandResult("verify", listOf("mvn", "verify"), VerificationCommandStatus.PASSED, 0, 25, "BUILD SUCCESS")),
+        )
+        postJson("/v2/test-control/mocks", TEST_CONTROL, CreateMockFixtureRequest("software-factory", repaired.idempotencyKey, result = mapper.readTree("""{"text":"repaired"}"""), verificationResult = repairedResult), 200)
+        val repairedId = postJson("/v2/jobs", SOFTWARE, repaired, 202).path("id").asText()
+        assertThat(awaitResult(repairedId, SOFTWARE).path("verificationResult").path("agentRounds").asInt()).isEqualTo(2)
+
+        val noChanges = verifiedRepositoryJob()
+        val checkout = requireNotNull(noChanges.repositoryCheckout)
+        val repositoryResult = RepositoryResult(checkout.alias, checkout.branch, "a".repeat(40), RepositoryPublicationStatus.NO_CHANGES)
+        postJson("/v2/test-control/mocks", TEST_CONTROL, CreateMockFixtureRequest("software-factory", noChanges.idempotencyKey, result = mapper.readTree("""{"text":"unchanged"}"""), repositoryResult = repositoryResult), 200)
+        val noChangesId = postJson("/v2/jobs", SOFTWARE, noChanges, 202).path("id").asText()
+        val noChangesResult = awaitResult(noChangesId, SOFTWARE)
+        assertThat(noChangesResult.hasNonNull("verificationResult")).isFalse()
+        assertThat(noChangesResult.path("repositoryResult").path("publicationStatus").asText()).isEqualTo("NO_CHANGES")
+
+        val red = verifiedRepositoryJob(maxRepairAttempts = 0)
+        val failedResult = VerificationResult(
+            VerificationStatus.FAILED, 1, 1,
+            listOf(VerificationCommandResult("verify", listOf("mvn", "verify"), VerificationCommandStatus.FAILED, 1, 40, "redacted failure")),
+        )
+        postJson("/v2/test-control/mocks", TEST_CONTROL, CreateMockFixtureRequest("software-factory", red.idempotencyKey, result = mapper.readTree("""{"text":"validated despite red tests"}"""), verificationResult = failedResult), 200)
+        val redId = postJson("/v2/jobs", SOFTWARE, red, 202).path("id").asText()
+        val terminal = awaitTerminal(redId, SOFTWARE)
+        assertThat(terminal.path("status").asText()).isEqualTo("FAILED")
+        assertThat(terminal.path("errorCode").asText()).isEqualTo("VERIFICATION_FAILED")
+        val redResult = getJson("/v2/jobs/$redId/result", SOFTWARE)
+        assertThat(redResult.path("result").path("text").asText()).isEqualTo("validated despite red tests")
+        assertThat(redResult.path("verificationResult").path("commands").first().path("outputTail").asText()).isEqualTo("redacted failure")
+        assertThat(redResult.hasNonNull("repositoryResult")).isFalse()
+        assertThat(getJson("/v2/jobs/$redId/attempts", SOFTWARE)).hasSize(1)
+    }
+
+    @Test
+    fun `configuration and timeout verification failures retain a readable result`() {
+        listOf(
+            VerificationResult(VerificationStatus.CONFIG_MISSING, null, 1) to "VERIFICATION_CONFIG_MISSING",
+            VerificationResult(VerificationStatus.CONFIG_INVALID, null, 1) to "VERIFICATION_CONFIG_INVALID",
+            VerificationResult(VerificationStatus.TIMEOUT, 1, 2) to "VERIFICATION_TIMEOUT",
+        ).forEach { (verification, expectedCode) ->
+            val request = verifiedRepositoryJob()
+            postJson("/v2/test-control/mocks", TEST_CONTROL, CreateMockFixtureRequest("software-factory", request.idempotencyKey, result = mapper.readTree("""{"text":"kept"}"""), verificationResult = verification), 200)
+            val jobId = postJson("/v2/jobs", SOFTWARE, request, 202).path("id").asText()
+            assertThat(awaitTerminal(jobId, SOFTWARE).path("errorCode").asText()).isEqualTo(expectedCode)
+            assertThat(getJson("/v2/jobs/$jobId/result", SOFTWARE).path("verificationResult").path("status").asText()).isEqualTo(verification.status.name)
+        }
+    }
+
     private fun jobRequest(execution:ExecutionSelection,objects:List<InputObjectRef> = emptyList())=CreateJobRequest(UUID.randomUUID().toString(),JobKind.APPLICATION_WORK,TaskType.STRUCTURED_GENERATION,execution,JobInput("Geef het antwoord als JSON.",objects),OutputContract(mapper.readTree("""{"type":"object","required":["text"],"properties":{"text":{"type":"string"}},"additionalProperties":false}""")))
     private fun repositoryJob(model:String)=CreateJobRequest(UUID.randomUUID().toString(),JobKind.REPOSITORY_WORK,TaskType.REPOSITORY_AGENT,ExecutionSelection("openai",model,ExecutionMode.SUBSCRIPTION),JobInput("Werk de story uit."),OutputContract(mapper.readTree("""{"type":"object","required":["text"],"properties":{"text":{"type":"string"}}}""")),repositoryCheckout=RepositoryCheckout("test-repository","software-factory/SF-123",RepositoryPublicationMode.COMMIT_AND_PUSH))
+    private fun verifiedRepositoryJob(maxRepairAttempts:Int=3)=repositoryJob("mock").copy(execution=ExecutionSelection("mock","mock",ExecutionMode.MOCK),verification=JobVerification(VerificationMode.REPOSITORY_CONFIG,maxRepairAttempts),executionTimeoutSeconds=600)
     private fun postJson(path:String,token:String,body:Any?,expected:Int):JsonNode {val builder=post(path).bearer(token).contentType(MediaType.APPLICATION_JSON);if(body!=null)builder.content(mapper.writeValueAsBytes(body));val response=mvc.perform(builder).andExpect(status().`is`(expected)).andReturn().response;return if(response.contentAsString.isBlank())mapper.createObjectNode() else mapper.readTree(response.contentAsString)}
     private fun getJson(path:String,token:String)=mapper.readTree(mvc.perform(get(path).bearer(token)).andExpect(status().isOk).andReturn().response.contentAsString)
     private fun awaitResult(id:String,token:String=PRODUCT):JsonNode {repeat(30){val response=mvc.perform(get("/v2/jobs/$id/result").bearer(token)).andReturn().response;if(response.status==200)return mapper.readTree(response.contentAsString);Thread.sleep(100)};error("job did not complete")}
-    private fun awaitTerminal(id:String):JsonNode {repeat(30){val result=getJson("/v2/jobs/$id",PRODUCT);if(result.path("status").asText() in setOf("SUCCEEDED","FAILED","CANCELLED"))return result;Thread.sleep(100)};error("job did not become terminal")}
+    private fun awaitTerminal(id:String,token:String=PRODUCT):JsonNode {repeat(30){val result=getJson("/v2/jobs/$id",token);if(result.path("status").asText() in setOf("SUCCEEDED","FAILED","CANCELLED"))return result;Thread.sleep(100)};error("job did not become terminal")}
     private fun sha(value:ByteArray)=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value))
     private fun org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder.bearer(token:String)=header("Authorization","Bearer $token")
     companion object {const val PRODUCT="local-product-factory-token";const val SOFTWARE="local-software-factory-token";const val PVDD="local-pvdd-token";const val WORKER="local-worker-token";const val ADMIN="local-admin-token";const val TEST_CONTROL="local-test-control-token"}

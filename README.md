@@ -10,7 +10,8 @@ De runtime ondersteunt:
 - `APPLICATION_WORK`: een complete prompt uitvoeren en een betrouwbaar JSON-resultaat plus
   artifacts teruggeven;
 - `REPOSITORY_WORK`: een bestaande, door de consumer aangemaakte branch van een geregistreerde
-  Git-repository aanpassen, controleren, door de worker committen en normaal pushen;
+  Git-repository aanpassen, repositorygestuurd verifiëren, zo nodig door dezelfde agent laten
+  herstellen en alleen groen door de worker committen en normaal pushen;
 - `MOCKED`: dezelfde job- en resultaatketen server-side uitvoeren in lokale en
   acceptatieomgevingen.
 
@@ -238,6 +239,14 @@ maakt voor v2 geen branch of PR. Iedere attempt gebruikt een verse clone. De age
 read-only en alleen de worker kan na veiligheidscontroles één commit naar exact dezelfde branch
 pushen. Het gevalideerde AI-resultaat blijft in `result` staan; alias, begin-SHA, eventuele
 commit-SHA en `NONE`, `NO_CHANGES` of `PUSHED` staan afzonderlijk in `repositoryResult`.
+
+Een muterende repositoryjob kan `verification.mode=REPOSITORY_CONFIG` aanvragen. De worker leest
+dan uitsluitend `.factory/verification.yaml` uit de checkout; de consumer kan geen commando's
+meesturen. Rode commando's worden binnen dezelfde worktree aan dezelfde agent teruggegeven tot de
+aangevraagde herstelgrens. Alleen `PASSED` of volledig niet-relevante (`SKIPPED`) verificatie mag
+worden gepubliceerd. Bij blijvend rood blijft het gevalideerde AI-resultaat samen met begrensd,
+geredigeerd commandobewijs via het resultaatendpoint beschikbaar, terwijl de job terminal `FAILED`
+is. Een lege diff blijft `NO_CHANGES` zonder `verificationResult`.
 
 Belangrijkste consumentenroutes:
 

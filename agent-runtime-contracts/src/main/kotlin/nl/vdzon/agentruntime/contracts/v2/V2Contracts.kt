@@ -31,6 +31,9 @@ enum class SubscriptionStatus { OPEN, ALLOCATED, FINAL }
 enum class RepositoryPublicationMode { NONE, COMMIT_AND_PUSH }
 enum class RepositoryPublicationStatus { NONE, NO_CHANGES, PUSHED }
 enum class RepositoryPublicationIntentStatus { PREPARED, PUSHED, FINALIZED }
+enum class VerificationMode { NONE, REPOSITORY_CONFIG }
+enum class VerificationStatus { PASSED, FAILED, SKIPPED, CONFIG_MISSING, CONFIG_INVALID, TIMEOUT }
+enum class VerificationCommandStatus { PASSED, FAILED, TIMEOUT, SKIPPED }
 
 data class ExecutionSelection(
     @field:Pattern(regexp = "[a-z][a-z0-9-]{0,99}") val vendorId: String,
@@ -81,6 +84,28 @@ data class RepositoryResult(
     @field:Size(max = 20_000) val diffStat: String? = null,
 )
 
+data class JobVerification(
+    val mode: VerificationMode = VerificationMode.NONE,
+    @field:Min(0) @field:Max(5) val maxRepairAttempts: Int = 3,
+    @field:Size(max = 4_000) val repairInstruction: String? = null,
+)
+
+data class VerificationCommandResult(
+    @field:NotBlank @field:Size(max = 160) val id: String,
+    @field:NotEmpty @field:Size(max = 128) val argv: List<@NotBlank @Size(max = 1_000) String>,
+    val status: VerificationCommandStatus,
+    val exitCode: Int?,
+    @field:Min(0) val durationMillis: Long,
+    @field:Size(max = 20_000) val outputTail: String?,
+)
+
+data class VerificationResult(
+    val status: VerificationStatus,
+    @field:Min(1) val configVersion: Int?,
+    @field:Min(1) @field:Max(6) val agentRounds: Int,
+    @field:Valid @field:Size(max = 100) val commands: List<VerificationCommandResult> = emptyList(),
+)
+
 data class CreateJobRequest(
     @field:NotBlank @field:Size(max = 160) val idempotencyKey: String,
     val jobKind: JobKind,
@@ -90,6 +115,7 @@ data class CreateJobRequest(
     @field:Valid val output: OutputContract,
     @field:Valid val repositorySnapshot: RepositorySnapshot? = null,
     @field:Valid val repositoryCheckout: RepositoryCheckout? = null,
+    @field:Valid val verification: JobVerification? = null,
     @field:Size(max = 50) val environmentKeys: List<@Pattern(regexp = "[A-Z][A-Z0-9_]*__[A-Z][A-Z0-9_]*") String> = emptyList(),
     @field:Min(30) @field:Max(86_400) val executionTimeoutSeconds: Int = 3_600,
 )
@@ -173,6 +199,7 @@ data class JobResultView(
     val jobId: String,
     val result: JsonNode,
     val repositoryResult: RepositoryResult? = null,
+    val verificationResult: VerificationResult? = null,
     val artifacts: List<OutputObjectView>,
     val usageSummary: JobUsageSummary,
     val completedAt: Instant,
@@ -297,6 +324,7 @@ data class CreateMockFixtureRequest(
     @field:Min(0) @field:Max(60_000) val delayMillis: Long = 0,
     @field:Size(max = 50) val outputArtifactNames: Set<@Pattern(regexp = "[a-z][a-z0-9-]{0,99}") String> = emptySet(),
     @field:Valid val repositoryResult: RepositoryResult? = null,
+    @field:Valid val verificationResult: VerificationResult? = null,
 )
 data class MockFixtureView(
     val id: String,
@@ -309,6 +337,7 @@ data class MockFixtureView(
     val delayMillis: Long,
     val outputArtifactNames: Set<String>,
     val repositoryResult: RepositoryResult?,
+    val verificationResult: VerificationResult?,
     val createdAt: Instant,
 )
 data class ClaimRequest(
@@ -347,12 +376,14 @@ data class SubmitResultRequest(
     val result: JsonNode,
     @field:Size(max = 50) val outputObjectIds: Set<String> = emptySet(),
     @field:Valid val repositoryResult: RepositoryResult? = null,
+    @field:Valid val verificationResult: VerificationResult? = null,
 )
 data class PrepareRepositoryPublicationRequest(
     val fencingToken: String,
     val result: JsonNode,
     @field:Size(max = 50) val outputObjectIds: Set<String> = emptySet(),
     @field:Valid val repositoryResult: RepositoryResult,
+    @field:Valid val verificationResult: VerificationResult? = null,
 )
 data class ConfirmRepositoryPublicationRequest(
     val fencingToken: String,

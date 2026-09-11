@@ -24,6 +24,7 @@ data class StoredV2Job(
     val request: CreateJobRequest,
     val result: JsonNode?,
     val repositoryResult: RepositoryResult?,
+    val verificationResult: VerificationResult?,
     val cancelRequested: Boolean,
 )
 data class StoredV2Attempt(
@@ -96,18 +97,29 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
         addEvent(jobId,attemptId,EventType.PROGRESS_UPDATED,phase,message,percent=percent)
     }
 
-    fun complete(jobId:String,attemptId:String,result:JsonNode,repositoryResult:RepositoryResult?,quality:UsageQuality) {
+    fun complete(jobId:String,attemptId:String,result:JsonNode,repositoryResult:RepositoryResult?,verificationResult:VerificationResult?,quality:UsageQuality) {
         val now=Instant.now()
         jdbc.update("UPDATE runtime_v2_attempt SET status='SUCCEEDED',usage_quality=?,completed_at=? WHERE id=? AND status='RUNNING'",quality.name,utc(now),attemptId)
-        jdbc.update("UPDATE runtime_v2_job SET status='SUCCEEDED',phase='COMPLETED',progress_percent=100,result_json=?,repository_result_json=?,completed_at=?,updated_at=? WHERE id=? AND status='RUNNING'",result.toString(),repositoryResult?.let(mapper::writeValueAsString),utc(now),utc(now),jobId)
+        jdbc.update("UPDATE runtime_v2_job SET status='SUCCEEDED',phase='COMPLETED',progress_percent=100,result_json=?,repository_result_json=?,verification_result_json=?,completed_at=?,updated_at=? WHERE id=? AND status='RUNNING'",result.toString(),repositoryResult?.let(mapper::writeValueAsString),verificationResult?.let(mapper::writeValueAsString),utc(now),utc(now),jobId)
         addEvent(jobId,attemptId,EventType.ATTEMPT_FINISHED,"COMPLETED","Attempt succeeded.",status=JobStatus.SUCCEEDED,percent=100)
         addEvent(jobId,attemptId,EventType.JOB_FINISHED,"COMPLETED","Job completed successfully.",status=JobStatus.SUCCEEDED,percent=100)
     }
 
-    fun completeMock(jobId:String,result:JsonNode,repositoryResult:RepositoryResult?=null) {
+    fun completeWithVerificationFailure(jobId:String,attemptId:String,result:JsonNode,verificationResult:VerificationResult,quality:UsageQuality,code:String,message:String) {
         val now=Instant.now()
-        jdbc.update("UPDATE runtime_v2_job SET status='SUCCEEDED',phase='COMPLETED',progress_percent=100,result_json=?,repository_result_json=?,completed_at=?,updated_at=? WHERE id=? AND status IN ('QUEUED','WAITING_FOR_WORKER')",result.toString(),repositoryResult?.let(mapper::writeValueAsString),utc(now),utc(now),jobId)
-        addEvent(jobId,null,EventType.JOB_FINISHED,"COMPLETED","Mock job completed.",status=JobStatus.SUCCEEDED,percent=100)
+        jdbc.update("UPDATE runtime_v2_attempt SET status='FAILED',usage_quality=?,error_code=?,completed_at=? WHERE id=? AND status='RUNNING'",quality.name,code.take(120),utc(now),attemptId)
+        jdbc.update("UPDATE runtime_v2_job SET status='FAILED',phase='VERIFICATION_FAILED',progress_percent=100,result_json=?,repository_result_json=NULL,verification_result_json=?,error_code=?,error_message=?,completed_at=?,updated_at=? WHERE id=? AND status='RUNNING'",result.toString(),mapper.writeValueAsString(verificationResult),code.take(120),message.take(2000),utc(now),utc(now),jobId)
+        addEvent(jobId,attemptId,EventType.ATTEMPT_FINISHED,"VERIFICATION_FAILED","$code: ${message.take(800)}",status=JobStatus.FAILED,percent=100)
+        addEvent(jobId,attemptId,EventType.JOB_FINISHED,"VERIFICATION_FAILED","Job failed verification: $code.",status=JobStatus.FAILED,percent=100)
+    }
+
+    fun completeMock(jobId:String,result:JsonNode,repositoryResult:RepositoryResult?=null,verificationResult:VerificationResult?=null,verificationFailureCode:String?=null) {
+        val now=Instant.now()
+        val failed=verificationFailureCode!=null
+        val status=if(failed)JobStatus.FAILED else JobStatus.SUCCEEDED
+        val phase=if(failed)"VERIFICATION_FAILED" else "COMPLETED"
+        jdbc.update("UPDATE runtime_v2_job SET status=?,phase=?,progress_percent=100,result_json=?,repository_result_json=?,verification_result_json=?,error_code=?,error_message=?,completed_at=?,updated_at=? WHERE id=? AND status IN ('QUEUED','WAITING_FOR_WORKER')",status.name,phase,result.toString(),repositoryResult?.let(mapper::writeValueAsString),verificationResult?.let(mapper::writeValueAsString),verificationFailureCode,verificationFailureCode?.let { "Prepared mock verification failure." },utc(now),utc(now),jobId)
+        addEvent(jobId,null,EventType.JOB_FINISHED,phase,if(failed)"Mock job failed verification." else "Mock job completed.",status=status,percent=100)
     }
 
     fun failAttempt(job:StoredV2Job,attemptId:String,code:String,message:String,retryable:Boolean,forceRetry:Boolean=false) {
@@ -164,6 +176,7 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
             request,
             rs.getString("result_json")?.let(mapper::readTree),
             rs.getString("repository_result_json")?.let { mapper.readValue(it,RepositoryResult::class.java) },
+            rs.getString("verification_result_json")?.let { mapper.readValue(it,VerificationResult::class.java) },
             rs.getBoolean("cancel_requested"),
         )
     }
@@ -252,6 +265,60 @@ class V2JobService(private val properties:RuntimeProperties,private val jobs:V2J
         return errors
     }
 
+    fun validateVerificationResult(job: StoredV2Job, value: VerificationResult?, repositoryResult: RepositoryResult? = null): List<ValidationError> {
+        val verification = job.request.verification
+        if (verification == null || verification.mode == VerificationMode.NONE) {
+            return if (value == null) emptyList() else listOf(
+                ValidationError("$.verificationResult", "forbidden", "Verification metadata is forbidden when repository verification is disabled."),
+            )
+        }
+        if (value == null) {
+            return if (repositoryResult?.publicationStatus == RepositoryPublicationStatus.NO_CHANGES) emptyList() else listOf(
+                ValidationError("$.verificationResult", "required", "Verification metadata is required for a non-empty repository change."),
+            )
+        }
+        val errors = mutableListOf<ValidationError>()
+        if (value.agentRounds > verification.maxRepairAttempts + 1) {
+            errors += ValidationError("$.verificationResult.agentRounds", "maximum", "Agent rounds exceed the requested repair limit.")
+        }
+        if (value.commands.map { it.id }.distinct().size != value.commands.size) {
+            errors += ValidationError("$.verificationResult.commands", "uniqueItems", "Verification command IDs must be unique.")
+        }
+        value.commands.forEachIndexed { index, command ->
+            if (command.status == VerificationCommandStatus.PASSED && command.exitCode != 0) {
+                errors += ValidationError("$.verificationResult.commands[$index].exitCode", "const", "A passed command requires exitCode 0.")
+            }
+            if (command.status in setOf(VerificationCommandStatus.SKIPPED, VerificationCommandStatus.TIMEOUT) && command.exitCode != null) {
+                errors += ValidationError("$.verificationResult.commands[$index].exitCode", "forbidden", "A skipped or timed-out command has no exitCode.")
+            }
+            if (command.status == VerificationCommandStatus.FAILED && (command.exitCode == null || command.exitCode == 0)) {
+                errors += ValidationError("$.verificationResult.commands[$index].exitCode", "invalid", "A failed command requires a non-zero exitCode.")
+            }
+        }
+        when (value.status) {
+            VerificationStatus.PASSED -> if (value.commands.none { it.status == VerificationCommandStatus.PASSED } || value.commands.any { it.status in setOf(VerificationCommandStatus.FAILED, VerificationCommandStatus.TIMEOUT) }) {
+                errors += ValidationError("$.verificationResult.status", "consistency", "PASSED requires at least one passed command and no failed commands.")
+            }
+            VerificationStatus.SKIPPED -> if (value.commands.isEmpty() || value.commands.any { it.status != VerificationCommandStatus.SKIPPED }) {
+                errors += ValidationError("$.verificationResult.status", "consistency", "SKIPPED requires one or more skipped commands.")
+            }
+            VerificationStatus.FAILED -> if (value.commands.none { it.status in setOf(VerificationCommandStatus.FAILED, VerificationCommandStatus.TIMEOUT) }) {
+                errors += ValidationError("$.verificationResult.status", "consistency", "FAILED requires a failed or timed-out command.")
+            }
+            VerificationStatus.TIMEOUT -> Unit
+            VerificationStatus.CONFIG_MISSING, VerificationStatus.CONFIG_INVALID -> if (value.commands.isNotEmpty()) {
+                errors += ValidationError("$.verificationResult.commands", "empty", "Configuration failures cannot contain executed commands.")
+            }
+        }
+        if (value.status in setOf(VerificationStatus.PASSED, VerificationStatus.FAILED, VerificationStatus.SKIPPED, VerificationStatus.TIMEOUT) && value.configVersion == null) {
+            errors += ValidationError("$.verificationResult.configVersion", "required", "Executed verification requires a configuration version.")
+        }
+        if (value.status in setOf(VerificationStatus.CONFIG_MISSING, VerificationStatus.CONFIG_INVALID) && value.configVersion != null) {
+            errors += ValidationError("$.verificationResult.configVersion", "forbidden", "An unavailable configuration has no reliable version.")
+        }
+        return errors
+    }
+
     private fun validateRepositoryRequest(tenantId: String, request: CreateJobRequest) {
         val checkout = request.repositoryCheckout
         if (checkout != null && request.repositorySnapshot != null) throw ApiException("INVALID_REPOSITORY_CHECKOUT", "repositorySnapshot and repositoryCheckout are mutually exclusive.")
@@ -259,6 +326,14 @@ class V2JobService(private val properties:RuntimeProperties,private val jobs:V2J
             if (tenantId != "software-factory") throw ApiException("REPOSITORY_ALIAS_NOT_ALLOWED", "Only software-factory may request repositoryCheckout.", HttpStatus.FORBIDDEN)
             if (checkout.alias !in properties.allowedRepositoryAliases(tenantId)) throw ApiException("REPOSITORY_ALIAS_NOT_ALLOWED", "Repository alias is outside the tenant policy.", HttpStatus.FORBIDDEN)
             if (!validBranch(checkout.branch)) throw ApiException("INVALID_REPOSITORY_CHECKOUT", "Branch name is not a valid Git branch.")
+        }
+        val verification = request.verification
+        if (verification != null && checkout == null) throw ApiException("INVALID_VERIFICATION", "verification requires repositoryCheckout.")
+        if (verification?.mode == VerificationMode.REPOSITORY_CONFIG && checkout?.publicationMode != RepositoryPublicationMode.COMMIT_AND_PUSH) {
+            throw ApiException("INVALID_VERIFICATION", "REPOSITORY_CONFIG verification requires COMMIT_AND_PUSH.")
+        }
+        if (verification?.mode == VerificationMode.REPOSITORY_CONFIG && request.executionTimeoutSeconds < 600) {
+            throw ApiException("INVALID_VERIFICATION", "REPOSITORY_CONFIG verification requires executionTimeoutSeconds of at least 600.")
         }
         when (request.jobKind) {
             JobKind.REPOSITORY_WORK -> {

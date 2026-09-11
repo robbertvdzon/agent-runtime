@@ -291,6 +291,10 @@ paths:
                     alias: pvdd
                     branch: software-factory/SF-123
                     publicationMode: COMMIT_AND_PUSH
+                  verification:
+                    mode: REPOSITORY_CONFIG
+                    maxRepairAttempts: 3
+                    repairInstruction: Fix the implementation without changing Git metadata.
                   environmentKeys: []
                   executionTimeoutSeconds: 3600
       responses:
@@ -341,7 +345,7 @@ paths:
         - $ref: '#/components/parameters/JobId'
       responses:
         '200':
-          description: Immutable successful result
+          description: Immutable successful result, or a validated result with evidence from a terminal repository verification failure
           content:
             application/json:
               schema:
@@ -940,6 +944,8 @@ paths:
       description: |
         The worker reads the mandatory /job/output/result.json and submits that bounded object here
         after all declared output files have been uploaded. Provider stdout/stderr is not a result.
+        A terminal repository verification failure is finalized atomically by this same call: the
+        job becomes FAILED, but its validated result and verificationResult remain retrievable.
       parameters:
         - $ref: '#/components/parameters/WorkerId'
         - $ref: '#/components/parameters/JobId'
@@ -963,9 +969,10 @@ paths:
       operationId: prepareRepositoryPublication
       summary: Durably prepare one validated repository commit before its external push
       description: |
-        Stores the validated agent result, uploaded output object IDs and intended commit before
-        the worker pushes. Repeating the same request is idempotent; conflicting commit metadata
-        is rejected. The endpoint is worker-internal and protected by attempt fencing.
+        Stores the validated agent result, verification evidence, uploaded output object IDs and
+        intended commit before the worker pushes. Repeating the same request is idempotent;
+        conflicting commit metadata is rejected. The endpoint is worker-internal and protected by
+        attempt fencing.
       parameters:
         - $ref: '#/components/parameters/WorkerId'
         - $ref: '#/components/parameters/JobId'
@@ -1196,6 +1203,10 @@ components:
         output: {$ref: '#/components/schemas/OutputContract'}
         repositorySnapshot: {$ref: '#/components/schemas/RepositorySnapshot'}
         repositoryCheckout: {$ref: '#/components/schemas/RepositoryCheckout'}
+        verification:
+          allOf:
+            - $ref: '#/components/schemas/JobVerification'
+          description: Only valid for mutating REPOSITORY_WORK. REPOSITORY_CONFIG requires a timeout of at least 600 seconds.
         environmentKeys:
           type: array
           maxItems: 50
@@ -1310,13 +1321,15 @@ components:
       description: |
         Runtime-built manifest. result is the validated content of /job/output/result.json;
         artifacts are added after successful uploads. Consumers never access the worker directory
-        or BlobStore directly.
+        or BlobStore directly. The manifest is also available for a terminal verification failure
+        when validated result and verification evidence were stored atomically.
       properties:
         jobId: {type: string, format: uuid}
         result:
           type: object
           description: Bounded JSON object; default maximum serialized size is 1 MiB.
         repositoryResult: {$ref: '#/components/schemas/RepositoryResult'}
+        verificationResult: {$ref: '#/components/schemas/VerificationResult'}
         artifacts:
           type: array
           items: {$ref: '#/components/schemas/OutputObjectView'}
@@ -1622,6 +1635,8 @@ components:
         checkoutCommitSha: {$ref: '#/components/schemas/GitCommitSha'}
         publishedCommitSha: {$ref: '#/components/schemas/GitCommitSha'}
         repositoryPublicationStatus: {$ref: '#/components/schemas/RepositoryPublicationStatus'}
+        verificationStatus: {$ref: '#/components/schemas/VerificationStatus'}
+        verificationAgentRounds: {type: integer, minimum: 1, maximum: 6}
         status: {$ref: '#/components/schemas/JobStatus'}
         phase: {type: string, maxLength: 80}
         workerId: {type: string, maxLength: 100}
@@ -1672,6 +1687,7 @@ components:
         jobId: {type: string, format: uuid}
         result: {type: object}
         repositoryResult: {$ref: '#/components/schemas/RepositoryResult'}
+        verificationResult: {$ref: '#/components/schemas/VerificationResult'}
         artifacts: {type: array, items: {$ref: '#/components/schemas/ManagementObject'}}
         usageSummary: {$ref: '#/components/schemas/JobUsageSummary'}
         completedAt: {type: string, format: date-time}
@@ -1850,6 +1866,7 @@ components:
           uniqueItems: true
           items: {$ref: '#/components/schemas/LogicalName'}
         repositoryResult: {$ref: '#/components/schemas/RepositoryResult'}
+        verificationResult: {$ref: '#/components/schemas/VerificationResult'}
       oneOf:
         - required: [result]
         - required: [outputSequence]
@@ -1875,6 +1892,7 @@ components:
           uniqueItems: true
           items: {$ref: '#/components/schemas/LogicalName'}
         repositoryResult: {$ref: '#/components/schemas/RepositoryResult'}
+        verificationResult: {$ref: '#/components/schemas/VerificationResult'}
         createdAt: {type: string, format: date-time}
 
     ClaimRequest:
@@ -1995,6 +2013,7 @@ components:
           uniqueItems: true
           items: {type: string, format: uuid}
         repositoryResult: {$ref: '#/components/schemas/RepositoryResult'}
+        verificationResult: {$ref: '#/components/schemas/VerificationResult'}
 
     PrepareRepositoryPublicationRequest:
       type: object
@@ -2014,6 +2033,7 @@ components:
           allOf:
             - $ref: '#/components/schemas/RepositoryResult'
           description: Must have publicationStatus PUSHED and identify the intended local commit.
+        verificationResult: {$ref: '#/components/schemas/VerificationResult'}
 
     ConfirmRepositoryPublicationRequest:
       type: object
@@ -2110,6 +2130,65 @@ components:
         publicationStatus: {$ref: '#/components/schemas/RepositoryPublicationStatus'}
         commitSha: {$ref: '#/components/schemas/GitCommitSha'}
         diffStat: {type: string, maxLength: 20000}
+
+    JobVerification:
+      type: object
+      additionalProperties: false
+      required: [mode, maxRepairAttempts]
+      properties:
+        mode: {$ref: '#/components/schemas/VerificationMode'}
+        maxRepairAttempts:
+          type: integer
+          minimum: 0
+          maximum: 5
+          default: 3
+          description: Number of additional agent repair rounds after the first failed verification.
+        repairInstruction: {type: string, maxLength: 4000}
+
+    VerificationResult:
+      type: object
+      additionalProperties: false
+      description: Runtime-managed repository verification evidence; not part of the consumer result schema.
+      required: [status, configVersion, agentRounds, commands]
+      properties:
+        status: {$ref: '#/components/schemas/VerificationStatus'}
+        configVersion:
+          type: [integer, 'null']
+          minimum: 1
+          description: Null when the repository configuration is missing or cannot be parsed reliably.
+        agentRounds: {type: integer, minimum: 1, maximum: 6}
+        commands:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/VerificationCommandResult'}
+
+    VerificationCommandResult:
+      type: object
+      additionalProperties: false
+      required: [id, argv, status, exitCode, durationMillis, outputTail]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 160}
+        argv:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items: {type: string, minLength: 1, maxLength: 1000}
+        status: {$ref: '#/components/schemas/VerificationCommandStatus'}
+        exitCode: {type: [integer, 'null']}
+        durationMillis: {type: integer, format: int64, minimum: 0}
+        outputTail: {type: [string, 'null'], maxLength: 20000}
+
+    VerificationMode:
+      type: string
+      enum: [NONE, REPOSITORY_CONFIG]
+
+    VerificationStatus:
+      type: string
+      enum: [PASSED, FAILED, SKIPPED, CONFIG_MISSING, CONFIG_INVALID, TIMEOUT]
+
+    VerificationCommandStatus:
+      type: string
+      enum: [PASSED, FAILED, TIMEOUT, SKIPPED]
 
     RepositoryPublicationMode:
       type: string

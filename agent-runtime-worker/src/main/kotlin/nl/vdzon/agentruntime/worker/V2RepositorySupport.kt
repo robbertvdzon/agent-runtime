@@ -85,6 +85,25 @@ class V2RepositorySupport(private val repositoryAliases: Map<String, String>) {
         return RepositoryResult(checkout.alias, checkout.branch, state.checkoutCommitSha, RepositoryPublicationStatus.PUSHED, commitSha, diffStat)
     }
 
+    fun changedPaths(workspace: Path): Set<String> {
+        val raw = execute(listOf("git", "status", "--porcelain=v1", "-z", "--untracked-files=all"), workspace, 30)
+        val records = raw.split('\u0000').filter(String::isNotEmpty)
+        val paths = linkedSetOf<String>()
+        var index = 0
+        while (index < records.size) {
+            val record = records[index]
+            if (record.length < 4) throw JobFailure("UNSAFE_REPOSITORY_OUTPUT", "Git returned an invalid changed path.", false)
+            paths += record.substring(3)
+            if (record[0] in setOf('R', 'C') || record[1] in setOf('R', 'C')) {
+                index++
+                if (index >= records.size) throw JobFailure("UNSAFE_REPOSITORY_OUTPUT", "Git returned an incomplete renamed path.", false)
+                paths += records[index]
+            }
+            index++
+        }
+        return paths
+    }
+
     fun push(checkout: RepositoryCheckout, state: V2RepositoryState, workspace: Path) {
         val currentRemote = remoteHead(state.publicationUrl, checkout.branch, workspace)
         if (currentRemote != state.checkoutCommitSha) throw JobFailure("BRANCH_CHANGED", "The remote story branch changed during agent execution.", false)

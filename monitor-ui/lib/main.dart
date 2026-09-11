@@ -1063,6 +1063,25 @@ class JobList extends StatelessWidget {
                       ],
                     ),
                   ],
+                  if (item['verificationStatus'] != null) ...[
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 16,
+                      runSpacing: 8,
+                      children: [
+                        _JobFact(
+                          icon: Icons.fact_check_outlined,
+                          label: 'Verificatie',
+                          value: item['verificationStatus'].toString(),
+                        ),
+                        _JobFact(
+                          icon: Icons.replay_outlined,
+                          label: 'Agentrondes',
+                          value: item['verificationAgentRounds']?.toString() ?? '-',
+                        ),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   _ListPreview(
                     label: 'Prompt · eerste 240 tekens',
@@ -1354,6 +1373,11 @@ class _JobDetailState extends State<JobDetail> {
                     '  ',
                   ).convert(detail!['result']['repositoryResult']),
                 ),
+              if (detail!['result']?['verificationResult'] != null)
+                VerificationPanel(
+                  result: (detail!['result']['verificationResult'] as Map)
+                      .cast<String, dynamic>(),
+                ),
               if (detail!['result'] != null &&
                   (detail!['result']['artifacts'] as List? ?? const [])
                       .isNotEmpty)
@@ -1415,6 +1439,83 @@ class _JobDetailState extends State<JobDetail> {
       ),
     ),
   );
+}
+
+class VerificationPanel extends StatelessWidget {
+  final Map<String, dynamic> result;
+  const VerificationPanel({super.key, required this.result});
+
+  @override
+  Widget build(BuildContext context) {
+    final commands = (result['commands'] as List? ?? const [])
+        .cast<Map<String, dynamic>>();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Repositoryverificatie',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 16,
+                runSpacing: 8,
+                children: [
+                  StatusLabel(result['status']?.toString() ?? 'ONBEKEND'),
+                  Text('Agentrondes: ${result['agentRounds'] ?? '-'}'),
+                  Text('Configuratieversie: ${result['configVersion'] ?? '-'}'),
+                ],
+              ),
+              if (commands.isEmpty) ...[
+                const SizedBox(height: 12),
+                const Text('Er zijn geen verificatiecommando’s uitgevoerd.'),
+              ],
+              ...commands.map((command) {
+                final argv = (command['argv'] as List? ?? const [])
+                    .map((value) => value.toString())
+                    .join(' ');
+                final output = command['outputTail']?.toString();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xfff1f7f4),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${command['id']} · ${command['status']}',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 4),
+                        SelectableText(argv),
+                        Text(
+                          'Exitcode: ${command['exitCode'] ?? '-'} · duur: ${_formatDuration(command['durationMillis'])}',
+                        ),
+                        if (output != null && output.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          SelectableText(output),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class FileCollection extends StatelessWidget {

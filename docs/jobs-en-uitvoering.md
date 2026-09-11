@@ -86,6 +86,10 @@ die de consumer al heeft aangemaakt:
     "alias": "agent-runtime",
     "branch": "software-factory/SF-123",
     "publicationMode": "COMMIT_AND_PUSH"
+  },
+  "verification": {
+    "mode": "REPOSITORY_CONFIG",
+    "maxRepairAttempts": 3
   }
 }
 ```
@@ -104,6 +108,24 @@ zonder force, naar exact dezelfde branch. Bij een gelijktijdige remotewijziging 
 `BRANCH_CHANGED`. Een lege diff is een geldig `NO_CHANGES`-resultaat. Agent Runtime maakt nooit de
 storybranch of een pull request; Software Factory is daarvan eigenaar.
 
+Met `verification.mode=REPOSITORY_CONFIG` leest de worker na iedere agentronde de versioned
+`.factory/verification.yaml` uit de checkout. Alleen `agentRunnable=true`-commando's waarvan de
+`pathPrefixes` de diff raken worden in een aparte run van hetzelfde execution-image uitgevoerd;
+de overige commando's krijgen `SKIPPED`. `argv` is een argumentenlijst en wordt nooit via een
+shellstring geïnterpreteerd. Een consumer kan geen commando, werkdirectory of timeout meesturen.
+
+Bij rood schrijft de worker het begrensde, geredigeerde bewijs naar
+`/job/input/verification-failure.md` en start hij dezelfde agent opnieuw op dezelfde worktree. Het
+aantal extra rondes wordt begrensd door `maxRepairAttempts`; `executionTimeoutSeconds` (minimaal
+600 bij deze modus) blijft één harde deadline over checkout, alle agent- en verificatierondes en
+publicatie. De laatste 300 seconden zijn voor veilige publicatie en resultaatopslag gereserveerd.
+
+Alleen `PASSED` en `SKIPPED` gaan naar commit en push. `FAILED`, `CONFIG_MISSING`, `CONFIG_INVALID`
+en `TIMEOUT` publiceren niets en eindigen niet-retrybaar als `FAILED`. Het gevalideerde AI-resultaat
+en `verificationResult` worden atomair bewaard en blijven via `GET /v2/jobs/{jobId}/result`
+leesbaar. Een lege diff geeft `NO_CHANGES`, voert geen verificatie uit en bevat geen
+`verificationResult`. Read-only repositoryagents ondersteunen deze verificatiemodus niet.
+
 Een read-only repositoryagent gebruikt `APPLICATION_WORK`, `taskType=REPOSITORY_AGENT` en
 `publicationMode=NONE`. De tijdelijke worktree blijft bruikbaar voor builds en tests, maar wordt
 na de attempt weggegooid en nooit gepubliceerd. De worker registreert zijn beschikbare aliases;
@@ -120,6 +142,10 @@ een geslaagde push kan daardoor niet stilzwijgend een tweede commit opleveren.
 Wanneer de normale technische-attemptlimiet al is bereikt, mag de server nog een
 reconciliatie-attempt plannen. Die voert geen nieuwe AI-run uit: hij bevestigt uitsluitend een
 aantoonbaar gepushte commit of eindigt wanneer de commit aantoonbaar niet remote staat.
+
+Verificatiebewijs staat daarnaast in het Runtime-beheerde `verificationResult`: status,
+configuratieversie, aantal agentrondes en per commando de argumenten, status, exitcode, duur en een
+begrensde outputstaart. Dit veld valt niet onder het consumerschema.
 
 ## Projectcredentials
 
@@ -200,7 +226,8 @@ Iedere echte attempt krijgt deze indeling:
 ```
 
 `input`, `secrets` en `docs` zijn read-only; `output` is schrijfbaar. Het execution-image bevat
-Codex, Claude, Git, Java/Maven, Node, Playwright/Chromium, `oc`/`kubectl` en PostgreSQL-tools.
+Codex, Claude, Git, JDK 17 en 21 met Maven, Flutter, Node, Python, Bash, Playwright/Chromium,
+`oc`/`kubectl` en PostgreSQL-tools.
 `available-tools.md` beschrijft de aanwezige commando's en vaste paden.
 
 De worker voegt aan de prompt een technische instructie toe voor de taakdirectory. Deze instructie

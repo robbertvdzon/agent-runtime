@@ -9,6 +9,7 @@ import nl.vdzon.agentruntime.contracts.v2.JobStatus
 import nl.vdzon.agentruntime.contracts.v2.JobUsageSummary
 import nl.vdzon.agentruntime.contracts.v2.RepositoryResult
 import nl.vdzon.agentruntime.contracts.v2.UsageQuality
+import nl.vdzon.agentruntime.contracts.v2.VerificationResult
 import nl.vdzon.agentruntime.server.config.ApiException
 import nl.vdzon.agentruntime.server.config.RuntimeProperties
 import nl.vdzon.agentruntime.server.v2.RegisteredV2WorkerDetails
@@ -51,6 +52,8 @@ data class V2ManagementJobItem(
     val checkoutCommitSha: String?,
     val publishedCommitSha: String?,
     val repositoryPublicationStatus: String?,
+    val verificationStatus: String?,
+    val verificationAgentRounds: Int?,
     val status: String,
     val phase: String,
     val workerId: String?,
@@ -84,6 +87,7 @@ data class V2ManagementResult(
     val jobId: String,
     val result: JsonNode,
     val repositoryResult: RepositoryResult?,
+    val verificationResult: VerificationResult?,
     val artifacts: List<V2ManagementObject>,
     val usageSummary: JobUsageSummary,
     val completedAt: Instant,
@@ -214,8 +218,9 @@ class V2AdminController(
         val outputObjects = objects.outputObjects(id).map { (name, value) -> objectItem(name, value) }
         val usageSummary = usage.jobSummary(id)
         val completedAt = job.view.completedAt
-        val result = if (job.view.status == JobStatus.SUCCEEDED && job.result != null && completedAt != null) {
-            V2ManagementResult(id, job.result, job.repositoryResult, outputObjects, usageSummary, completedAt)
+        val resultAvailable = job.view.status == JobStatus.SUCCEEDED || (job.view.status == JobStatus.FAILED && job.verificationResult != null)
+        val result = if (resultAvailable && job.result != null && completedAt != null) {
+            V2ManagementResult(id, job.result, job.repositoryResult, job.verificationResult, outputObjects, usageSummary, completedAt)
         } else null
         val attempts = jobs.attempts(id).map { attempt ->
             val summary = usage.attemptSummary(attempt.view.id)
@@ -318,6 +323,7 @@ class V2AdminController(
             job.view.execution.vendorId, job.view.execution.model, job.view.execution.mode.name,
             job.request.repositoryCheckout?.alias, job.request.repositoryCheckout?.branch, job.request.repositoryCheckout?.publicationMode?.name,
             job.repositoryResult?.checkoutCommitSha, job.repositoryResult?.commitSha, job.repositoryResult?.publicationStatus?.name,
+            job.verificationResult?.status?.name, job.verificationResult?.agentRounds,
             job.view.status.name, job.view.phase, active?.workerId, job.view.progressPercent, job.view.progressMessage,
             waitingReason, preview(job.request.input.instruction), job.result?.toString()?.let(::preview),
             objects.inputObjects(job.view.id).size, objects.outputObjects(job.view.id).size,

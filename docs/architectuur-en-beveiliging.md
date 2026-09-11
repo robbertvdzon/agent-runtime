@@ -103,8 +103,9 @@ credentialbroker in plaats van een leesbare secretmount.
 
 ## Execution-container
 
-Het gedeelde multi-arch image bevat Codex, Claude, Git, Java/Maven, Node, Playwright/Chromium,
-`oc`/`kubectl` en PostgreSQL-tools. De worker gebruikt `--pull always` voor de bewegende `main`-tag.
+Het gedeelde multi-arch image bevat Codex, Claude, Git, JDK 17 en 21 met Maven, Flutter, Node,
+Python, Bash, Playwright/Chromium, `oc`/`kubectl` en PostgreSQL-tools. De worker gebruikt
+`--pull always` voor de bewegende `main`-tag.
 
 De container krijgt vaste read-only input-, documentatie- en secretmounts, een schrijfbare
 outputdirectory en een aparte `/work`-worktree. Alleen technische job- en attemptidentifiers staan
@@ -114,9 +115,14 @@ Bij een bestaand `repositorySnapshot` verwijdert de worker de Gitremote na een d
 Bij een v2-`repositoryCheckout` maakt de worker een verse clone van exact de bestaande remote
 branch. De `.git`-directory is genest read-only gemount, `GIT_OPTIONAL_LOCKS=0` houdt read-only
 inspectie bruikbaar en de agent krijgt geen Git-publicatiecredential. De worker controleert na de
-agent branch, HEAD, refs en relevante configuratie. Alleen na deze postconditie en de bestaande
-outputcontroles maakt hij zo nodig één commit en pusht hij zonder force naar dezelfde branch.
-Agent Runtime maakt in v2 geen branch of pull request.
+agent branch, HEAD, refs en relevante configuratie. Bij aangevraagde repositoryverificatie leest de
+worker uitsluitend `.factory/verification.yaml` uit de worktree en start hij voor de geselecteerde
+argumentenlijsten een aparte run van hetzelfde execution-image. Die run krijgt wel de expliciet
+geselecteerde projectwaarden, maar geen provider- of Git-publicatiecredentials; `.git` blijft
+read-only. Dit is geen generieke shell-executor en de consumer kan geen commando's meesturen.
+Alleen na groene verificatie en de bestaande outputcontroles maakt de worker zo nodig één commit
+en pusht hij zonder force naar dezelfde branch. Agent Runtime maakt in v2 geen branch of pull
+request.
 
 ## Betrouwbaarheid
 
@@ -130,8 +136,11 @@ Agent Runtime maakt in v2 geen branch of pull request.
 - Resultaten, artifacts, transcripten en voortgang worden alleen voor de actuele gefencete attempt
   geaccepteerd.
 - Voor een muterende repositoryjob bewaart de server vóór de push een duurzame, gefencete
-  publicatie-intentie met het gevalideerde AI-resultaat en de bedoelde commit. Herstel verifieert
-  de remote branch en finaliseert een al gepushte commit zonder de agent opnieuw uit te voeren.
+  publicatie-intentie met het gevalideerde AI-resultaat, verificatiebewijs en de bedoelde commit.
+  Herstel verifieert de remote branch en finaliseert een al gepushte commit zonder de agent opnieuw
+  uit te voeren.
+- Blijvend rode repositoryverificatie slaat gevalideerd resultaat en geredigeerd bewijs atomair op,
+  eindigt niet-retrybaar als `FAILED` en publiceert geen Gitwijziging.
 - Een non-fast-forward push wordt `BRANCH_CHANGED`; er wordt nooit geforceerd of automatisch een
   andere branch gekozen.
 - De attemptdeadline wordt door server en worker onafhankelijk afgedwongen en nooit verlengd.
@@ -150,7 +159,7 @@ directe reguliere bestanden met maximaal 5 MB per bestand, 25 MB per job en 25 b
 apparaten, padtraversal en bekende projectcredentialwaarden worden geweigerd.
 
 De managementlijsten bevatten alleen prompt-/outputpreviews, aantallen, bestandsmetadata en
-repositoryalias/branch/SHA/publicatiestatus zonder remote-URL.
+repositoryalias/branch/SHA/publicatiestatus en begrensd verificatiebewijs zonder remote-URL.
 Attachment- en artifactbytes worden pas via een afzonderlijke geauthenticeerde route geladen.
 
 ## Database en herstel

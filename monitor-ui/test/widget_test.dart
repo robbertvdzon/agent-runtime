@@ -113,6 +113,8 @@ void main() {
                 'repositoryBranch': 'software-factory/SF-123',
                 'repositoryPublicationMode': 'COMMIT_AND_PUSH',
                 'repositoryPublicationStatus': 'PUSHED',
+                'verificationStatus': 'PASSED',
+                'verificationAgentRounds': 2,
               },
             ],
           ),
@@ -131,6 +133,44 @@ void main() {
     expect(find.text('Repository: product-factory'), findsOneWidget);
     expect(find.text('Branch: software-factory/SF-123'), findsOneWidget);
     expect(find.text('Publicatie: PUSHED'), findsOneWidget);
+    expect(find.text('Verificatie: PASSED'), findsOneWidget);
+    expect(find.text('Agentrondes: 2'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('verificatiedetail toont commando bewijs', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: VerificationPanel(
+              result: {
+                'status': 'FAILED',
+                'configVersion': 1,
+                'agentRounds': 3,
+                'commands': [
+                  {
+                    'id': 'backend-verify',
+                    'argv': ['mvn', '-B', 'verify'],
+                    'status': 'FAILED',
+                    'exitCode': 1,
+                    'durationMillis': 1250,
+                    'outputTail': 'Tests run: 10, Failures: 1',
+                  },
+                ],
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Repositoryverificatie'), findsOneWidget);
+    expect(find.text('Agentrondes: 3'), findsOneWidget);
+    expect(find.text('backend-verify · FAILED'), findsOneWidget);
+    expect(find.text('mvn -B verify'), findsOneWidget);
+    expect(find.textContaining('Exitcode: 1'), findsOneWidget);
+    expect(find.text('Tests run: 10, Failures: 1'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

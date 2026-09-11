@@ -125,26 +125,35 @@ class V2WorkerService(
     fun appendUsage(workerId:String,jobId:String,attemptId:String,request:AppendUsageRequest){val(job,_)=authenticate(workerId,jobId,attemptId,request.fencingToken);usage.append(job,attemptId,request)}
     fun appendLog(workerId:String,jobId:String,attemptId:String,request:AppendLogRequest){authenticate(workerId,jobId,attemptId,request.fencingToken);jobs.addEvent(jobId,attemptId,EventType.LOG_MESSAGE,"EXECUTING",null,request.kind,request.text,request.streamId,request.final,externalId=request.eventId)}
     @Transactional fun submit(workerId:String,jobId:String,attemptId:String,request:SubmitResultRequest):OutputRejectedResponse? {
-        val(job,_)=authenticate(workerId,jobId,attemptId,request.fencingToken);val errors=jobService.validateResult(job,request.result,request.outputObjectIds)+jobService.validateRepositoryResult(job,request.repositoryResult)
+        val(job,_)=authenticate(workerId,jobId,attemptId,request.fencingToken)
+        val verificationFailure=request.verificationResult?.status in setOf(VerificationStatus.FAILED,VerificationStatus.CONFIG_MISSING,VerificationStatus.CONFIG_INVALID,VerificationStatus.TIMEOUT)
+        val repositoryErrors=if(verificationFailure){if(request.repositoryResult==null)emptyList() else listOf(ValidationError("$.repositoryResult","forbidden","Failed verification cannot publish repository metadata."))}else jobService.validateRepositoryResult(job,request.repositoryResult)
+        val errors=jobService.validateResult(job,request.result,request.outputObjectIds)+repositoryErrors+jobService.validateVerificationResult(job,request.verificationResult,request.repositoryResult)
         if(errors.isNotEmpty()){uploads.discardAttemptOutputs(jobId,attemptId);val scheduled=jobs.rejectOutput(job,attemptId,if(errors.any{it.code=="required"})"MISSING_REQUIRED_ARTIFACT" else "MODEL_OUTPUT_SCHEMA_INVALID",errors.joinToString("; "){it.message});return OutputRejectedResponse("OUTPUT_REJECTED",scheduled,errors)}
         if(request.repositoryResult?.publicationStatus==RepositoryPublicationStatus.PUSHED)throw ApiException("REPOSITORY_PUBLICATION_NOT_PREPARED","PUSHED results require the publication prepare/confirm protocol.",HttpStatus.CONFLICT)
-        jobs.complete(jobId,attemptId,request.result,request.repositoryResult,usage.attemptSummary(attemptId).usageQuality);return null
+        if(verificationFailure){
+            val verification=requireNotNull(request.verificationResult)
+            val code=when(verification.status){VerificationStatus.CONFIG_MISSING->"VERIFICATION_CONFIG_MISSING";VerificationStatus.CONFIG_INVALID->"VERIFICATION_CONFIG_INVALID";VerificationStatus.TIMEOUT->"VERIFICATION_TIMEOUT";else->"VERIFICATION_FAILED"}
+            jobs.completeWithVerificationFailure(jobId,attemptId,request.result,verification,usage.attemptSummary(attemptId).usageQuality,code,"Repository verification did not pass; nothing was committed or pushed.")
+        }else jobs.complete(jobId,attemptId,request.result,request.repositoryResult,request.verificationResult,usage.attemptSummary(attemptId).usageQuality)
+        return null
     }
 
     @Transactional fun preparePublication(workerId:String,jobId:String,attemptId:String,request:PrepareRepositoryPublicationRequest):Pair<RepositoryPublicationIntentView,OutputRejectedResponse?> {
         val(job,_)=authenticate(workerId,jobId,attemptId,request.fencingToken)
         val checkout=job.request.repositoryCheckout
         if(checkout==null||checkout.publicationMode!=RepositoryPublicationMode.COMMIT_AND_PUSH)throw ApiException("INVALID_REPOSITORY_CHECKOUT","Job is not a mutating repository checkout.",HttpStatus.CONFLICT)
-        val errors=jobService.validateResult(job,request.result,request.outputObjectIds)+jobService.validateRepositoryResult(job,request.repositoryResult)
+        val errors=jobService.validateResult(job,request.result,request.outputObjectIds)+jobService.validateRepositoryResult(job,request.repositoryResult)+jobService.validateVerificationResult(job,request.verificationResult,request.repositoryResult)
         if(request.repositoryResult.publicationStatus!=RepositoryPublicationStatus.PUSHED)throw ApiException("INVALID_REPOSITORY_RESULT","Prepared publication requires intended status PUSHED.")
+        if(request.verificationResult?.status !in setOf(null,VerificationStatus.PASSED,VerificationStatus.SKIPPED))throw ApiException("VERIFICATION_FAILED","Repository publication requires passed or skipped verification.",HttpStatus.CONFLICT)
         if(errors.isNotEmpty()){
             uploads.discardAttemptOutputs(jobId,attemptId)
             val scheduled=jobs.rejectOutput(job,attemptId,if(errors.any{it.code=="required"})"MISSING_REQUIRED_ARTIFACT" else "MODEL_OUTPUT_SCHEMA_INVALID",errors.joinToString("; "){it.message})
             return RepositoryPublicationIntentView(jobId,attemptId,checkout.alias,checkout.branch,request.repositoryResult.checkoutCommitSha,request.repositoryResult.commitSha!!,RepositoryPublicationIntentStatus.PREPARED,Instant.now()) to OutputRejectedResponse("OUTPUT_REJECTED",scheduled,errors)
         }
         val repositoryResult=request.repositoryResult
-        val existing=publications.prepare(jobId,attemptId,checkout.alias,checkout.branch,repositoryResult.checkoutCommitSha,repositoryResult.commitSha!!,repositoryResult.diffStat,request.result,request.outputObjectIds)
-        if(existing.result!=request.result||existing.outputObjectIds!=request.outputObjectIds||existing.diffStat!=repositoryResult.diffStat||existing.view.alias!=checkout.alias||existing.view.branch!=checkout.branch||existing.view.checkoutCommitSha!=repositoryResult.checkoutCommitSha||existing.view.intendedCommitSha!=repositoryResult.commitSha)throw ApiException("REPOSITORY_PUBLICATION_AMBIGUOUS","A different publication intent already exists.",HttpStatus.CONFLICT)
+        val existing=publications.prepare(jobId,attemptId,checkout.alias,checkout.branch,repositoryResult.checkoutCommitSha,repositoryResult.commitSha!!,repositoryResult.diffStat,request.result,request.outputObjectIds,request.verificationResult)
+        if(existing.result!=request.result||existing.outputObjectIds!=request.outputObjectIds||existing.diffStat!=repositoryResult.diffStat||existing.verificationResult!=request.verificationResult||existing.view.alias!=checkout.alias||existing.view.branch!=checkout.branch||existing.view.checkoutCommitSha!=repositoryResult.checkoutCommitSha||existing.view.intendedCommitSha!=repositoryResult.commitSha)throw ApiException("REPOSITORY_PUBLICATION_AMBIGUOUS","A different publication intent already exists.",HttpStatus.CONFLICT)
         jobs.progress(jobId,attemptId,"PUBLISHING",95,"Validated result stored; repository push may proceed.")
         return existing.view to null
     }
@@ -154,10 +163,10 @@ class V2WorkerService(
         val stored=publications.find(jobId)?:throw ApiException("REPOSITORY_PUBLICATION_AMBIGUOUS","Publication intent is unavailable.",HttpStatus.CONFLICT)
         if(stored.view.intendedCommitSha!=request.commitSha)throw ApiException("REPOSITORY_PUBLICATION_AMBIGUOUS","Confirmed commit differs from the prepared intent.",HttpStatus.CONFLICT)
         val repositoryResult=RepositoryResult(stored.view.alias,stored.view.branch,stored.view.checkoutCommitSha,RepositoryPublicationStatus.PUSHED,stored.view.intendedCommitSha,stored.diffStat)
-        val errors=jobService.validateResult(job,stored.result,stored.outputObjectIds)+jobService.validateRepositoryResult(job,repositoryResult)
+        val errors=jobService.validateResult(job,stored.result,stored.outputObjectIds)+jobService.validateRepositoryResult(job,repositoryResult)+jobService.validateVerificationResult(job,stored.verificationResult,repositoryResult)
         if(errors.isNotEmpty())throw ApiException("REPOSITORY_PUBLICATION_AMBIGUOUS","Prepared output is no longer valid.",HttpStatus.CONFLICT)
         publications.markPushed(jobId,request.commitSha)
-        jobs.complete(jobId,attemptId,stored.result,repositoryResult,usage.attemptSummary(attemptId).usageQuality)
+        jobs.complete(jobId,attemptId,stored.result,repositoryResult,stored.verificationResult,usage.attemptSummary(attemptId).usageQuality)
         publications.markFinalized(jobId)
     }
 

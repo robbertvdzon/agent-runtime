@@ -89,7 +89,7 @@ class V2OpenAiApiExecutor(
     private fun finish(job:StoredV2Job,attempt:StoredV2Attempt,result:JsonNode,outputIds:Set<String>) {
         val fresh=jobs.find(job.view.id)!!;val errors=jobService.validateResult(fresh,result,outputIds)
         if(errors.isNotEmpty()){uploadService.discardAttemptOutputs(job.view.id,attempt.view.id);jobs.rejectOutput(fresh,attempt.view.id,"MODEL_OUTPUT_SCHEMA_INVALID",errors.joinToString("; "){it.message});return}
-        jobs.complete(job.view.id,attempt.view.id,result,null,usage.attemptSummary(attempt.view.id).usageQuality)
+        jobs.complete(job.view.id,attempt.view.id,result,null,null,usage.attemptSummary(attempt.view.id).usageQuality)
     }
 
     private fun recordResponseMetadata(job:StoredV2Job,attempt:StoredV2Attempt,response:JsonNode) {

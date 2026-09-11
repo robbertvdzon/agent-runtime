@@ -227,6 +227,63 @@ class WorkerSupportTest {
             .isInstanceOf(JobFailure::class.java).extracting("code").isEqualTo("UNSAFE_REPOSITORY_OUTPUT")
     }
 
+    @Test
+    fun `repository verification config is strict safe and selects commands by changed path`(@TempDir root: Path) {
+        root.resolve(".factory").createDirectories()
+        root.resolve("backend").createDirectories()
+        root.resolve("frontend").createDirectories()
+        root.resolve(".factory/verification.yaml").writeText(
+            """
+            version: 1
+            commands:
+              - id: backend-verify
+                pathPrefixes: [backend/, pom.xml]
+                argv: [mvn, -B, verify]
+                workingDirectory: backend
+                timeoutSeconds: 1800
+              - id: frontend-verify
+                pathPrefixes: [frontend/]
+                agentRunnable: false
+                argv: [flutter, test]
+                workingDirectory: frontend
+                timeoutSeconds: 900
+            """.trimIndent(),
+        )
+        val support = V2VerificationSupport()
+        val loaded = support.load(root)
+        assertThat(loaded).isInstanceOf(VerificationConfigLoad.Loaded::class.java)
+        val config = (loaded as VerificationConfigLoad.Loaded).config
+        assertThat(support.selectedCommands(config, setOf("backend/src/App.kt")).map { it.id }).containsExactly("backend-verify")
+        assertThat(support.selectedCommands(config, setOf("README.md"))).isEmpty()
+        assertThat(support.selectedCommands(config, null).map { it.id }).containsExactly("backend-verify")
+        assertThat(support.commandWorkingDirectory(root, config.commands.first())).isEqualTo(root.resolve("backend"))
+
+        root.resolve(".factory/verification.yaml").writeText(
+            """
+            version: 1
+            commands:
+              - id: unsafe
+                argv: [mvn, verify]
+                workingDirectory: ../outside
+                timeoutSeconds: 10
+            """.trimIndent(),
+        )
+        assertThat(support.load(root)).isInstanceOf(VerificationConfigLoad.Invalid::class.java)
+    }
+
+    @Test
+    fun `repository verification distinguishes missing invalid and symlinked config`(@TempDir root: Path) {
+        val support = V2VerificationSupport()
+        assertThat(support.load(root)).isEqualTo(VerificationConfigLoad.Missing)
+        root.resolve(".factory").createDirectories()
+        root.resolve(".factory/verification.yaml").writeText("version: 2\ncommands: []\n")
+        assertThat(support.load(root)).isInstanceOf(VerificationConfigLoad.Invalid::class.java)
+        Files.deleteIfExists(root.resolve(".factory/verification.yaml"))
+        val outside = root.resolve("outside.yaml").also { it.writeText("version: 1\ncommands: []\n") }
+        root.resolve(".factory/verification.yaml").createSymbolicLinkPointingTo(outside)
+        assertThat(support.load(root)).isInstanceOf(VerificationConfigLoad.Invalid::class.java)
+    }
+
     private data class GitFixture(val remote:Path,val branch:String,val initialStorySha:String)
 
     private fun gitFixture(root:Path):GitFixture {

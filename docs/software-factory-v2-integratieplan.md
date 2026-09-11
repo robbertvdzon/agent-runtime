@@ -523,10 +523,12 @@ Minimale ketentest voor Software Factory-gebruik:
 7. Controleer dat er exact één storybranch bestaat en dat Runtime geen PR heeft gemaakt.
 8. Laat de testconsumer één PR maken en controleer dat alle workercommits daarin zichtbaar zijn.
 
-GitHub PR-checks vormen in de eerste Software Factory-versie het onafhankelijke machinebewijs en
-de PR levert de preview-identiteit. Deze prerequisite voegt daarom geen nieuwe generieke shell- of
-`.factory/verification.yaml`-executor aan Agent Runtime toe. Zo'n executor kan later als apart
-capabilitybesluit worden toegevoegd en is geen reden om branchhergebruik uit te stellen.
+GitHub PR-checks blijven het onafhankelijke mergebewijs en de PR levert de preview-identiteit.
+Daarnaast ondersteunt Agent Runtime nu de afzonderlijk gespecificeerde, repositorygestuurde
+verificatie uit `docs/verificatie-in-de-job.md`: de worker voert uitsluitend de commandoset uit
+`.factory/verification.yaml` uit, geeft rood bewijs terug aan dezelfde agent en publiceert alleen
+bij groen. Dit is nadrukkelijk geen generieke shell-executor; de consumer kan geen commando's
+meesturen.
 
 ## Aanbevolen implementatievolgorde
 
