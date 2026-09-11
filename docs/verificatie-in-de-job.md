@@ -1,8 +1,8 @@
 # Agent Runtime — verificatie binnen de job
 
-Status: ontwerpbeslissingen compleet, nog niet geïmplementeerd
+Status: volledig geïmplementeerd en in productie geverifieerd
 
-Peildatum: 2026-09-10
+Peildatum: 2026-09-11
 
 Doelrepository: `agent-runtime`
 
