@@ -105,7 +105,9 @@ credentialbroker in plaats van een leesbare secretmount.
 
 Het gedeelde multi-arch image bevat Codex, Claude, Git, JDK 17 en 21 met Maven, Flutter, Node,
 Python, Bash, Playwright/Chromium, `oc`/`kubectl` en PostgreSQL-tools. De worker gebruikt
-`--pull always` voor de bewegende `main`-tag.
+`--pull always` voor de bewegende `main`-tag. Flutter is binnen het image expliciet gepind op
+3.44.6, gelijk aan de Software Factory-CI, zodat SDK-gebonden `flutter_test`-transitives dezelfde
+`pubspec.lock` houden tijdens repositoryverificatie.
 
 De container krijgt vaste read-only input-, documentatie- en secretmounts, een schrijfbare
 outputdirectory en een aparte `/work`-worktree. Alleen technische job- en attemptidentifiers staan

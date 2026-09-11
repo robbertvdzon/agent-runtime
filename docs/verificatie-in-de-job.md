@@ -256,6 +256,10 @@ bestaande image uit met de toolchain die de huidige `.factory/verification.yaml`
 hebben, waaronder minimaal Maven, ondersteunde JDK's, Flutter, Node, Python, Bash en de reeds
 aanwezige browsertooling.
 
+De concrete Flutter-versie in het brede image is 3.44.6 en volgt daarmee de gepinde Software
+Factory-CI. Een bewegende `stable`-checkout is ongeschikt: Flutter-SDK-versies pinnen verschillende
+`flutter_test`-transitives en kunnen daardoor een verder geldige projectlockfile herschrijven.
+
 Bouw en test het image voor de architectuur van de daadwerkelijke MacBook-worker. Ontbrekende
 tooling is een expliciete verificatiefout en geen reden om een projectimage dynamisch te kiezen.
 Nieuwe algemeen benodigde tooling wordt gecontroleerd aan het centrale image toegevoegd.

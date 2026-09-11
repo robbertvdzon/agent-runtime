@@ -3,6 +3,7 @@ FROM node:22-bookworm-slim AS node-runtime
 FROM eclipse-temurin:21-jdk-noble
 
 ARG TARGETARCH
+ARG FLUTTER_VERSION=3.44.6
 
 ENV DEBIAN_FRONTEND=noninteractive \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
@@ -26,10 +27,11 @@ RUN node --version \
 RUN useradd --create-home --shell /bin/bash agent \
     && install -d -o agent -g agent /work /job/input /job/secrets /job/docs /job/output/artifacts /home/agent/.codex /home/agent/.claude
 
-# Eén brede, gedeelde toolchain voor agentwerk én repositoryverificatie. De stable Flutter-
-# checkout volgt dezelfde aanpak als de bestaande Software Factory-agentimage; de cache is van de
-# niet-geprivilegieerde execution-user zodat projectbuilds hem veilig kunnen gebruiken.
-RUN git clone --depth 1 --branch stable https://github.com/flutter/flutter.git /opt/flutter \
+# Eén brede, gedeelde toolchain voor agentwerk én repositoryverificatie. Flutter is bewust gepind
+# op dezelfde versie als de Software Factory-CI: verschillende Flutter-SDK's pinnen verschillende
+# flutter_test-transitives en zouden daardoor dezelfde pubspec.lock herschrijven. De cache is van
+# de niet-geprivilegieerde execution-user zodat projectbuilds hem veilig kunnen gebruiken.
+RUN git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git /opt/flutter \
     && chown -R agent:agent /opt/flutter
 ENV PATH="/opt/flutter/bin:${PATH}" \
     JAVA_HOME_17_X64=/usr/lib/jvm/java-17-openjdk-amd64 \
