@@ -2,6 +2,7 @@
 
 Flutter Web-beheerinterface voor Agent Runtime. De monitor gebruikt de beveiligde
 `/v1/management`-API en wordt als statische webbuild in de server-JAR opgenomen.
+Lokale releasebuilds en CI gebruiken exact Flutter 3.44.6.
 
 ## Ontwikkelen
 
