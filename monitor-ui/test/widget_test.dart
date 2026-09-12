@@ -6,6 +6,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('fresh GET URL omzeilt oude caches en bewaart filters', () {
+    final uri = freshGetUri(
+      '/v2/management/consumers?consumer=hkh',
+      nonce: 123,
+    );
+
+    expect(uri.path, '/v2/management/consumers');
+    expect(uri.queryParameters['consumer'], 'hkh');
+    expect(uri.queryParameters['_fresh'], '123');
+  });
+
   testWidgets('status has a textual accessible label at mobile width', (
     tester,
   ) async {

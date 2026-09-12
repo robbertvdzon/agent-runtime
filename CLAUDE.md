@@ -42,5 +42,6 @@ documentatie vormen één versie en worden samen bijgewerkt.
 
 Gebruik Java 21. Na backend- of contractwijzigingen draait minimaal
 `mvn -B --no-transfer-progress verify`. Na monitorwijzigingen draaien `flutter analyze`,
-`flutter test` en `flutter build web --release`; synchroniseer daarna `monitor-ui/build/web/` naar
+`flutter test` en `bash monitor-ui/tool/build_and_sync.sh`; dat laatste commando maakt de
+cacheveilige webbuild en synchroniseert die naar
 `agent-runtime-server/src/main/resources/static/`.

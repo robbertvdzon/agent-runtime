@@ -3,6 +3,7 @@ class BrowserPlatform {
   static String readToken() => _token;
   static void writeToken(String value) => _token = value;
   static void replaceQuery(String query) {}
+  static Future<void> reloadLatest() async {}
   static void download(
     String filename,
     String mimeType,

@@ -14,6 +14,21 @@ import 'google_signin_button_stub.dart'
 
 void main() => runApp(const RuntimeMonitor());
 
+const frontendBuildId = String.fromEnvironment(
+  'AGENT_RUNTIME_FRONTEND_BUILD_ID',
+  defaultValue: 'development',
+);
+
+Uri freshGetUri(String path, {int? nonce}) {
+  final uri = Uri.parse(path);
+  return uri.replace(
+    queryParameters: {
+      ...uri.queryParameters,
+      '_fresh': '${nonce ?? DateTime.now().microsecondsSinceEpoch}',
+    },
+  );
+}
+
 class RuntimeMonitor extends StatelessWidget {
   const RuntimeMonitor({super.key});
   @override
@@ -69,7 +84,7 @@ class ApiClient {
 
   Future<Map<String, dynamic>> get(String path) async {
     final response = await http
-        .get(Uri.parse(path), headers: headers)
+        .get(freshGetUri(path), headers: headers)
         .timeout(const Duration(seconds: 20));
     if (response.statusCode == 401) {
       throw const ApiError('Sessie verlopen', unauthorized: true);
@@ -89,7 +104,7 @@ class ApiClient {
 
   Future<AuthConfig> authConfig() async {
     final response = await http
-        .get(Uri.parse('/v1/auth/config'))
+        .get(freshGetUri('/v1/auth/config'))
         .timeout(const Duration(seconds: 20));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiError('Google-login kon niet worden geladen');
@@ -368,6 +383,8 @@ class _MonitorShellState extends State<MonitorShell> {
   String? error;
   DateTime? snapshotAt;
   Timer? timer;
+  Timer? frontendVersionTimer;
+  bool frontendReloadPending = false;
   String search =
       Uri.base.queryParameters['title'] ??
       Uri.base.queryParameters['search'] ??
@@ -393,16 +410,39 @@ class _MonitorShellState extends State<MonitorShell> {
         refresh(silent: true);
       }
     });
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => api.token.isEmpty ? login() : refresh(),
+    frontendVersionTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _checkFrontendVersion(),
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkFrontendVersion();
+      api.token.isEmpty ? login() : refresh();
+    });
   }
 
   @override
   void dispose() {
     timer?.cancel();
+    frontendVersionTimer?.cancel();
     searchController.dispose();
     super.dispose();
+  }
+
+  Future<void> _checkFrontendVersion() async {
+    if (frontendReloadPending || frontendBuildId == 'development') return;
+    try {
+      final response = await http
+          .get(freshGetUri('/version.json'))
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode < 200 || response.statusCode >= 300) return;
+      final remote = jsonDecode(response.body) as Map<String, dynamic>;
+      final remoteBuildId = remote['buildId']?.toString() ?? '';
+      if (remoteBuildId.isEmpty || remoteBuildId == frontendBuildId) return;
+      frontendReloadPending = true;
+      await BrowserPlatform.reloadLatest();
+    } catch (_) {
+      // A transient version-check failure must not disrupt the monitor.
+    }
   }
 
   Future<void> login() async {

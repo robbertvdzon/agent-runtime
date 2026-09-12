@@ -51,9 +51,8 @@ Java 21, Maven 3.9 en Flutter zijn vereist voor de volledige build.
 export JAVA_HOME=$(/usr/libexec/java_home -v 21)
 cd monitor-ui
 flutter test
-flutter build web --release
 cd ..
-rsync -a --delete monitor-ui/build/web/ agent-runtime-server/src/main/resources/static/
+bash monitor-ui/tool/build_and_sync.sh
 mvn -B --no-transfer-progress clean verify
 java -jar agent-runtime-server/target/agent-runtime-server-0.1.0-SNAPSHOT.jar
 ```
@@ -274,6 +273,12 @@ artifacts. De pagina **Gebruik & kosten** toont het v2-verbruik, het aandeel per
 beschikbare directe, berekende of abonnementskosten. Afbeeldingen worden inline weergegeven en blijven downloadbaar. De monitor gebruikt in
 productie Google-login met een server-side e-mailallowlist en heeft een ingeklapte
 beheertoken-noodroute.
+
+De monitorbuild gebruikt geen service-worker. De appbundle heeft per inhoud een nieuwe
+bestandsnaam; uitsluitend dat content-gehashte bestand wordt immutable gecachet. Alle API-GET's
+hebben daarnaast een cache-buster en de server antwoordt daarop met `no-store`. Een kill-switch
+ruimt oude Flutter-service-workers en hun caches op. Een open monitor controleert iedere dertig
+seconden `version.json` en herlaadt zichzelf wanneer een nieuwere frontend live staat.
 
 ## CI en productie
 

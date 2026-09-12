@@ -8,6 +8,8 @@ import org.springframework.web.filter.OncePerRequestFilter
 
 @Component
 class StaticCacheHeaders : OncePerRequestFilter() {
+    private val contentHashedBundle = Regex("^/main\\.[0-9a-f]+\\.js$")
+
     override fun shouldNotFilter(request: HttpServletRequest): Boolean =
         request.requestURI.startsWith("/actuator/") || request.requestURI == "/healthz"
 
@@ -17,9 +19,12 @@ class StaticCacheHeaders : OncePerRequestFilter() {
             "Cache-Control",
             if (path.startsWith("/v1/") || path.startsWith("/v2/"))
                 "no-store, private"
-            else if (path == "/" || path.endsWith("/index.html") || path.endsWith("/version.json") || path.endsWith(".js"))
+            else if (path.endsWith("/flutter_service_worker.js"))
                 "no-store"
-            else "public, max-age=31536000, immutable",
+            else if (contentHashedBundle.matches(path))
+                "public, max-age=31536000, immutable"
+            else
+                "no-cache, must-revalidate",
         )
         chain.doFilter(request, response)
     }

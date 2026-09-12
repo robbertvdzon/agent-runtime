@@ -176,9 +176,16 @@ afbeeldingsvoorbeelden en een jobkaart op 320 pixels met 200% tekstvergroting. `
 cd monitor-ui
 flutter analyze
 flutter test
-flutter build web --release
 cd ..
-rsync -a --delete monitor-ui/build/web/ agent-runtime-server/src/main/resources/static/
+bash monitor-ui/tool/build_and_sync.sh
 ```
 
 De gesynchroniseerde bestanden worden onderdeel van de server-JAR en de servercontainer.
+
+De webbuild registreert geen service-worker. Een oude Flutter-service-worker krijgt via
+`flutter_service_worker.js` een `no-store` kill-switch die zijn caches wist en zichzelf
+deregistreert. `index.html`, bootstrap, versiegegevens en vaste assets moeten steeds revalideren;
+alleen `main.<content-hash>.js` is een jaar immutable. JSON-GET's gebruiken bovendien een unieke
+cacheparameter en `/v1/**` en `/v2/**` antwoorden met `no-store, private`. Een open tab controleert
+iedere dertig seconden `version.json` en herlaadt bij een afwijkende build-ID na het opruimen van
+eventuele oude browsercaches.

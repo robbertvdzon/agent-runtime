@@ -19,8 +19,8 @@ jobs:
         with: {channel: stable, cache: true}
       - run: flutter test
         working-directory: monitor-ui
-      - run: flutter build web --release
-        working-directory: monitor-ui
+      - run: bash monitor-ui/tool/build_and_sync.sh
+      - run: git diff --exit-code -- agent-runtime-server/src/main/resources/static
       - run: mvn -B --no-transfer-progress verify
       - run: bash execution-images/test-run-agent.sh
       - run: |

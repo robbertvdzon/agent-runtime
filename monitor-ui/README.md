@@ -18,13 +18,17 @@ het lokale `local-admin-token`.
 ## Releasebuild
 
 ```bash
-flutter build web --release
 cd ..
-rsync -a --delete monitor-ui/build/web/ agent-runtime-server/src/main/resources/static/
+bash monitor-ui/tool/build_and_sync.sh
 ```
 
 Commit zowel de Flutter-bron als de gesynchroniseerde serverassets. De repository-CI bouwt en test
 de monitor opnieuw en neemt de assets op in de servercontainer.
+
+Het script bouwt zonder Flutter-service-worker, geeft de appbundle een content-gehashte naam,
+plaatst een kill-switch voor bezoekers met een oude service-worker en schrijft een deterministische
+`version.json`. De monitor vergelijkt die versie iedere dertig seconden met zijn eigen build en
+herlaadt na een deploy automatisch. API-GET's krijgen altijd een cache-buster.
 
 De functionele beschrijving staat in
 [`../docs/beheerinterface.md`](../docs/beheerinterface.md).
