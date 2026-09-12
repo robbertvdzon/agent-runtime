@@ -301,3 +301,34 @@ class WorkerSupportTest {
         return output
     }
 }
+
+class WorkerSlotsTest {
+    private fun job(kind: nl.vdzon.agentruntime.contracts.v2.JobKind, task: nl.vdzon.agentruntime.contracts.v2.TaskType) =
+        jacksonObjectMapper().registerModule(JavaTimeModule()).convertValue(mapOf("id" to "j", "tenantId" to "t", "idempotencyKey" to "k", "jobKind" to kind, "taskType" to task,
+            "execution" to mapOf("vendorId" to "local", "model" to "m", "mode" to "LOCAL"), "status" to "RUNNING", "phase" to "EXECUTING", "attemptCount" to 1, "maxAttempts" to 3,
+            "createdAt" to "2026-01-01T00:00:00Z", "updatedAt" to "2026-01-01T00:00:00Z"), nl.vdzon.agentruntime.contracts.v2.JobView::class.java)
+
+    @Test
+    fun `claims unfiltered when idle and only for classes with free slots when busy`() {
+        val slots = WorkerSlots(2, 1, 1)
+        assertThat(slots.total).isEqualTo(4)
+        assertThat(slots.claimPlan()).containsExactly(WorkerClaimFilter(null, null))
+        val repository = slots.classOf(job(nl.vdzon.agentruntime.contracts.v2.JobKind.REPOSITORY_WORK, nl.vdzon.agentruntime.contracts.v2.TaskType.REPOSITORY_AGENT))
+        assertThat(repository).isEqualTo(WorkerSlotClass.REPOSITORY)
+        slots.acquire(repository)
+        val plan = slots.claimPlan()
+        assertThat(plan.map { it.jobKinds }).doesNotContain(setOf(nl.vdzon.agentruntime.contracts.v2.JobKind.REPOSITORY_WORK))
+        assertThat(plan).hasSize(2)
+        assertThat(slots.classOf(job(nl.vdzon.agentruntime.contracts.v2.JobKind.APPLICATION_WORK, nl.vdzon.agentruntime.contracts.v2.TaskType.TRANSCRIPTION))).isEqualTo(WorkerSlotClass.TRANSCRIPTION)
+        slots.acquire(WorkerSlotClass.APPLICATION); slots.acquire(WorkerSlotClass.APPLICATION); slots.acquire(WorkerSlotClass.TRANSCRIPTION)
+        assertThat(slots.claimPlan()).isEmpty()
+        slots.release(WorkerSlotClass.APPLICATION)
+        assertThat(slots.claimPlan().single().taskTypes).doesNotContain(nl.vdzon.agentruntime.contracts.v2.TaskType.TRANSCRIPTION)
+    }
+
+    @Test
+    fun `whisper model configuration is parsed from name path pairs`() {
+        assertThat(WorkerConfig.whisperModels("large-v3-turbo=/tmp/a.bin, small = /tmp/b.bin,broken"))
+            .isEqualTo(mapOf("large-v3-turbo" to Path.of("/tmp/a.bin"), "small" to Path.of("/tmp/b.bin")))
+    }
+}

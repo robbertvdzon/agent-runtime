@@ -1213,6 +1213,29 @@ components:
           uniqueItems: true
           items: {type: string, pattern: '^[A-Z][A-Z0-9_]*__[A-Z][A-Z0-9_]*$'}
         executionTimeoutSeconds: {type: integer, minimum: 30, maximum: 86400}
+        transcription: {$ref: '#/components/schemas/TranscriptionOptions'}
+        synthesis: {$ref: '#/components/schemas/SpeechSynthesisOptions'}
+
+    TranscriptionOptions:
+      type: object
+      additionalProperties: false
+      description: Optional TRANSCRIPTION settings. API and LOCAL transcription require exactly one input object.
+      properties:
+        language: {type: string, pattern: '^([a-z]{2}|auto)$', description: ISO 639-1 code or auto (default).}
+
+    SpeechSynthesisOptions:
+      type: object
+      additionalProperties: false
+      description: |
+        SPEECH_SYNTHESIS (API mode, vendor openai or elevenlabs) requires exactly one declared output artifact
+        accepting audio/mpeg. Text comes from an optional input object named `text`: text/plain is one segment,
+        application/json is {"segments":[{"text":"...","voice":"onyx","speed":1.2}]} with per-segment voice and
+        speed falling back to these options. Without an input object the instruction is the text. Long text is
+        chunked (openai 4000, elevenlabs 4500 characters) and joined into one MP3. The result is
+        {"characters":n,"chunks":n,"segments":n}; usage is reported as CHARACTERS.
+      properties:
+        voice: {type: string, maxLength: 100, description: OpenAI voice name or ElevenLabs voice id.}
+        speed: {type: number, minimum: 0.25, maximum: 4.0}
 
     ExecutionSelection:
       type: object
@@ -1910,6 +1933,14 @@ components:
           maxItems: 100
           items: {$ref: '#/components/schemas/ExecutorCapability'}
         waitSeconds: {type: integer, minimum: 0, maximum: 25}
+        jobKinds:
+          type: array
+          description: Optional filter; only jobs of these kinds are claimed. Workers use it to keep separate slots per job class.
+          items: {$ref: '#/components/schemas/JobKind'}
+        taskTypes:
+          type: array
+          description: Optional filter; only jobs of these task types are claimed.
+          items: {$ref: '#/components/schemas/TaskType'}
 
     ClaimedJob:
       type: object
@@ -2215,7 +2246,11 @@ components:
 
     ExecutionMode:
       type: string
-      enum: [SUBSCRIPTION, API, MOCK]
+      enum: [SUBSCRIPTION, API, MOCK, LOCAL]
+      description: |
+        SUBSCRIPTION runs Codex/Claude on a worker. API runs server-side: openai for STRUCTURED_GENERATION,
+        TRANSCRIPTION and SPEECH_SYNTHESIS, elevenlabs for SPEECH_SYNTHESIS. LOCAL runs whisper.cpp on a
+        worker host (vendorId local, TRANSCRIPTION only). MOCK is for non-production tests.
 
     JobStatus:
       type: string

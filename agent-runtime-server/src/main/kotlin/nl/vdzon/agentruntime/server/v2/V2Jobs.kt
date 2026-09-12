@@ -187,6 +187,8 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
     companion object { fun utc(value:Instant)=value.atOffset(ZoneOffset.UTC); fun instant(value:Any):Instant=when(value){is OffsetDateTime->value.toInstant();is java.sql.Timestamp->value.toInstant();else->error("Unsupported timestamp")}; fun hash(value:String)=MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString(""){"%02x".format(it)} }
 }
 
+internal fun v2ProviderName(vendorId:String)=when(vendorId){"openai"->"CODEX";"anthropic"->"CLAUDE";"mock"->"MOCKED";else->vendorId.uppercase()}
+
 @Service
 class V2JobService(private val properties:RuntimeProperties,private val jobs:V2JobStore,private val objects:V2ObjectStore,private val validator:JsonResultValidator,private val mapper:ObjectMapper) {
     @Transactional
@@ -219,17 +221,29 @@ class V2JobService(private val properties:RuntimeProperties,private val jobs:V2J
         if(e.mode==ExecutionMode.MOCK && (e.vendorId!="mock"||e.model!="mock")) throw ApiException("INVALID_EXECUTION","MOCK requires vendorId and model 'mock'.")
         if(e.mode!=ExecutionMode.MOCK && e.vendorId=="mock") throw ApiException("INVALID_EXECUTION","The mock vendor is only valid in MOCK mode.")
         if(properties.environment==RuntimeEnvironment.PRODUCTION && e.mode==ExecutionMode.MOCK) throw ApiException("MOCK_NOT_ALLOWED","Mock execution is disabled in production.",HttpStatus.UNPROCESSABLE_ENTITY)
-        val providerName=when(e.vendorId){"openai"->"CODEX";"anthropic"->"CLAUDE";"mock"->"MOCKED";else->e.vendorId.uppercase()}
+        val providerName=v2ProviderName(e.vendorId)
         if(providerName !in properties.allowedProviders(tenantId)) throw ApiException("EXECUTION_NOT_ALLOWED","Vendor ${e.vendorId} is not allowed for $tenantId.",HttpStatus.UNPROCESSABLE_ENTITY)
         if(!properties.modelAllowed(tenantId,e.model)) throw ApiException("EXECUTION_NOT_ALLOWED","Model ${e.model} is not allowed for $tenantId.",HttpStatus.UNPROCESSABLE_ENTITY)
         val supported = when(e.mode) {
             ExecutionMode.MOCK -> e.vendorId=="mock"
             ExecutionMode.SUBSCRIPTION -> e.vendorId in setOf("openai","anthropic") && request.taskType in setOf(TaskType.STRUCTURED_GENERATION,TaskType.REPOSITORY_AGENT)
-            ExecutionMode.API -> e.vendorId=="openai" && request.taskType in setOf(TaskType.STRUCTURED_GENERATION,TaskType.TRANSCRIPTION)
+            ExecutionMode.API -> (e.vendorId=="openai" && request.taskType in setOf(TaskType.STRUCTURED_GENERATION,TaskType.TRANSCRIPTION,TaskType.SPEECH_SYNTHESIS)) || (e.vendorId=="elevenlabs" && request.taskType==TaskType.SPEECH_SYNTHESIS)
+            ExecutionMode.LOCAL -> e.vendorId=="local" && request.taskType==TaskType.TRANSCRIPTION
         }
         if(!supported) throw ApiException("EXECUTION_NOT_SUPPORTED","This exact vendor/model/mode/task combination has no executor.",HttpStatus.UNPROCESSABLE_ENTITY)
-        if(e.mode==ExecutionMode.API && properties.openAiApiKey.isBlank()) throw ApiException("EXECUTION_NOT_CONFIGURED","OpenAI API execution is not configured on this Runtime.",HttpStatus.UNPROCESSABLE_ENTITY)
+        if(e.mode==ExecutionMode.API && e.vendorId=="openai" && properties.openAiApiKey.isBlank()) throw ApiException("EXECUTION_NOT_CONFIGURED","OpenAI API execution is not configured on this Runtime.",HttpStatus.UNPROCESSABLE_ENTITY)
+        if(e.mode==ExecutionMode.API && e.vendorId=="elevenlabs" && properties.elevenLabsApiKey.isBlank()) throw ApiException("EXECUTION_NOT_CONFIGURED","ElevenLabs API execution is not configured on this Runtime.",HttpStatus.UNPROCESSABLE_ENTITY)
         if(e.mode==ExecutionMode.API && request.taskType==TaskType.STRUCTURED_GENERATION && request.output.artifacts.any{it.required}) throw ApiException("EXECUTION_NOT_SUPPORTED","OpenAI structured API jobs cannot currently produce required file artifacts.",HttpStatus.UNPROCESSABLE_ENTITY)
+        if(request.taskType==TaskType.SPEECH_SYNTHESIS) validateSynthesis(request)
+        if(request.taskType==TaskType.TRANSCRIPTION && e.mode in setOf(ExecutionMode.API,ExecutionMode.LOCAL) && request.input.objects.size!=1) throw ApiException("INVALID_TRANSCRIPTION_INPUT","Transcription requires exactly one input object.",HttpStatus.UNPROCESSABLE_ENTITY)
+    }
+
+    private fun validateSynthesis(request:CreateJobRequest) {
+        val audio=request.output.artifacts
+        if(audio.size!=1||"audio/mpeg" !in audio.single().mimeTypes) throw ApiException("INVALID_SYNTHESIS_REQUEST","Speech synthesis requires exactly one declared audio/mpeg output artifact.",HttpStatus.UNPROCESSABLE_ENTITY)
+        val objects=request.input.objects
+        if(objects.size>1||objects.any{it.name!="text"}) throw ApiException("INVALID_SYNTHESIS_REQUEST","Speech synthesis accepts at most one input object named 'text'.",HttpStatus.UNPROCESSABLE_ENTITY)
+        if(objects.isEmpty()&&request.synthesis?.voice.isNullOrBlank()) throw ApiException("INVALID_SYNTHESIS_REQUEST","synthesis.voice is required for instruction text.",HttpStatus.UNPROCESSABLE_ENTITY)
     }
 
     fun validateResult(job:StoredV2Job,result:JsonNode,outputIds:Set<String>):List<ValidationError> {

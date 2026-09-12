@@ -77,7 +77,9 @@ class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private va
         postJson("/v2/test-control/mocks",TEST_CONTROL,CreateMockFixtureRequest("product-factory",request.idempotencyKey,result=mapper.readTree("""{"text":"mock"}""")),200)
         val job=postJson("/v2/jobs",PRODUCT,request,202);val result=awaitResult(job.path("id").asText())
         assertThat(result.path("result").path("text").asText()).isEqualTo("mock")
-        val download=mvc.perform(get("/v2/jobs/${job.path("id").asText()}/objects/${objectView.path("objectId").asText()}/content").bearer(PRODUCT).header("Range","bytes=2-7")).andExpect(status().isPartialContent).andReturn().response
+        val started=mvc.perform(get("/v2/jobs/${job.path("id").asText()}/objects/${objectView.path("objectId").asText()}/content").bearer(PRODUCT).header("Range","bytes=2-7")).andReturn()
+        val download=(if(started.request.isAsyncStarted)mvc.perform(asyncDispatch(started)).andReturn() else started).response
+        assertThat(download.status).isEqualTo(206)
         assertThat(download.contentAsByteArray).isEqualTo(bytes.copyOfRange(2,8))
     }
 

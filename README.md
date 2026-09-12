@@ -145,6 +145,25 @@ die expliciete lijst claimt hij voor die provider geen v2-job. De Runtime kiest 
 `ghcr.io/robbertvdzon/agent-runtime-execution:main`; de worker gebruikt bij iedere job
 `docker run --pull always`.
 
+#### Parallelle slots en lokale transcriptie
+
+De worker voert meerdere v2-jobs tegelijk uit, met een eigen limiet per jobklasse zodat korte
+applicatiejobs nooit achter lange repositoryjobs wachten:
+`AR_WORKER_APPLICATION_SLOTS` (standaard 6), `AR_WORKER_REPOSITORY_SLOTS` (2) en
+`AR_WORKER_TRANSCRIPTION_SLOTS` (1). De server kent de som als `maxConcurrency`.
+
+`LOCAL`-transcriptie draait whisper.cpp direct op de Mac (Metal), niet in Docker:
+
+```bash
+brew install whisper-cpp ffmpeg
+mkdir -p ~/.cache/whisper
+curl -L -o ~/.cache/whisper/ggml-large-v3-turbo.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin
+```
+
+Zet daarna `AR_WHISPER_MODELS=large-v3-turbo=/Users/<account>/.cache/whisper/ggml-large-v3-turbo.bin`
+in `properties.env`. De worker adverteert `local/large-v3-turbo/LOCAL` voor `TRANSCRIPTION` alleen
+wanneer `whisper-cli`, `ffmpeg` en het modelbestand aanwezig zijn.
+
 Een worker-only laptop gebruikt geen `secrets.env`. Het bestand `secrets.env` in een
 deploymentcheckout is uitsluitend de lokale bron voor OpenShift-serversecrets.
 
@@ -223,6 +242,14 @@ geen model-fallback. `STRUCTURED_GENERATION` retourneert altijd een klein JSON-o
 markdown, audio en andere bestanden lopen vooraf via `POST /v2/uploads`, hervatbare `PATCH`-chunks
 en `POST /v2/uploads/{uploadId}/complete`. Een succesvolle `result.json` bevat de metadata en
 download-URL's van alle artifacts; de bytes blijven op de objectstore.
+
+Uitvoermodi: `SUBSCRIPTION` (Codex/Claude op een worker), `API` (server-side: `openai` voor
+`STRUCTURED_GENERATION`, `TRANSCRIPTION` en `SPEECH_SYNTHESIS`, `elevenlabs` voor
+`SPEECH_SYNTHESIS`; keys `AR_OPENAI_API_KEY` en `AR_ELEVENLABS_API_KEY`), `LOCAL` (whisper.cpp op
+een worker, alleen `TRANSCRIPTION`) en `MOCK`. De server voert maximaal
+`AR_API_EXECUTOR_CONCURRENCY` (standaard 6) API-jobs tegelijk uit. `SPEECH_SYNTHESIS` knipt lange
+tekst in stukken, ondersteunt meerdere stemmen via een JSON-invoerobject `text` en levert één MP3
+(zie `SpeechSynthesisOptions` in het contract).
 
 Live status, zichtbare agenttekst, toolactiviteit en door een provider geleverde
 reasoning-samenvattingen zijn beschikbaar via `GET /v2/jobs/{jobId}/event-stream` (SSE). Verborgen

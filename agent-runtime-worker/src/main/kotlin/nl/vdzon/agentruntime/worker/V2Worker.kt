@@ -21,17 +21,21 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.*
 
-class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: ObjectMapper, private val bootId: String) {
+class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: ObjectMapper, private val bootId: String, private val maxConcurrency: Int = 1) {
     private val client = V2RuntimeClient(config, mapper)
     private val repositories = V2RepositorySupport(config.repositoryAliases)
     private val verification = V2VerificationSupport()
-    private var enabled = false
+    @Volatile private var enabled = false
+    private val transcriber = V2LocalTranscriber(config, client)
     private val capabilities: Set<ExecutorCapability> = buildSet {
         config.advertisedModels[Provider.CODEX].orEmpty().forEach { model ->
             add(ExecutorCapability("openai", model, ExecutionMode.SUBSCRIPTION, setOf(TaskType.STRUCTURED_GENERATION, TaskType.REPOSITORY_AGENT)))
         }
         config.advertisedModels[Provider.CLAUDE].orEmpty().forEach { model ->
             add(ExecutorCapability("anthropic", model, ExecutionMode.SUBSCRIPTION, setOf(TaskType.STRUCTURED_GENERATION, TaskType.REPOSITORY_AGENT)))
+        }
+        V2LocalTranscriber.availableModels(config).forEach { model ->
+            add(ExecutorCapability("local", model, ExecutionMode.LOCAL, setOf(TaskType.TRANSCRIPTION)))
         }
     }
 
@@ -41,7 +45,7 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
             client.register(
                 WorkerRegistrationRequest(
                     config.workerId, bootId, capabilities, config.projectCredentials.keys,
-                    config.repositoryAliases.keys, 1, mapOf("worker" to "0.3.0"),
+                    config.repositoryAliases.keys, maxConcurrency, mapOf("worker" to "0.4.0"),
                 ),
             )
             true
@@ -51,9 +55,11 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
         }
     }
 
-    fun claim(): ClaimedJob? = if (!enabled) null else client.claim(ClaimRequest(bootId, capabilities, 2))
+    fun claim(jobKinds: Set<JobKind>? = null, taskTypes: Set<TaskType>? = null, waitSeconds: Int = 2): ClaimedJob? =
+        if (!enabled) null else client.claim(ClaimRequest(bootId, capabilities, waitSeconds, jobKinds, taskTypes))
 
     fun execute(claim: ClaimedJob) {
+        if (claim.job.execution.mode == ExecutionMode.LOCAL) return transcriber.execute(claim)
         val root = config.workRoot.resolve("v2-${claim.job.id}-${claim.attempt.id}")
         try {
             root.createDirectories()
@@ -466,6 +472,7 @@ class V2RuntimeClient(private val config: WorkerConfig, private val mapper: Obje
     fun heartbeat(claim: ClaimedJob) = post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/heartbeat", AttemptAuth(claim.attempt.id, claim.fencingToken), HeartbeatResponse::class.java)!!
     fun progress(claim: ClaimedJob, phase: String, percent: Int?, message: String?) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/progress", ProgressRequest(claim.attempt.id, claim.fencingToken, phase, percent, message), Void::class.java) }
     fun log(claim: ClaimedJob, kind: LogKind, text: String) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/logs", AppendLogRequest(claim.fencingToken, UUID.randomUUID().toString(), kind, text.take(8192), observedAt = Instant.now()), Void::class.java) }
+    fun audioUsage(claim: ClaimedJob, seconds: Long) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/usage-events", AppendUsageRequest(claim.fencingToken, UUID.randomUUID().toString(), Instant.now(), listOf(UsageMetricValue(UsageMetric.AUDIO_INPUT_SECONDS, seconds.toString(), UsageUnit.SECOND)), source = UsageSource.WORKER_MEASURED), Void::class.java) }
     fun measuredUsage(claim: ClaimedJob, inputTokens: Long, outputTokens: Long) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/usage-events", AppendUsageRequest(claim.fencingToken, UUID.randomUUID().toString(), Instant.now(), listOf(UsageMetricValue(UsageMetric.INPUT_TOKENS, inputTokens.toString(), UsageUnit.TOKEN), UsageMetricValue(UsageMetric.OUTPUT_TOKENS, outputTokens.toString(), UsageUnit.TOKEN)), source = UsageSource.WORKER_MEASURED), Void::class.java) }
     fun submit(claim: ClaimedJob, result: JsonNode, objectIds: Set<String>, repositoryResult: RepositoryResult?, verificationResult: VerificationResult?) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/result", SubmitResultRequest(claim.fencingToken, result, objectIds, repositoryResult, verificationResult), Void::class.java) }
     fun preparePublication(claim: ClaimedJob, result: JsonNode, objectIds: Set<String>, repositoryResult: RepositoryResult, verificationResult: VerificationResult?) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/repository-publication", PrepareRepositoryPublicationRequest(claim.fencingToken, result, objectIds, repositoryResult, verificationResult), RepositoryPublicationIntentView::class.java) }

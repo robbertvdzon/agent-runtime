@@ -84,6 +84,7 @@ class V2WorkerService(
         val environmentKeys=workers.environmentKeys(workerId)
         val repositoryAliases=workers.repositoryAliases(workerId)
         val job=jobs.queued().firstOrNull{candidate->
+            request.jobKinds?.contains(candidate.view.jobKind)!=false && request.taskTypes?.contains(candidate.view.taskType)!=false &&
             request.executors.any{cap->cap.vendorId==candidate.view.execution.vendorId&&cap.model==candidate.view.execution.model&&cap.mode==candidate.view.execution.mode&&candidate.view.taskType in cap.taskTypes} &&
                 candidate.request.environmentKeys.all(environmentKeys::contains) &&
                 candidate.request.repositoryCheckout?.alias?.let(repositoryAliases::contains) != false

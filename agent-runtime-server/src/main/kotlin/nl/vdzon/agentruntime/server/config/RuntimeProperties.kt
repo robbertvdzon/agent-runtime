@@ -64,6 +64,10 @@ data class RuntimeProperties(
     var v2ResultMaxBytes: Long = 1024 * 1024,
     var openAiApiKey: String = "",
     var openAiApiBaseUrl: String = "https://api.openai.com/v1",
+    var elevenLabsApiKey: String = "",
+    var elevenLabsBaseUrl: String = "https://api.elevenlabs.io",
+    var apiExecutorConcurrency: Int = 6,
+    var ffmpegBinary: String = "ffmpeg",
 ) {
     @PostConstruct
     fun validate() {
@@ -109,6 +113,7 @@ data class RuntimeProperties(
         require(jobInputMaxBytes >= objectMaxBytes && jobOutputMaxBytes >= objectMaxBytes)
         require(objectStoreMinFreeBytes >= 0)
         require(v2ResultMaxBytes in 1..5L * 1024 * 1024)
+        require(apiExecutorConcurrency in 1..32)
     }
 
     fun allowedAdminEmails(): Set<String> = adminEmails.split(',').map(String::trim).map(String::lowercase).filter(String::isNotBlank).toSet()

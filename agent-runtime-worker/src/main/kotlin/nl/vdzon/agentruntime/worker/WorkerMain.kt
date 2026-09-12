@@ -42,6 +42,13 @@ data class WorkerConfig(
     val projectCredentialsPath: Path,
     val projectCredentials: MutableMap<String, String>,
     val advertisedModels: Map<Provider, Set<String>>,
+    val applicationSlots: Int = 6,
+    val repositorySlots: Int = 2,
+    val transcriptionSlots: Int = 1,
+    val whisperBinary: Path = Path.of("/opt/homebrew/bin/whisper-cli"),
+    val ffmpegBinary: Path = Path.of("/opt/homebrew/bin/ffmpeg"),
+    val whisperModels: Map<String, Path> = emptyMap(),
+    val whisperThreads: Int = 8,
 ) {
     companion object {
         fun load(): WorkerConfig {
@@ -64,10 +71,22 @@ data class WorkerConfig(
                 values["AR_CODEX_CREDENTIALS_DIR"]?.takeIf(String::isNotBlank)?.let(Path::of),
                 values["AR_CLAUDE_CREDENTIALS_DIR"]?.takeIf(String::isNotBlank)?.let(Path::of),
                 values["AR_CLAUDE_OAUTH_TOKEN"]?.takeIf(String::isNotBlank),
-                aliases, root.resolve("project-credentials.env"), projectCredentials.toMutableMap(),
+                aliases, root.resolve("project-credentials.env"), java.util.concurrent.ConcurrentHashMap(projectCredentials),
                 advertisedModels,
+                slots(values, "AR_WORKER_APPLICATION_SLOTS", 6), slots(values, "AR_WORKER_REPOSITORY_SLOTS", 2), slots(values, "AR_WORKER_TRANSCRIPTION_SLOTS", 1),
+                Path.of(values["AR_WHISPER_BINARY"]?.takeIf(String::isNotBlank) ?: "/opt/homebrew/bin/whisper-cli"),
+                Path.of(values["AR_FFMPEG_BINARY"]?.takeIf(String::isNotBlank) ?: "/opt/homebrew/bin/ffmpeg"),
+                whisperModels(values["AR_WHISPER_MODELS"]),
+                slots(values, "AR_WHISPER_THREADS", 8),
             )
         }
+
+        private fun slots(values: Map<String, String>, name: String, default: Int): Int =
+            values[name]?.takeIf(String::isNotBlank)?.toIntOrNull()?.coerceIn(0, 32) ?: default
+
+        internal fun whisperModels(value: String?): Map<String, Path> = value.orEmpty().split(',').map(String::trim).filter(String::isNotBlank)
+            .mapNotNull { entry -> entry.split('=', limit = 2).takeIf { it.size == 2 && it[0].isNotBlank() && it[1].isNotBlank() }?.let { it[0].trim() to Path.of(it[1].trim()) } }
+            .toMap()
     }
 }
 
@@ -93,9 +112,12 @@ fun main(args: Array<String>) {
     val journal = WorkerJournal(config.workRoot, mapper)
     cleanupOrphanAttempts(config.workRoot, journal.entries().map { it.claim.job.id }.toSet())
     val executor = JobExecutor(config, client, mapper, bootId, journal)
-    val v2Executor = V2WorkerExecutor(config, mapper, bootId)
+    val v2Executor = V2WorkerExecutor(config, mapper, bootId, WorkerSlots(config.applicationSlots, config.repositorySlots, config.transcriptionSlots).total)
     v2Executor.register()
     executor.recoverBeforeClaiming()
+    val slots = WorkerSlots(config.applicationSlots, config.repositorySlots, config.transcriptionSlots)
+    val pool = java.util.concurrent.Executors.newCachedThreadPool { runnable -> Thread(runnable, "v2-job").apply { isDaemon = false } }
+    println("Agent Runtime worker slots: application=${config.applicationSlots}, repository=${config.repositorySlots}, transcription=${config.transcriptionSlots}.")
     while (!Thread.currentThread().isInterrupted) {
         try {
             val refreshed = try { ProjectCredentials.load(config.projectCredentialsPath) } catch (error: Exception) {
@@ -107,21 +129,65 @@ fun main(args: Array<String>) {
             }
             if (refreshed != config.projectCredentials) {
                 val keysChanged = refreshed.keys != config.projectCredentials.keys
-                config.projectCredentials.clear(); config.projectCredentials.putAll(refreshed)
+                config.projectCredentials.putAll(refreshed); config.projectCredentials.keys.retainAll(refreshed.keys)
                 SecretRedactor.configure(redactionValues(refreshed, config.claudeOauthToken))
                 if (keysChanged) { register(); v2Executor.register() }
             }
-            val claimedV2 = v2Executor.claim()
+            val idle = slots.activeTotal() == 0
+            val claimedV2 = slots.claimPlan().firstNotNullOfOrNull { filter ->
+                v2Executor.claim(filter.jobKinds, filter.taskTypes, if (idle) 2 else 0)
+            }
             if (claimedV2 != null) {
-                v2Executor.execute(claimedV2)
-            } else {
-                val claimed = client.claim(ClaimRequest(bootId, capabilities, providers, emptySet(), 20))
+                val slot = slots.classOf(claimedV2.job)
+                slots.acquire(slot)
+                pool.execute { try { v2Executor.execute(claimedV2) } finally { slots.release(slot) } }
+            } else if (slots.activeTotal() == 0) {
+                val claimed = client.claim(ClaimRequest(bootId, capabilities, providers, emptySet(), 5))
                 if (claimed != null) executor.execute(claimed)
+            } else {
+                Thread.sleep(1_000)
             }
         } catch (error: Exception) {
             System.err.println("Worker loop temporarily unavailable: ${safe(error.message)}")
             Thread.sleep(5_000)
         }
+    }
+}
+
+enum class WorkerSlotClass { APPLICATION, REPOSITORY, TRANSCRIPTION }
+
+data class WorkerClaimFilter(val jobKinds: Set<nl.vdzon.agentruntime.contracts.v2.JobKind>?, val taskTypes: Set<nl.vdzon.agentruntime.contracts.v2.TaskType>?)
+
+/** Local slot accounting per job class, so short application jobs never wait behind long repository jobs. */
+class WorkerSlots(application: Int, repository: Int, transcription: Int) {
+    private val limits = mapOf(WorkerSlotClass.APPLICATION to application, WorkerSlotClass.REPOSITORY to repository, WorkerSlotClass.TRANSCRIPTION to transcription)
+    private val active = WorkerSlotClass.entries.associateWith { 0 }.toMutableMap()
+
+    val total: Int get() = limits.values.sum().coerceIn(1, 32)
+
+    fun classOf(job: nl.vdzon.agentruntime.contracts.v2.JobView): WorkerSlotClass = when {
+        job.taskType == nl.vdzon.agentruntime.contracts.v2.TaskType.TRANSCRIPTION -> WorkerSlotClass.TRANSCRIPTION
+        job.jobKind == nl.vdzon.agentruntime.contracts.v2.JobKind.REPOSITORY_WORK -> WorkerSlotClass.REPOSITORY
+        else -> WorkerSlotClass.APPLICATION
+    }
+
+    @Synchronized fun activeTotal(): Int = active.values.sum()
+    @Synchronized fun acquire(slot: WorkerSlotClass) { active[slot] = active.getValue(slot) + 1 }
+    @Synchronized fun release(slot: WorkerSlotClass) { active[slot] = (active.getValue(slot) - 1).coerceAtLeast(0) }
+
+    /** One unfiltered claim when every class has room; otherwise one filtered claim per class with a free slot. */
+    @Synchronized fun claimPlan(): List<WorkerClaimFilter> {
+        val free = WorkerSlotClass.entries.filter { active.getValue(it) < limits.getValue(it) }
+        val configured = WorkerSlotClass.entries.filter { limits.getValue(it) > 0 }
+        if (free.isEmpty()) return emptyList()
+        if (free.size == WorkerSlotClass.entries.size) return listOf(WorkerClaimFilter(null, null))
+        return free.filter { it in configured }.map(::filterFor)
+    }
+
+    private fun filterFor(slot: WorkerSlotClass): WorkerClaimFilter = when (slot) {
+        WorkerSlotClass.APPLICATION -> WorkerClaimFilter(setOf(nl.vdzon.agentruntime.contracts.v2.JobKind.APPLICATION_WORK), nl.vdzon.agentruntime.contracts.v2.TaskType.entries.filter { it != nl.vdzon.agentruntime.contracts.v2.TaskType.TRANSCRIPTION }.toSet())
+        WorkerSlotClass.REPOSITORY -> WorkerClaimFilter(setOf(nl.vdzon.agentruntime.contracts.v2.JobKind.REPOSITORY_WORK), null)
+        WorkerSlotClass.TRANSCRIPTION -> WorkerClaimFilter(null, setOf(nl.vdzon.agentruntime.contracts.v2.TaskType.TRANSCRIPTION))
     }
 }
 

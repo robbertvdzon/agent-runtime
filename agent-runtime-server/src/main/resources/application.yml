@@ -70,7 +70,7 @@ agent-runtime:
   hkh-models: ${AR_HKH_MODELS:*}
   pvdd-models: ${AR_PVDD_MODELS:gpt-5.6-sol}
   personal-news-feed-environment-prefixes: ${AR_PERSONAL_NEWS_FEED_ENVIRONMENT_PREFIXES:PERSONAL_FEED}
-  personal-news-feed-providers: ${AR_PERSONAL_NEWS_FEED_PROVIDERS:CODEX,CLAUDE,MOCKED}
+  personal-news-feed-providers: ${AR_PERSONAL_NEWS_FEED_PROVIDERS:CODEX,CLAUDE,MOCKED,LOCAL,ELEVENLABS}
   personal-news-feed-models: ${AR_PERSONAL_NEWS_FEED_MODELS:*}
   transcript-max-bytes-per-job: ${AR_TRANSCRIPT_MAX_BYTES_PER_JOB:10485760}
   object-store-path: ${AR_OBJECT_STORE_PATH:${java.io.tmpdir}/agent-runtime-objects}
@@ -85,3 +85,7 @@ agent-runtime:
   v2-result-max-bytes: ${AR_V2_RESULT_MAX_BYTES:1048576}
   open-ai-api-key: ${AR_OPENAI_API_KEY:}
   open-ai-api-base-url: ${AR_OPENAI_API_BASE_URL:https://api.openai.com/v1}
+  eleven-labs-api-key: ${AR_ELEVENLABS_API_KEY:}
+  eleven-labs-base-url: ${AR_ELEVENLABS_BASE_URL:https://api.elevenlabs.io}
+  api-executor-concurrency: ${AR_API_EXECUTOR_CONCURRENCY:6}
+  ffmpeg-binary: ${AR_FFMPEG_BINARY:ffmpeg}

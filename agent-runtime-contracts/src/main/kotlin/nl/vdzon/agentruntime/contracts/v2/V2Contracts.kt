@@ -2,6 +2,8 @@ package nl.vdzon.agentruntime.contracts.v2
 
 import com.fasterxml.jackson.databind.JsonNode
 import jakarta.validation.Valid
+import jakarta.validation.constraints.DecimalMax
+import jakarta.validation.constraints.DecimalMin
 import jakarta.validation.constraints.Max
 import jakarta.validation.constraints.Min
 import jakarta.validation.constraints.NotBlank
@@ -13,7 +15,7 @@ import java.time.LocalDate
 
 enum class JobKind { APPLICATION_WORK, REPOSITORY_WORK }
 enum class TaskType { STRUCTURED_GENERATION, REPOSITORY_AGENT, TRANSCRIPTION, SPEECH_SYNTHESIS, WEB_SEARCH, EMBEDDING, IMAGE_GENERATION }
-enum class ExecutionMode { SUBSCRIPTION, API, MOCK }
+enum class ExecutionMode { SUBSCRIPTION, API, MOCK, LOCAL }
 enum class JobStatus { QUEUED, WAITING_FOR_WORKER, RUNNING, SUCCEEDED, FAILED, CANCELLED }
 enum class AttemptReason { INITIAL, INVALID_OUTPUT, PROVIDER_ERROR, TECHNICAL_ERROR }
 enum class AttemptStatus { RUNNING, SUCCEEDED, FAILED, INVALID_OUTPUT, ABANDONED, CANCELLED }
@@ -118,6 +120,17 @@ data class CreateJobRequest(
     @field:Valid val verification: JobVerification? = null,
     @field:Size(max = 50) val environmentKeys: List<@Pattern(regexp = "[A-Z][A-Z0-9_]*__[A-Z][A-Z0-9_]*") String> = emptyList(),
     @field:Min(30) @field:Max(86_400) val executionTimeoutSeconds: Int = 3_600,
+    @field:Valid val transcription: TranscriptionOptions? = null,
+    @field:Valid val synthesis: SpeechSynthesisOptions? = null,
+)
+
+data class TranscriptionOptions(
+    @field:Pattern(regexp = "[a-z]{2}|auto") val language: String? = null,
+)
+
+data class SpeechSynthesisOptions(
+    @field:Size(max = 100) val voice: String? = null,
+    @field:DecimalMin("0.25") @field:DecimalMax("4.0") val speed: Double? = null,
 )
 
 data class CreateUploadRequest(
@@ -344,6 +357,8 @@ data class ClaimRequest(
     @field:NotBlank val bootId: String,
     @field:Valid @field:NotEmpty @field:Size(max = 100) val executors: Set<ExecutorCapability>,
     @field:Min(0) @field:Max(25) val waitSeconds: Int = 20,
+    val jobKinds: Set<JobKind>? = null,
+    val taskTypes: Set<TaskType>? = null,
 )
 data class ClaimedJob(
     val job: JobView,

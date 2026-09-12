@@ -10,6 +10,7 @@ COPY agent-runtime-server/src agent-runtime-server/src
 RUN mvn -B --no-transfer-progress -DskipTests -pl agent-runtime-server -am package
 
 FROM eclipse-temurin:21-jre-noble
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 RUN useradd --uid 1001 --create-home --shell /usr/sbin/nologin runtime
 WORKDIR /app
 COPY --from=build /build/agent-runtime-server/target/agent-runtime-server-*.jar /app/agent-runtime.jar

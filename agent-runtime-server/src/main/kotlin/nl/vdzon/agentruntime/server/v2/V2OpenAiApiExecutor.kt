@@ -24,21 +24,40 @@ import java.util.UUID
 class V2OpenAiApiExecutor(
     private val properties:RuntimeProperties,private val mapper:ObjectMapper,private val jobs:V2JobStore,
     private val jobService:V2JobService,private val objectStore:V2ObjectStore,private val blobs:FilesystemBlobStore,
-    private val uploadService:V2UploadService,private val usage:V2UsageStore,
+    private val uploadService:V2UploadService,private val usage:V2UsageStore,private val speech:V2SpeechSynthesisExecutor,
 ) {
     private val logger=LoggerFactory.getLogger(javaClass)
     private val http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).build()
 
+    private val inFlight=java.util.concurrent.atomic.AtomicInteger(0)
+    private val pool=java.util.concurrent.Executors.newFixedThreadPool(properties.apiExecutorConcurrency){runnable->Thread(runnable,"v2-api-executor").apply{isDaemon=true}}
+
     @Scheduled(fixedDelay=500)
-    @Synchronized
     fun execute() {
-        if(properties.openAiApiKey.isBlank())return
-        val job=jobs.queued().firstOrNull{it.view.execution.mode==ExecutionMode.API&&it.view.execution.vendorId=="openai"}?:return
-        val token=UUID.randomUUID().toString()+UUID.randomUUID();val now=Instant.now();val attempt=jobs.createAttempt(job,"server-openai-api","server",token,now.plusSeconds(properties.leaseSeconds),now.plusSeconds(job.request.executionTimeoutSeconds.toLong()))
+        while(true) {
+            val claimed=claimNext()?:return
+            try { pool.execute{ try { run(claimed.first,claimed.second) } finally { inFlight.decrementAndGet() } } }
+            catch(error:java.util.concurrent.RejectedExecutionException) { inFlight.decrementAndGet();throw error }
+        }
+    }
+
+    /** Claims atomically: the attempt moves the job to RUNNING before the lock is released, so no job is executed twice. */
+    @Synchronized
+    internal fun claimNext():Pair<StoredV2Job,StoredV2Attempt>? {
+        if(inFlight.get()>=properties.apiExecutorConcurrency)return null
+        val job=jobs.queued().firstOrNull{it.view.execution.mode==ExecutionMode.API&&configured(it.view.execution.vendorId)}?:return null
+        val token=UUID.randomUUID().toString()+UUID.randomUUID();val now=Instant.now();val attempt=jobs.createAttempt(job,"server-${job.view.execution.vendorId}-api","server",token,now.plusSeconds(properties.leaseSeconds),now.plusSeconds(job.request.executionTimeoutSeconds.toLong()))
+        inFlight.incrementAndGet()
+        return job to attempt
+    }
+
+    private fun configured(vendorId:String)=when(vendorId){"openai"->properties.openAiApiKey.isNotBlank();"elevenlabs"->properties.elevenLabsApiKey.isNotBlank();else->false}
+
+    internal fun run(job:StoredV2Job,attempt:StoredV2Attempt) {
         try {
-            when(job.view.taskType){TaskType.STRUCTURED_GENERATION->structured(job,attempt);TaskType.TRANSCRIPTION->transcribe(job,attempt);else->error("Unsupported API task")}
+            when(job.view.taskType){TaskType.STRUCTURED_GENERATION->structured(job,attempt);TaskType.TRANSCRIPTION->transcribe(job,attempt);TaskType.SPEECH_SYNTHESIS->speech.synthesize(job,attempt);else->error("Unsupported API task")}
         } catch(error:ProviderFailure) { jobs.failAttempt(jobs.find(job.view.id)!!,attempt.view.id,error.code,error.message.orEmpty(),error.retryable)
-        } catch(error:Exception) { logger.error("OpenAI API job {} failed",job.view.id,error);jobs.failAttempt(jobs.find(job.view.id)!!,attempt.view.id,"API_EXECUTION_ERROR",error.message?:"API execution failed",true) }
+        } catch(error:Exception) { logger.error("API job {} failed",job.view.id,error);jobs.failAttempt(jobs.find(job.view.id)!!,attempt.view.id,"API_EXECUTION_ERROR",error.message?:"API execution failed",true) }
     }
 
     private fun structured(job:StoredV2Job,attempt:StoredV2Attempt) {

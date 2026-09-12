@@ -6,7 +6,7 @@ documentatie vormen één versie en worden samen bijgewerkt.
 
 ## Vaste platformgrenzen
 
-- De API heeft één actuele `/v1`-variant. Er is geen parallel compatibiliteitscontract.
+- Nieuwe consumenten gebruiken `/v2` (`agent-runtime-v2.yaml`); `/v1` blijft alleen voor bestaande consumenten.
 - `APPLICATION_WORK` levert een betrouwbaar JSON-resultaat en artifacts op.
 - `REPOSITORY_WORK` gebruikt een lokale repositoryalias; alleen de worker commit en publiceert.
 - Agent Runtime beheert queue, attempts, leases, heartbeats, fencing, retries, deadlines, events,
