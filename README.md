@@ -46,7 +46,9 @@ een eigen bearercredential en mogen alleen projectcredentials onder respectievel
 ## Lokaal bouwen en starten
 
 Java 21, Maven 3.9 en Flutter 3.44.6 zijn vereist voor de volledige build. Dezelfde exacte
-Flutterversie draait in CI zodat de ingebedde release-assets reproduceerbaar blijven.
+Flutterversie draait in CI zodat de applicatiebundle en ingebedde release-assets reproduceerbaar
+blijven. Alleen de door de Flutter-SDK per platform geleverde CanvasKit-WASM-binaries vallen buiten
+de bytevergelijking; de webbuild en containerbuild testen die bestanden wel.
 
 ```bash
 export JAVA_HOME=$(/usr/libexec/java_home -v 21)

@@ -20,7 +20,11 @@ jobs:
       - run: flutter test
         working-directory: monitor-ui
       - run: bash monitor-ui/tool/build_and_sync.sh
-      - run: git diff --exit-code -- agent-runtime-server/src/main/resources/static
+      - name: Verify reproducible embedded frontend
+        run: >-
+          git diff --exit-code --
+          agent-runtime-server/src/main/resources/static
+          ':(exclude)agent-runtime-server/src/main/resources/static/canvaskit/**'
       - run: mvn -B --no-transfer-progress verify
       - run: bash execution-images/test-run-agent.sh
       - run: |
