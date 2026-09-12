@@ -9,13 +9,15 @@ import org.springframework.web.filter.OncePerRequestFilter
 @Component
 class StaticCacheHeaders : OncePerRequestFilter() {
     override fun shouldNotFilter(request: HttpServletRequest): Boolean =
-        request.requestURI.startsWith("/v1/") || request.requestURI.startsWith("/actuator/") || request.requestURI == "/healthz"
+        request.requestURI.startsWith("/actuator/") || request.requestURI == "/healthz"
 
     override fun doFilterInternal(request: HttpServletRequest, response: HttpServletResponse, chain: FilterChain) {
         val path = request.requestURI
         response.setHeader(
             "Cache-Control",
-            if (path == "/" || path.endsWith("/index.html") || path.endsWith("/version.json") || path.endsWith(".js"))
+            if (path.startsWith("/v1/") || path.startsWith("/v2/"))
+                "no-store, private"
+            else if (path == "/" || path.endsWith("/index.html") || path.endsWith("/version.json") || path.endsWith(".js"))
                 "no-store"
             else "public, max-age=31536000, immutable",
         )

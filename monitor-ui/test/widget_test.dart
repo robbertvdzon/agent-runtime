@@ -237,7 +237,7 @@ void main() {
                 'jobsLast7Days': 12,
                 'jobsLast30Days': 30,
                 'costsInPeriod': [
-                  {'currency': 'EUR', 'amount': '4.25'},
+                  {'currency': 'EUR', 'amount': '4.25', 'kind': 'CALCULATED'},
                 ],
                 'legacyJobsInPeriod': 0,
                 'models': [
@@ -256,9 +256,58 @@ void main() {
     );
 
     expect(find.text('pvdd'), findsOneWidget);
-    expect(find.text('EUR 4.25'), findsOneWidget);
-    expect(find.textContaining('openai / gpt-5.6-sol / API'), findsOneWidget);
+    expect(find.text('EUR 4.25 · API-kosten (berekend)'), findsOneWidget);
+    expect(
+      find.textContaining('openai / gpt-5.6-sol / API (werkelijk)'),
+      findsOneWidget,
+    );
     expect(find.textContaining('v1-job'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('abonnementskosten worden als API-equivalent aangeduid', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: UsageList(
+            rows: const [],
+            consumers: const [
+              {
+                'consumer': 'hkh',
+                'totalJobs': 15,
+                'jobsLast24Hours': 15,
+                'jobsLast7Days': 15,
+                'jobsLast30Days': 15,
+                'costsInPeriod': [
+                  {
+                    'currency': 'USD',
+                    'amount': '0.775176',
+                    'kind': 'API_EQUIVALENT',
+                  },
+                ],
+                'legacyJobsInPeriod': 0,
+                'models': [
+                  {
+                    'vendorId': 'openai',
+                    'model': 'gpt-5.6-sol',
+                    'mode': 'SUBSCRIPTION',
+                    'jobCount': 15,
+                  },
+                ],
+              },
+            ],
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      find.text('USD 0.775176 · API-equivalent (abonnement)'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('SUBSCRIPTION (abonnement)'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

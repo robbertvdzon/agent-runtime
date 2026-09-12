@@ -998,7 +998,7 @@ class JobList extends StatelessWidget {
                     [
                           item['application'],
                           item['jobKind'],
-                          '${item['provider']} · ${item['model']}',
+                          '${item['provider']} · ${item['model']} · ${_formatExecutionMode(item['executionMode'])}',
                           item['waitingReason'],
                           item['progressMessage'],
                         ]
@@ -1077,7 +1077,9 @@ class JobList extends StatelessWidget {
                         _JobFact(
                           icon: Icons.replay_outlined,
                           label: 'Agentrondes',
-                          value: item['verificationAgentRounds']?.toString() ?? '-',
+                          value:
+                              item['verificationAgentRounds']?.toString() ??
+                              '-',
                         ),
                       ],
                     ),
@@ -1678,7 +1680,7 @@ class UsageList extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         const Text(
-          'Jobaantallen per consumer en kosten over de afgelopen 30 dagen.',
+          'Jobaantallen per consumer en API-kosten of API-equivalente schattingen over de afgelopen 30 dagen.',
         ),
         const SizedBox(height: 14),
         ...consumers.expand(
@@ -1747,7 +1749,7 @@ class UsageList extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '${dimension('vendorId')} · ${dimension('model')} · ${dimension('mode')} · ${dimension('taskType')}',
+                      '${dimension('vendorId')} · ${dimension('model')} · ${_formatExecutionMode(dimension('mode'))} · ${dimension('taskType')}',
                     ),
                     const SizedBox(height: 12),
                     Text(
@@ -1816,7 +1818,7 @@ class _ConsumerUsageCard extends StatelessWidget {
                   value: '${consumer['jobsLast30Days']}',
                 ),
                 _Statistic(
-                  label: 'Kosten 30 dagen',
+                  label: 'Kosteninschatting 30 dagen',
                   value: _formatCosts(costs),
                 ),
               ],
@@ -1825,7 +1827,7 @@ class _ConsumerUsageCard extends StatelessWidget {
             Text(
               models.isEmpty
                   ? 'Nog geen modellen gebruikt'
-                  : 'Modellen: ${models.map((model) => '${model['vendorId']} / ${model['model']}${model['mode'] == null ? '' : ' / ${model['mode']}'} (${model['jobCount']})').join(' · ')}',
+                  : 'Modellen: ${models.map((model) => '${model['vendorId']} / ${model['model']}${model['mode'] == null ? '' : ' / ${_formatExecutionMode(model['mode'])}'} (${model['jobCount']})').join(' · ')}',
             ),
             if (legacyJobs > 0) ...[
               const SizedBox(height: 6),
@@ -1893,10 +1895,41 @@ String _formatJobCosts(Map<String, dynamic> job) {
 }
 
 String _formatCosts(List<Map<String, dynamic>> costs) {
-  if (costs.isEmpty) return 'Geen bedrag beschikbaar';
+  if (costs.isEmpty) return 'Geen prijsberekening beschikbaar';
   return costs
-      .map((cost) => '${cost['currency']} ${cost['amount']}')
+      .map(
+        (cost) =>
+            '${cost['currency']} ${cost['amount']} · ${_formatCostKind(cost['kind'])}',
+      )
       .join(' · ');
+}
+
+String _formatCostKind(dynamic raw) {
+  switch (raw?.toString()) {
+    case 'DIRECT':
+      return 'werkelijke API-kosten';
+    case 'CALCULATED':
+      return 'API-kosten (berekend)';
+    case 'API_EQUIVALENT':
+      return 'API-equivalent (abonnement)';
+    case 'ALLOCATED':
+      return 'toegerekende abonnementskosten';
+    default:
+      return 'bedrag';
+  }
+}
+
+String _formatExecutionMode(dynamic raw) {
+  switch (raw?.toString()) {
+    case 'API':
+      return 'API (werkelijk)';
+    case 'SUBSCRIPTION':
+      return 'SUBSCRIPTION (abonnement)';
+    case 'MOCK':
+      return 'MOCK';
+    default:
+      return raw?.toString() ?? 'onbekend';
+  }
 }
 
 String _formatBytes(int bytes) {

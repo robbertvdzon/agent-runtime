@@ -40,15 +40,18 @@ class V2UsageStore(private val jdbc:JdbcTemplate) {
     }
 
     private fun calculateCost(job:StoredV2Job,attemptId:String,eventId:String,metric:UsageMetricValue,observedAt:Instant) {
+        if (job.view.execution.mode == ExecutionMode.MOCK) return
+        val rateMode = if (job.view.execution.mode == ExecutionMode.SUBSCRIPTION) ExecutionMode.API else job.view.execution.mode
         val rates=jdbc.query("""SELECT * FROM runtime_v2_price_rate WHERE vendor_id=? AND model=? AND execution_mode=? AND task_type=? AND metric=?
-            AND valid_from<=? AND (valid_until IS NULL OR valid_until>?) ORDER BY version_number DESC LIMIT 1""",{rs,_->
+            AND valid_from<=? AND (valid_until IS NULL OR valid_until>?) ORDER BY version_number DESC LIMIT 1""",{rs,_ ->
             Triple(rs.getString("id"),rs.getBigDecimal("unit_size"),Pair(rs.getBigDecimal("unit_price"),rs.getString("currency")))
-        },job.view.execution.vendorId,job.view.execution.model,job.view.execution.mode.name,job.view.taskType.name,metric.metric.name,V2JobStore.utc(observedAt),V2JobStore.utc(observedAt))
+        },job.view.execution.vendorId,job.view.execution.model,rateMode.name,job.view.taskType.name,metric.metric.name,V2JobStore.utc(observedAt),V2JobStore.utc(observedAt))
         rates.firstOrNull()?.let{rate->
             val usageId=jdbc.queryForObject("SELECT id FROM runtime_v2_usage WHERE attempt_id=? AND external_event_id=? AND metric=?",Long::class.java,attemptId,eventId,metric.metric.name)
             val amount=decimal(metric.quantity,"quantity").divide(rate.second,12,RoundingMode.HALF_UP).multiply(rate.third.first)
+            val costKind = if (job.view.execution.mode == ExecutionMode.SUBSCRIPTION) CostKind.API_EQUIVALENT else CostKind.CALCULATED
             jdbc.update("""INSERT INTO runtime_v2_cost(job_id,attempt_id,usage_id,price_rate_id,cost_kind,cost_status,amount,currency,created_at)
-                VALUES (?,?,?,?,'CALCULATED','ESTIMATED',?,?,?)""",job.view.id,attemptId,usageId,rate.first,amount,rate.third.second,V2JobStore.utc(Instant.now()))
+                VALUES (?,?,?,?,?,'ESTIMATED',?,?,?)""",job.view.id,attemptId,usageId,rate.first,costKind.name,amount,rate.third.second,V2JobStore.utc(Instant.now()))
         }
     }
 

@@ -32,7 +32,8 @@ de laatste succesvolle momentopname.
 Iedere jobkaart toont:
 
 - technische naam en status;
-- applicatie, jobsoort, provider en model;
+- applicatie, jobsoort, provider, model en de expliciete uitvoeringswijze **API (werkelijk)**,
+  **SUBSCRIPTION (abonnement)** of **MOCK**;
 - fase, wachtreden of voortgang wanneer aanwezig;
 - de eerste 240 tekens van de prompt;
 - de eerste 240 tekens van het resultaat wanneer aanwezig;
@@ -68,10 +69,18 @@ een consumer nog geen jobs heeft. Per consumer toont de monitor het totale aanta
 over de laatste 24 uur, 7 dagen en 30 dagen, kosten over de laatste 30 dagen en alle gebruikte
 vendor-/model-/mode-combinaties met jobaantallen.
 
-Jobaantallen en modellen combineren v1 en v2. Bedragen komen uit de v2-kostenadministratie,
-inclusief berekende API-kosten en waar van toepassing toegewezen abonnementskosten. Het aantal
-v1-jobs zonder betrouwbare kostenregistratie wordt daarom apart vermeld. Onder het
-consumeroverzicht blijft de bestaande v2-uitsplitsing per vendor, model, mode en opdrachttype
+Jobaantallen en modellen combineren v1 en v2. Bedragen komen uit de v2-kostenadministratie. De
+monitor onderscheidt daarbij vier labels:
+
+- **werkelijke API-kosten** voor een door de provider gerapporteerd bedrag;
+- **API-kosten (berekend)** voor een echte API-job die op basis van gemeten usage is geprijsd;
+- **API-equivalent (abonnement)** voor een subscriptionjob die hypothetisch tegen de openbare
+  API-lijstprijs is geprijsd;
+- **toegerekende abonnementskosten** voor een optionele verdeling van een vast abonnement.
+
+Een API-equivalent is dus geen werkelijk betaald bedrag en geen indicator van resterende
+abonnementsruimte. Het aantal v1-jobs zonder betrouwbare kostenregistratie wordt apart vermeld.
+Onder het consumeroverzicht blijft de v2-uitsplitsing per vendor, model, mode en opdrachttype
 zichtbaar.
 
 ## Workers

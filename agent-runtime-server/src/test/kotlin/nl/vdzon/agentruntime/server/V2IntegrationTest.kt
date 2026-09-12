@@ -23,6 +23,29 @@ import java.util.UUID
 @AutoConfigureMockMvc
 class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private val mapper:ObjectMapper,@Autowired private val jdbc:JdbcTemplate) {
     @Test
+    fun `built in API price catalog covers current subscription models`() {
+        val openAi = getJson("/v2/management/prices?vendorId=openai&model=gpt-5.6-sol", ADMIN)
+        assertThat(openAi.any {
+                it.path("mode").asText() == "API" &&
+                it.path("taskType").asText() == "STRUCTURED_GENERATION" &&
+                it.path("metric").asText() == "INPUT_TOKENS" &&
+                java.math.BigDecimal(it.path("unitPrice").asText()).compareTo(java.math.BigDecimal("4.00")) == 0
+        }).isTrue()
+        assertThat(openAi.any {
+            it.path("taskType").asText() == "REPOSITORY_AGENT" &&
+                it.path("metric").asText() == "OUTPUT_TOKENS" &&
+                java.math.BigDecimal(it.path("unitPrice").asText()).compareTo(java.math.BigDecimal("20.00")) == 0
+        }).isTrue()
+
+        val anthropic = getJson("/v2/management/prices?vendorId=anthropic&model=claude-sonnet-5", ADMIN)
+        assertThat(anthropic.any {
+            it.path("mode").asText() == "API" &&
+                it.path("metric").asText() == "OUTPUT_TOKENS" &&
+                java.math.BigDecimal(it.path("unitPrice").asText()).compareTo(java.math.BigDecimal("10.00")) == 0
+        }).isTrue()
+    }
+
+    @Test
     fun `rejected oversized chunk leaves upload resumable at the original offset`() {
         val bytes = "goed".toByteArray()
         val upload = postJson("/v2/uploads", PRODUCT, CreateUploadRequest("retry.txt", "text/plain", bytes.size.toLong(), sha(bytes)), 201)
@@ -72,7 +95,7 @@ class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private va
         val managementWorker=getJson("/v2/management/workers",ADMIN).path("items").first{it.path("worker").path("workerId").asText()==worker}
         assertThat(managementWorker.path("activeJobs").asInt()).isEqualTo(1)
         assertThat(managementWorker.path("worker").path("providers").map(JsonNode::asText)).contains("openai")
-        postJson("/v2/management/prices",ADMIN,CreatePriceRateRequest("openai",model,ExecutionMode.SUBSCRIPTION,TaskType.STRUCTURED_GENERATION,UsageMetric.OUTPUT_TOKENS,"1000","2.50","EUR",Instant.now().minusSeconds(60),sourceReference="test"),201)
+        postJson("/v2/management/prices",ADMIN,CreatePriceRateRequest("openai",model,ExecutionMode.API,TaskType.STRUCTURED_GENERATION,UsageMetric.OUTPUT_TOKENS,"1000","2.50","EUR",Instant.now().minusSeconds(60),sourceReference="test"),201)
         postJson("/v2/management/subscriptions",ADMIN,CreateSubscriptionPeriodRequest("openai",model,LocalDate.now().minusDays(1),LocalDate.now().plusDays(1),"100","EUR",AllocationMethod.WEIGHTED_TOKENS),201)
         postJson("/v2/workers/$worker/jobs/$jobId/attempts/$attempt/usage-events",WORKER,AppendUsageRequest(fence,"usage-1",Instant.now(),listOf(UsageMetricValue(UsageMetric.OUTPUT_TOKENS,"400",UsageUnit.TOKEN)),source=UsageSource.PROVIDER_REPORTED),204)
         postJson("/v2/workers/$worker/jobs/$jobId/attempts/$attempt/logs",WORKER,AppendLogRequest(fence,"log-1",LogKind.REASONING_SUMMARY,"Ik controleer de bron.","reasoning",true,Instant.now()),204)
@@ -83,7 +106,7 @@ class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private va
         val result=getJson("/v2/jobs/$jobId/result",PRODUCT)
         assertThat(result.path("artifacts").first().path("name").asText()).isEqualTo("evidence")
         assertThat(result.path("usageSummary").path("metrics").first().path("quantity").asText()).isEqualTo("400")
-        assertThat(result.path("usageSummary").path("costs").any{it.path("kind").asText()=="CALCULATED"&&it.path("amount").asText()=="1"}).isTrue()
+        assertThat(result.path("usageSummary").path("costs").any{it.path("kind").asText()=="API_EQUIVALENT"&&it.path("amount").asText()=="1"}).isTrue()
         assertThat(result.path("usageSummary").path("costs").any{it.path("kind").asText()=="ALLOCATED"&&it.path("amount").asText()=="100"}).isTrue()
         val completed=getJson("/v2/management/jobs/completed?consumer=product-factory&title=${jobId.take(8)}",ADMIN)
         val completedItem=completed.path("items").single()
@@ -107,8 +130,11 @@ class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private va
         val overview=getJson("/v2/management/consumers",ADMIN)
         val productFactory=overview.path("items").first{it.path("consumer").asText()=="product-factory"}
         assertThat(productFactory.path("models").any{it.path("model").asText()==model&&it.path("mode").asText()=="SUBSCRIPTION"}).isTrue()
-        assertThat(productFactory.path("costsInPeriod").any{it.path("kind").asText()=="CALCULATED"&&it.path("amount").asText()=="1"}).isTrue()
+        assertThat(productFactory.path("costsInPeriod").any{it.path("kind").asText()=="API_EQUIVALENT"&&it.path("amount").asText()=="1"}).isTrue()
         assertThat(productFactory.path("costsInPeriod").any{it.path("kind").asText()=="ALLOCATED"&&it.path("amount").asText()=="100"}).isTrue()
+        mvc.perform(get("/v2/management/consumers").bearer(ADMIN))
+            .andExpect(status().isOk)
+            .andExpect { assertThat(it.response.getHeader("Cache-Control")).contains("no-store").doesNotContain("immutable") }
     }
 
     @Test

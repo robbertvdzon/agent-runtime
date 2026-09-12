@@ -1448,7 +1448,10 @@ components:
       additionalProperties: false
       required: [kind, status, amount, currency]
       properties:
-        kind: {type: string, enum: [DIRECT, CALCULATED, ALLOCATED]}
+        kind:
+          type: string
+          description: DIRECT is provider-reported API cost; CALCULATED is token-priced API execution; API_EQUIVALENT is the hypothetical API price of subscription execution; ALLOCATED is a share of a fixed subscription amount.
+          enum: [DIRECT, CALCULATED, API_EQUIVALENT, ALLOCATED]
         status: {type: string, enum: [ESTIMATED, FINAL, RECONCILED]}
         amount: {$ref: '#/components/schemas/DecimalString'}
         currency: {type: string, pattern: '^[A-Z]{3}$'}

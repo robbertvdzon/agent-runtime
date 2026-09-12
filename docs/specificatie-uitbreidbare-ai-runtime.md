@@ -694,7 +694,8 @@ De Runtime ondersteunt drie kostensoorten:
 | Kostensoort | Betekenis |
 | --- | --- |
 | `DIRECT` | Door leverancier gerapporteerde werkelijke kosten |
-| `CALCULATED` | Runtimeberekening uit usage en een geversioneerd tarief |
+| `CALCULATED` | Runtimeberekening voor een werkelijk via de API uitgevoerde job |
+| `API_EQUIVALENT` | Geschatte API-prijs van een job die werkelijk via een abonnement is uitgevoerd |
 | `ALLOCATED` | Toegerekend deel van een vast abonnement of infrastructuurbedrag |
 
 Iedere kostenregel bevat:
@@ -718,9 +719,19 @@ geen echte factuurprijs per job/AI-sessie. Daarom geldt:
 
 - `directCost` blijft leeg;
 - usage blijft volledig zichtbaar;
-- dashboards tonen het percentage van de gemeten subscriptionusage per project;
+- de Runtime berekent uit gemeten tokens en de openbare API-lijstprijs altijd een
+  `API_EQUIVALENT`-schatting wanneer voor het model een tarief bekend is;
+- dashboards noemen dit nadrukkelijk **API-equivalent (abonnement)** en tonen de werkelijke
+  uitvoeringswijze ernaast;
+- dashboards tonen daarnaast het percentage van de gemeten subscriptionusage per project;
 - optioneel wordt een maandelijks abonnement als `ALLOCATED` verdeeld;
 - de UI noemt een allocatie nooit “werkelijke providerkosten”.
+
+De API-equivalente schatting is geen factuurbedrag en zegt niets over resterende abonnementsquota.
+Tarieven zijn geversioneerd en herleidbaar tot de openbare leveranciersbron. Voor een
+subscriptionmodel zonder afzonderlijk openbaar API-tarief mag uitsluitend een expliciet
+gedocumenteerd proxymodel worden gebruikt; anders blijft het bedrag onbekend. De initiële catalogus
+gebruikt voor `gpt-5.3-codex-spark` de openbare prijs van `gpt-5.3-codex` als proxy.
 
 De allocatiemethode is configureerbaar en geversioneerd, bijvoorbeeld naar rato van gewogen tokens
 of gerapporteerde quota-eenheden. Wanneer een CLI onvoldoende usage rapporteert, krijgt de poging
@@ -842,7 +853,7 @@ Een summaryrow bevat minimaal:
 - aantal jobs/AI-sessies en pogingen;
 - geslaagd, mislukt, geannuleerd en partial usage;
 - genormaliseerde usage per unit;
-- direct, calculated en allocated cost afzonderlijk;
+- direct, calculated, API-equivalent en allocated cost afzonderlijk;
 - totaal toegerekende kosten;
 - currency;
 - aantal jobs en pogingen met onbekende usage of kosten.
@@ -1037,7 +1048,8 @@ operationeel zijn getest.
 - Kosten zijn traceerbaar tot prijsversie en usage entry.
 - Overzichten kunnen groeperen op tenant/project, vendor, model, task type, execution mode en
   status.
-- Subscriptionallocatie is zichtbaar gescheiden van directe of berekende API-kosten.
+- API-equivalente subscriptionprijzen en subscriptionallocatie zijn zichtbaar gescheiden van
+  directe of berekende werkelijke API-kosten.
 - Een nieuwe leverancier of model vereist geen nieuwe publieke API-enum of API-versie.
 - Grote input en output gaat nooit Base64-gecodeerd door een job- of claimpayload.
 - Uploads en downloads gebruiken constant geheugen en kunnen worden hervat.
@@ -1060,9 +1072,10 @@ operationeel zijn getest.
 3. Gegenereerde bestanden krijgen vooralsnog geen aparte backup. Jobmetadata, usage, kosten en
    configuratie vallen wel onder de bestaande databasebackup. De beheerinterface maakt zichtbaar
    dat content na retentie of schijfverlies niet meer downloadbaar kan zijn.
-4. Subscriptionrapportage toont altijd werkelijk gebruik en gebruikspercentages. Een maandbedrag
-   kan optioneel per abonnementsperiode worden ingevoerd; alleen dan toont de Runtime daarnaast een
-   duidelijk als allocatie gelabelde euroverdeling.
+4. Subscriptionrapportage toont altijd werkelijk gebruik en gebruikspercentages. Zodra een
+   openbare API-lijstprijs beschikbaar is, toont zij daarnaast een duidelijk als hypothetisch
+   gelabelde API-equivalente schatting. Een maandbedrag kan optioneel per abonnementsperiode worden
+   ingevoerd; alleen dan toont de Runtime ook een duidelijk als allocatie gelabelde euroverdeling.
 5. De eerste echte uitvoeringscombinaties zijn Codex via OpenAI-subscription, Claude via
    Anthropic-subscription en OpenAI API voor `STRUCTURED_GENERATION` en `TRANSCRIPTION`, naast
    `mock/mock/MOCK`. De adapterarchitectuur ondersteunt latere speech-, image-, ElevenLabs- en
