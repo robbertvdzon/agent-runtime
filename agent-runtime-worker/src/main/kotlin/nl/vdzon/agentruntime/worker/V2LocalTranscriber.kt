@@ -61,7 +61,7 @@ class V2LocalTranscriber(private val config: WorkerConfig, private val client: V
         val log = directory.resolve("process-${Instant.now().toEpochMilli()}.log")
         val process = ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true).redirectOutput(log.toFile()).start()
         while (!process.waitFor(1, TimeUnit.SECONDS)) {
-            val heartbeat = client.heartbeat(claim)
+            val heartbeat = heartbeatWithGrace(config.heartbeatGrace) { client.heartbeat(claim) }
             if (!heartbeat.accepted || heartbeat.fenced || heartbeat.cancelRequested || !Instant.now().isBefore(claim.attemptDeadline)) {
                 process.descendants().forEach { it.destroyForcibly() }
                 process.destroyForcibly()

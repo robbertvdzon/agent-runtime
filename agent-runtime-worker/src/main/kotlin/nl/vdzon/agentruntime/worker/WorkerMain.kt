@@ -49,6 +49,12 @@ data class WorkerConfig(
     val ffmpegBinary: Path = Path.of("/opt/homebrew/bin/ffmpeg"),
     val whisperModels: Map<String, Path> = emptyMap(),
     val whisperThreads: Int = 8,
+    /**
+     * Hoe lang een lopende uitvoering doorgaat terwijl de heartbeat naar de server faalt
+     * (GOAWAY bij een router-reload, 503 tijdens een server-herstart). Pas daarna wordt de
+     * poging als WORKER_ERROR afgebroken. Zie [heartbeatWithGrace].
+     */
+    val heartbeatGrace: Duration = Duration.ofSeconds(300),
 ) {
     companion object {
         fun load(): WorkerConfig {
@@ -78,6 +84,7 @@ data class WorkerConfig(
                 Path.of(values["AR_FFMPEG_BINARY"]?.takeIf(String::isNotBlank) ?: "/opt/homebrew/bin/ffmpeg"),
                 whisperModels(values["AR_WHISPER_MODELS"]),
                 slots(values, "AR_WHISPER_THREADS", 8),
+                Duration.ofSeconds(slots(values, "AR_WORKER_HEARTBEAT_GRACE_SECONDS", 300).toLong()),
             )
         }
 

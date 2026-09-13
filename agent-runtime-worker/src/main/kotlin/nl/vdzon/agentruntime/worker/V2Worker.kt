@@ -214,7 +214,12 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
         } }.apply { start() }
         var timedOut = false
         while (!process.waitFor(1, TimeUnit.SECONDS)) {
-            val heartbeat = client.heartbeat(claim)
+            val heartbeat = try {
+                heartbeatWithGrace(config.heartbeatGrace) { client.heartbeat(claim) }
+            } catch (error: IOException) {
+                stopContainer(name, process)
+                throw error
+            }
             if (!heartbeat.accepted || heartbeat.fenced || heartbeat.cancelRequested) {
                 stopContainer(name, process)
                 throw JobFailure(if (heartbeat.cancelRequested) "CANCELLED" else "ATTEMPT_FENCED", "Verification was stopped.", false)
@@ -426,7 +431,14 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
         } } }.apply { start() }
         var timedOut = false
         while (!process.waitFor(1, TimeUnit.SECONDS)) {
-            val heartbeat = client.heartbeat(claim)
+            val heartbeat = try {
+                heartbeatWithGrace(config.heartbeatGrace) { client.heartbeat(claim) }
+            } catch (error: IOException) {
+                // Server blijvend onbereikbaar: laat de container niet verweesd doordraaien.
+                process.destroy()
+                if (!process.waitFor(10, TimeUnit.SECONDS)) process.destroyForcibly()
+                throw error
+            }
             if (!heartbeat.accepted || heartbeat.fenced || heartbeat.cancelRequested || !Instant.now().isBefore(executionDeadline)) {
                 process.destroy()
                 if (!process.waitFor(10, TimeUnit.SECONDS)) process.destroyForcibly()
@@ -512,9 +524,45 @@ class V2RuntimeClient(private val config: WorkerConfig, private val mapper: Obje
         val request = HttpRequest.newBuilder(uri(path)).timeout(Duration.ofSeconds(35)).header("Authorization", "Bearer ${config.token}").header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body))).build()
         val response = http.send(request, HttpResponse.BodyHandlers.ofString())
         if (response.statusCode() == 204) return null
-        if (response.statusCode() !in 200..299) throw IOException("Runtime returned HTTP ${response.statusCode()}: ${safe(response.body())}")
+        if (response.statusCode() !in 200..299) throw RuntimeHttpException(response.statusCode(), safe(response.body()))
         return mapper.readValue(response.body(), type)
     }
 
     private fun uri(path: String) = URI.create(config.serverUrl + path)
+}
+
+/** Een antwoord van de Runtime-server buiten 2xx; [status] bepaalt of een retry zinvol is. */
+class RuntimeHttpException(val status: Int, body: String) : IOException("Runtime returned HTTP $status: $body")
+
+/**
+ * Heartbeat die een tijdelijke storing overleeft. De verbinding worker → server loopt over de
+ * OpenShift-router; elke route-/endpointwijziging (bijv. een deploy van een andere app) herlaadt
+ * HAProxy en stuurt GOAWAY naar open HTTP/2-verbindingen, en tijdens een server-herstart geeft de
+ * router even 503. Voorheen brak één zo'n mislukte heartbeat de hele poging af (WORKER_ERROR),
+ * inclusief een container die al drie kwartier bezig was — de retry begon dan op nul.
+ *
+ * Nu blijft de uitvoering doorlopen en probeert de worker het elke twee seconden opnieuw, tot
+ * [grace] verstreken is. Antwoorden met een 4xx (fenced, onbekende poging) zijn géén storing en
+ * gaan direct door; de server beslist dan zelf via de lease of de poging nog geldig is.
+ */
+internal fun heartbeatWithGrace(
+    grace: Duration,
+    now: () -> Instant = Instant::now,
+    sleep: (Long) -> Unit = Thread::sleep,
+    heartbeat: () -> HeartbeatResponse,
+): HeartbeatResponse {
+    var failingSince: Instant? = null
+    while (true) {
+        try {
+            return heartbeat()
+        } catch (error: IOException) {
+            if (error is RuntimeHttpException && error.status < 500) throw error
+            val since = failingSince ?: now().also { failingSince = it }
+            if (Duration.between(since, now()) >= grace) {
+                throw IOException("Heartbeat unavailable for ${grace.toSeconds()}s: ${safe(error.message)}", error)
+            }
+            System.err.println("Heartbeat temporarily unavailable (${safe(error.message)}); the execution keeps running while the worker retries.")
+            sleep(2_000)
+        }
+    }
 }
