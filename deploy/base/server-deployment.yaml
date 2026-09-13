@@ -11,11 +11,6 @@ spec:
     type: Recreate
   template:
     metadata:
-      annotations:
-        # Secrets worden alleen bij het starten van de pod ingelezen. Bump deze
-        # waarde na het opnieuw sealen van agent-runtime-secrets; Argo CD rolt dan
-        # een nieuwe pod uit.
-        vdzon.nl/secrets-revision: "2026-09-13-elevenlabs-key"
       labels: {app: agent-runtime-server}
     spec:
       terminationGracePeriodSeconds: 30
