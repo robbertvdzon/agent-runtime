@@ -8,6 +8,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 
 import 'browser_platform.dart';
+import 'usage_dashboard.dart';
 import 'google_signin_button_stub.dart'
     if (dart.library.html) 'google_signin_button_web.dart'
     as gis_button;
@@ -376,6 +377,9 @@ class MonitorShell extends StatefulWidget {
 
 class _MonitorShellState extends State<MonitorShell> {
   final api = ApiClient();
+  final usageKey = GlobalKey<UsageDashboardState>();
+  final usageSelection = UsageSelection();
+  int refreshRequest = 0;
   late final TextEditingController searchController;
   ViewKind selected = ViewKind.active;
   Map<String, dynamic>? snapshot;
@@ -462,26 +466,27 @@ class _MonitorShellState extends State<MonitorShell> {
     if (loggedIn == true) await refresh();
   }
 
-  Future<void> refresh({bool silent = false}) async {
+  Future<void> refresh({bool silent = false, bool refreshUsage = true}) async {
     if (api.token.isEmpty) return;
+    final request = ++refreshRequest;
+    final view = selected;
     try {
       final env = await api.get('/v1/management/environment');
-      final path = switch (selected) {
+      if (!mounted || request != refreshRequest || view != selected) return;
+      if (view == ViewKind.usage) {
+        setState(() => environment = env['environment']?.toString() ?? '…');
+        if (refreshUsage) await usageKey.currentState?.reload();
+        return;
+      }
+      final path = switch (view) {
         ViewKind.active => '/v2/management/jobs/running',
         ViewKind.queue => '/v2/management/queue',
         ViewKind.completed => _completedPath(),
         ViewKind.workers => '/v2/management/workers',
-        ViewKind.usage =>
-          '/v2/management/usage/summary?groupBy=TENANT,VENDOR,MODEL,MODE,TASK_TYPE&from=${Uri.encodeQueryComponent(DateTime.now().toUtc().subtract(const Duration(days: 30)).toIso8601String())}&until=${Uri.encodeQueryComponent(DateTime.now().toUtc().toIso8601String())}',
+        ViewKind.usage => throw StateError('Usage loads independently'),
       };
       final data = await api.get(path);
-      if (selected == ViewKind.usage) {
-        final overview = await api.get('/v2/management/consumers');
-        data['consumers'] = overview['items'];
-        data['consumerPeriodFrom'] = overview['from'];
-        data['consumerPeriodUntil'] = overview['until'];
-      }
-      if (!mounted) return;
+      if (!mounted || request != refreshRequest || view != selected) return;
       setState(() {
         environment = env['environment']?.toString() ?? '…';
         snapshot = data;
@@ -491,14 +496,16 @@ class _MonitorShellState extends State<MonitorShell> {
         error = null;
       });
     } on ApiError catch (e) {
-      if (!mounted) return;
+      if (!mounted || request != refreshRequest || view != selected) return;
       setState(() => error = e.message);
       if (e.unauthorized) {
         api.clearToken();
         await login();
       }
     } catch (_) {
-      if (mounted) setState(() => error = 'Verbinding onderbroken');
+      if (mounted && request == refreshRequest && view == selected) {
+        setState(() => error = 'Verbinding onderbroken');
+      }
     }
   }
 
@@ -509,7 +516,7 @@ class _MonitorShellState extends State<MonitorShell> {
       error = null;
       cursor = null;
     });
-    refresh();
+    refresh(refreshUsage: false);
   }
 
   @override
@@ -618,16 +625,31 @@ class _MonitorShellState extends State<MonitorShell> {
     );
   }
 
+  Future<Map<String, dynamic>> _loadUsage(String path) async {
+    if (api.token.isEmpty) {
+      throw const ApiError('Log in om het verbruik te bekijken');
+    }
+    try {
+      return await api.get(path);
+    } on ApiError catch (e) {
+      if (e.unauthorized) {
+        api.clearToken();
+        await login();
+      }
+      rethrow;
+    }
+  }
+
   Widget _content() {
+    if (selected == ViewKind.usage) {
+      return UsageDashboard(
+        key: usageKey,
+        load: _loadUsage,
+        selection: usageSelection,
+      );
+    }
     if (snapshot == null) {
       return const Center(child: CircularProgressIndicator());
-    }
-    if (selected == ViewKind.usage) {
-      final rows = (snapshot!['rows'] as List? ?? const [])
-          .cast<Map<String, dynamic>>();
-      final consumers = (snapshot!['consumers'] as List? ?? const [])
-          .cast<Map<String, dynamic>>();
-      return UsageList(rows: rows, consumers: consumers);
     }
     final items = (snapshot!['items'] as List? ?? const [])
         .cast<Map<String, dynamic>>();
@@ -1698,207 +1720,6 @@ class _FileItemState extends State<_FileItem> {
       ),
     );
   }
-}
-
-class UsageList extends StatelessWidget {
-  final List<Map<String, dynamic>> rows;
-  final List<Map<String, dynamic>> consumers;
-  const UsageList({super.key, required this.rows, required this.consumers});
-
-  @override
-  Widget build(BuildContext context) {
-    if (rows.isEmpty && consumers.isEmpty) {
-      return const Center(child: Text('Er is nog geen gebruik gemeten'));
-    }
-    return ListView(
-      children: [
-        Text(
-          'Consumers',
-          style: Theme.of(
-            context,
-          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 4),
-        const Text(
-          'Jobaantallen per consumer en API-kosten of API-equivalente schattingen over de afgelopen 30 dagen.',
-        ),
-        const SizedBox(height: 14),
-        ...consumers.expand(
-          (consumer) => [
-            _ConsumerUsageCard(consumer: consumer),
-            const SizedBox(height: 12),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Text(
-          'Gebruik per model · afgelopen 30 dagen',
-          style: Theme.of(
-            context,
-          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 14),
-        if (rows.isEmpty)
-          const Card(
-            child: Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('Er is in deze periode nog geen v2-gebruik gemeten.'),
-            ),
-          ),
-        ...rows.expand((row) {
-          final dimensions = (row['dimensions'] as Map? ?? const {}).map(
-            (key, value) => MapEntry(key.toString(), value.toString()),
-          );
-          final metrics = (row['metrics'] as List? ?? const [])
-              .cast<Map<String, dynamic>>();
-          final shares = (row['usageShares'] as List? ?? const [])
-              .cast<Map<String, dynamic>>();
-          final costs = (row['costs'] as List? ?? const [])
-              .cast<Map<String, dynamic>>();
-          String dimension(String key) => dimensions[key] ?? '—';
-          final metricText = metrics
-              .map((metric) {
-                final share = shares
-                    .where((item) => item['metric'] == metric['metric'])
-                    .firstOrNull;
-                final suffix = share == null
-                    ? ''
-                    : ' (${share['percentage']}%)';
-                return '${metric['metric']}: ${metric['quantity']} ${metric['unit']}$suffix';
-              })
-              .join(' · ');
-          final costText = costs.isEmpty
-              ? 'Geen eurobedrag beschikbaar'
-              : costs
-                    .map(
-                      (cost) =>
-                          '${cost['currency']} ${cost['amount']} (${cost['kind']})',
-                    )
-                    .join(' · ');
-          return [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      dimension('tenantId'),
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${dimension('vendorId')} · ${dimension('model')} · ${_formatExecutionMode(dimension('mode'))} · ${dimension('taskType')}',
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      '${row['jobCount']} jobs · ${row['attemptCount']} uitvoeringen · ${row['unknownUsageAttemptCount']} zonder meetbare usage',
-                    ),
-                    if (metricText.isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      Text(metricText),
-                    ],
-                    const SizedBox(height: 6),
-                    Text(
-                      costText,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-          ];
-        }),
-      ],
-    );
-  }
-}
-
-class _ConsumerUsageCard extends StatelessWidget {
-  final Map<String, dynamic> consumer;
-  const _ConsumerUsageCard({required this.consumer});
-
-  @override
-  Widget build(BuildContext context) {
-    final models = (consumer['models'] as List? ?? const [])
-        .cast<Map<String, dynamic>>();
-    final costs = (consumer['costsInPeriod'] as List? ?? const [])
-        .cast<Map<String, dynamic>>();
-    final legacyJobs = consumer['legacyJobsInPeriod'] as int? ?? 0;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              consumer['consumer']?.toString() ?? 'Onbekende consumer',
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 20,
-              runSpacing: 10,
-              children: [
-                _Statistic(label: 'Totaal', value: '${consumer['totalJobs']}'),
-                _Statistic(
-                  label: '24 uur',
-                  value: '${consumer['jobsLast24Hours']}',
-                ),
-                _Statistic(
-                  label: '7 dagen',
-                  value: '${consumer['jobsLast7Days']}',
-                ),
-                _Statistic(
-                  label: '30 dagen',
-                  value: '${consumer['jobsLast30Days']}',
-                ),
-                _Statistic(
-                  label: 'Kosteninschatting 30 dagen',
-                  value: _formatCosts(costs),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              models.isEmpty
-                  ? 'Nog geen modellen gebruikt'
-                  : 'Modellen: ${models.map((model) => '${model['vendorId']} / ${model['model']}${model['mode'] == null ? '' : ' / ${_formatExecutionMode(model['mode'])}'} (${model['jobCount']})').join(' · ')}',
-            ),
-            if (legacyJobs > 0) ...[
-              const SizedBox(height: 6),
-              Text(
-                '$legacyJobs v1-${legacyJobs == 1 ? 'job heeft' : 'jobs hebben'} geen betrouwbare kostenregistratie.',
-                style: const TextStyle(color: Color(0xff6b5440)),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _Statistic extends StatelessWidget {
-  final String label;
-  final String value;
-  const _Statistic({required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(label, style: const TextStyle(color: Color(0xff52665f))),
-      Text(
-        value,
-        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-      ),
-    ],
-  );
 }
 
 String _formatInstant(dynamic raw) {

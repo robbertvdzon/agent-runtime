@@ -18,6 +18,9 @@ done)"
 frontend_build_id="$(printf '%s\n' "$input_hashes" | git hash-object --stdin | cut -c1-16)"
 
 cd "$monitor_dir"
+# Flutter preserves earlier content-hashed bundles in build/web. Drop these generated
+# bundles so a local rebuild embeds the same file set as a clean CI checkout.
+rm -f build/web/main.*.js
 flutter build web --release \
   --pwa-strategy=none \
   --dart-define="AGENT_RUNTIME_FRONTEND_BUILD_ID=$frontend_build_id"

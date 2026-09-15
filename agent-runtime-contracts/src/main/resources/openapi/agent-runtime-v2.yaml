@@ -658,6 +658,34 @@ paths:
         '400': {$ref: '#/components/responses/ClientError'}
         '403': {$ref: '#/components/responses/Forbidden'}
 
+  /management/usage/dashboard:
+    get:
+      operationId: getManagementUsageDashboard
+      summary: Calendar-based project costs, timeline and model usage
+      description: |
+        Requires administrator access. Both calendar dates are inclusive in timeZone;
+        defaults to the latest 30 days. Select 1 to 366 days. Each API or SUBSCRIPTION
+        attempt (including failed attempts and retries) belongs to its local start date.
+        LOCAL, MOCK and v1 are excluded. Projects includes configured and historical v2
+        tenants, even without activity. Rows are grouped by project, day, vendor, model
+        and mode. Client-side source and project filters use this same snapshot.
+        API costs use DIRECT or CALCULATED; subscription uses API_EQUIVALENT only.
+        DIRECT replaces CALCULATED for the same currency and usage record (or whole
+        attempt if DIRECT has no usage record). Fixed or allocated subscription fees
+        are excluded. Currencies remain separate; no conversion is performed.
+      parameters:
+        - {in: query, name: from, schema: {type: string, format: date}}
+        - {in: query, name: through, schema: {type: string, format: date}}
+        - {in: query, name: timeZone, schema: {type: string, default: Europe/Amsterdam}, description: IANA time zone for calendar boundaries and daily buckets.}
+      responses:
+        '200':
+          description: One consistent snapshot for the complete cost dashboard
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UsageDashboardResponse'}
+        '400': {$ref: '#/components/responses/ClientError'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
   /management/prices:
     get:
       operationId: listPriceRates
@@ -1518,6 +1546,49 @@ components:
             properties:
               metric: {$ref: '#/components/schemas/UsageMetric'}
               percentage: {$ref: '#/components/schemas/DecimalString'}
+
+    UsageDashboardResponse:
+      type: object
+      additionalProperties: false
+      required: [from, through, timeZone, projects, rows]
+      properties:
+        from: {type: string, format: date}
+        through: {type: string, format: date}
+        timeZone: {type: string}
+        projects:
+          type: array
+          items: {type: string}
+        rows:
+          type: array
+          items: {$ref: '#/components/schemas/UsageDashboardRow'}
+
+    UsageDashboardRow:
+      type: object
+      additionalProperties: false
+      required: [project, date, vendorId, model, mode, attemptCount, unpricedAttemptCount, partialAttemptCount, costs, metrics]
+      properties:
+        project: {type: string}
+        date: {type: string, format: date}
+        vendorId: {type: string}
+        model: {type: string}
+        mode: {type: string, enum: [API, SUBSCRIPTION]}
+        attemptCount: {type: integer, format: int64, minimum: 0}
+        unpricedAttemptCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Attempts with no applicable price records; unknown, not zero cost.
+        partialAttemptCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Priced attempts with incomplete usage or positive metrics without a price; excludes unpriced attempts.
+        costs:
+          type: array
+          items: {$ref: '#/components/schemas/CostValue'}
+        metrics:
+          type: array
+          items: {$ref: '#/components/schemas/UsageMetricValue'}
 
     CreatePriceRateRequest:
       type: object

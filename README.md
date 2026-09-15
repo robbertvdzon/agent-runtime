@@ -299,8 +299,9 @@ jobsoorten, credentials, taakdirectory, outputvalidatie en retries.
 
 De Flutter-monitor wordt uit dezelfde server-JAR geleverd. Hij toont actieve jobs, wachtrij,
 afgeronde jobs, workers en jobdetails met prompt, outputpogingen, transcript, inputattachments en
-artifacts. De pagina **Gebruik & kosten** toont het v2-verbruik, het aandeel per project en
-beschikbare directe, berekende of abonnementskosten. Afbeeldingen worden inline weergegeven en blijven downloadbaar. De monitor gebruikt in
+artifacts. De pagina **Gebruik & kosten** toont één periodefilter voor alle projecten, totalen, een
+projectranglijst en projectdetails met een dag-/weektijdlijn en modelgebruik. API-kosten en
+geschatte abonnementswaarde blijven herkenbaar, met filters voor API, abonnement of beide. Afbeeldingen worden inline weergegeven en blijven downloadbaar. De monitor gebruikt in
 productie Google-login met een server-side e-mailallowlist en heeft een ingeklapte
 beheertoken-noodroute.
 

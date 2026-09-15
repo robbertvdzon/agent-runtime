@@ -62,26 +62,50 @@ bestaande parameter `search` blijft compatibel en zoekt ook op applicatie. Filte
 in de browser-URL, zodat een refresh dezelfde selectie opent. `from` is inclusief en `until`
 exclusief; beide gebruiken een ISO-8601-tijdstip.
 
-## Gebruik, kosten en consumers
+## Gebruik & kosten
 
-**Gebruik & kosten** begint met alle geconfigureerde en historisch aangetroffen consumers, ook als
-een consumer nog geen jobs heeft. Per consumer toont de monitor het totale aantal jobs, aantallen
-over de laatste 24 uur, 7 dagen en 30 dagen, kosten over de laatste 30 dagen en alle gebruikte
-vendor-/model-/mode-combinaties met jobaantallen.
+Het kostenoverzicht toont alle geconfigureerde en historisch aangetroffen v2-projecten, ook
+zonder gebruik. Eén periodekeuze geldt voor totalen, projectranglijst, tijdlijn en modeldetails.
+Snelle keuzes zijn de laatste 7, 30 of 90 dagen, deze maand en vorige maand. Een eigen periode
+kan 1 tot en met 366 kalenderdagen omvatten; de einddatum is inclusief. De daggrenzen volgen
+**Europe/Amsterdam**, inclusief zomer- en wintertijd.
 
-Jobaantallen en modellen combineren v1 en v2. Bedragen komen uit de v2-kostenadministratie. De
-monitor onderscheidt daarbij vier labels:
+De bronkeuze **Alles / API / Abonnement** en de projectselectie werken op dezelfde momentopname.
+Projecten staan standaard op hoogste bekende verbruikswaarde; sorteren op runs of naam is ook
+mogelijk. Klik op een project voor zijn tijdlijn, model-/provider-/bronuitsplitsing en runs.
+Teruggaan behoudt periode en bronfilter. De tijdlijn toont dagen of maandag-gebaseerde weken;
+een gedeeltelijke week bevat alleen de geselecteerde dagen. Aanwijzen, aantikken of de knoppen
+Vorige/Volgende periode tonen exacte bedragen. Kleine bedragen worden als bijvoorbeeld
+**< US$ 0,01** weergegeven; details bewaren zes decimalen.
 
-- **werkelijke API-kosten** voor een door de provider gerapporteerd bedrag;
-- **API-kosten (berekend)** voor een echte API-job die op basis van gemeten usage is geprijsd;
-- **API-equivalent (abonnement)** voor een subscriptionjob die hypothetisch tegen de openbare
-  API-lijstprijs is geprijsd;
-- **toegerekende abonnementskosten** voor een optionele verdeling van een vast abonnement.
+Een run is een technische **uitvoering (attempt)**, inclusief retries en mislukte uitvoeringen.
+Bedragen en metingen worden toegeschreven aan de startdatum van die uitvoering. Verversen kan
+het bedrag van een nog draaiende uitvoering aanvullen. Lokale uitvoeringen, mocks, v1-jobs en
+jobs die nog niet gestart zijn vallen buiten dit kostenoverzicht.
 
-Een API-equivalent is dus geen werkelijk betaald bedrag en geen indicator van resterende
-abonnementsruimte. Het aantal v1-jobs zonder betrouwbare kostenregistratie wordt apart vermeld.
-Onder het consumeroverzicht blijft de v2-uitsplitsing per vendor, model, mode en opdrachttype
-zichtbaar.
+De drie totalen onderscheiden:
+
+- **Totale verbruikswaarde**: bekende API-kosten plus geschatte abonnementswaarde;
+- **API-kosten**: providergerapporteerde (`DIRECT`) of berekende (`CALCULATED`) kosten;
+- **Abonnementswaarde**: het hypothetische API-equivalent (`API_EQUIVALENT`).
+
+Het API-equivalent is geen werkelijk betaald bedrag, geen extra factuur en geen indicator van
+resterende abonnementsruimte. Vaste abonnementen en toegerekende abonnementskosten (`ALLOCATED`)
+worden niet bij deze verbruikswaarde opgeteld. Een directe providerprijs vervangt de berekende
+prijs voor dezelfde meting en valuta; een directe prijs zonder meting vervangt de berekeningen
+voor die uitvoering en valuta. Bedragen in verschillende valuta worden nooit opgeteld; wanneer
+meerdere valuta voorkomen verschijnt een valutakeuze voor bedragen, ranglijst en grafiek.
+Runaantallen blijven aantallen voor de gekozen bron en periode, onafhankelijk van de valuta.
+
+Uitvoeringen zonder kostenregistratie krijgen **Onbekend**, niet nul. Bij deels ontbrekende
+metingen of tarieven vermeldt de pagina aantallen ongeprijsde en gedeeltelijk gemeten runs.
+De ranglijst en gemiddelden gebruiken de bekende bedragen. Een lege periode toont nul gebruik.
+Bij een mislukte refresh blijft de vorige momentopname zichtbaar met een melding; na een nieuwe
+periodekeuze worden oude bedragen verborgen totdat de passende gegevens beschikbaar zijn.
+
+De dashboard-API leest één consistente, alleen-lezen momentopname. Kosten en metrics worden
+apart opgehaald om vermenigvuldiging door joins te voorkomen. Bestaande consumers- en
+usage-summaryroutes blijven beschikbaar voor compatibiliteit.
 
 ## Workers
 
@@ -152,6 +176,7 @@ GET  /v2/management/jobs/{jobId}/transcript?afterSequence=&limit=
 GET  /v2/management/jobs/{jobId}/attachments/{objectId}
 GET  /v2/management/jobs/{jobId}/artifacts/{objectId}
 GET  /v2/management/workers
+GET  /v2/management/usage/dashboard?from=2026-09-01&through=2026-09-15&timeZone=Europe/Amsterdam
 GET  /v2/management/consumers?from=&until=
 GET  /v2/management/usage/summary?from=&until=&groupBy=TENANT,VENDOR,MODEL,MODE,TASK_TYPE
 ```
