@@ -2,27 +2,25 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: agent-runtime-acceptance
 resources:
-  - ../base
-  - namespace.yaml
-  - sealed-secret.yaml
-  - route.yaml
+- ../base
+- namespace.yaml
+- sealed-secret.yaml
+- route.yaml
+- sealed-central-postgres.yaml
 patches:
-  - target: {kind: Deployment, name: agent-runtime-server}
-    patch: |-
-      - op: add
-        path: /spec/template/spec/containers/0/env
-        value:
-          - {name: AR_ENVIRONMENT, value: ACCEPTANCE}
-          - {name: AR_WORKER_API_ENABLED, value: "false"}
-          - {name: AR_PRODUCT_FACTORY_PROVIDERS, value: MOCKED}
-          - {name: AR_SOFTWARE_FACTORY_PROVIDERS, value: MOCKED}
-          - {name: AR_SOFTWARE_FACTORY_REPOSITORY_ALIASES, value: "software-factory,agent-runtime,test-repository,pvdd,hkh,hkh-autopilot,product-factory,personal-news-feed,robberts-assistent"}
-          - {name: AR_HKH_AUTOPILOT_PROVIDERS, value: MOCKED}
-          - {name: AR_HKH_PROVIDERS, value: MOCKED}
-          - {name: AR_PVDD_PROVIDERS, value: MOCKED}
-          - {name: AR_PVDD_MODELS, value: "mock-model,mock"}
-          - {name: AR_PERSONAL_NEWS_FEED_PROVIDERS, value: MOCKED}
-          - {name: AR_DB_URL, value: "jdbc:h2:mem:agent_runtime_acceptance;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"}
-          - {name: AR_DB_USERNAME, value: sa}
-          - {name: AR_DB_PASSWORD, value: ""}
-  - path: backend-memory.yaml
+- target:
+    kind: Deployment
+    name: agent-runtime-server
+  patch: "- op: add\n  path: /spec/template/spec/containers/0/env\n  value:\n    -\
+    \ {name: AR_ENVIRONMENT, value: ACCEPTANCE}\n    - {name: AR_WORKER_API_ENABLED,\
+    \ value: \"false\"}\n    - {name: AR_PRODUCT_FACTORY_PROVIDERS, value: MOCKED}\n\
+    \    - {name: AR_SOFTWARE_FACTORY_PROVIDERS, value: MOCKED}\n    - {name: AR_SOFTWARE_FACTORY_REPOSITORY_ALIASES,\
+    \ value: \"software-factory,agent-runtime,test-repository,pvdd,hkh,hkh-autopilot,product-factory,personal-news-feed,robberts-assistent\"\
+    }\n    - {name: AR_HKH_AUTOPILOT_PROVIDERS, value: MOCKED}\n    - {name: AR_HKH_PROVIDERS,\
+    \ value: MOCKED}\n    - {name: AR_PVDD_PROVIDERS, value: MOCKED}\n    - {name:\
+    \ AR_PVDD_MODELS, value: \"mock-model,mock\"}\n    - {name: AR_PERSONAL_NEWS_FEED_PROVIDERS,\
+    \ value: MOCKED}\n    - {name: AR_DB_URL, value: \"jdbc:h2:mem:agent_runtime_acceptance;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE\"\
+    }\n    - {name: AR_DB_USERNAME, value: sa}\n    - {name: AR_DB_PASSWORD, value:\
+    \ \"\"}"
+- path: backend-memory.yaml
+- path: central-postgres-patch.yaml

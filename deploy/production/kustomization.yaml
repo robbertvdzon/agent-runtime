@@ -2,49 +2,41 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: agent-runtime
 resources:
-  - ../base
-  - namespace.yaml
-  - sealed-secret.yaml
-  - route.yaml
-  - postgres-serviceaccount.yaml
-  - postgres-pvc.yaml
-  - postgres-deployment.yaml
-  - postgres-service.yaml
-  - server-serviceaccount.yaml
-  - object-store-rolebinding.yaml
-  - backup-pvc.yaml
-  - backup-cronjob.yaml
+- ../base
+- namespace.yaml
+- sealed-secret.yaml
+- route.yaml
+- postgres-serviceaccount.yaml
+- postgres-pvc.yaml
+- postgres-deployment.yaml
+- postgres-service.yaml
+- server-serviceaccount.yaml
+- object-store-rolebinding.yaml
+- backup-pvc.yaml
+- backup-cronjob.yaml
+- sealed-central-postgres.yaml
 patches:
-  - target: {kind: Deployment, name: agent-runtime-server}
-    patch: |-
-      - op: add
-        path: /spec/template/spec/containers/0/env
-        value:
-          - {name: AR_ENVIRONMENT, value: PRODUCTION}
-          - {name: AR_PVDD_PROVIDERS, value: CODEX}
-          - {name: AR_PVDD_MODELS, value: gpt-5.6-sol}
-          - {name: AR_SOFTWARE_FACTORY_REPOSITORY_ALIASES, value: "software-factory,agent-runtime,test-repository,pvdd,hkh,hkh-autopilot,product-factory,personal-news-feed,robberts-assistent"}
-          - {name: AR_PRODUCT_FACTORY_ENVIRONMENT_PREFIXES, value: "PF,HKH,HKH_AUTOPILOT,PERSONAL_FEED,ROBBERTS_ASSISTENT,SF,PVDD"}
-          - {name: AR_SOFTWARE_FACTORY_ENVIRONMENT_PREFIXES, value: "SF,PF,HKH,HKH_AUTOPILOT,PERSONAL_FEED,ROBBERTS_ASSISTENT,PVDD"}
-          - {name: AR_OBJECT_STORE_PATH, value: /var/lib/agent-runtime-objects}
-          - {name: AR_OBJECT_STORE_MIN_FREE_BYTES, value: "536870912000"}
-      - op: add
-        path: /spec/template/spec/serviceAccountName
-        value: agent-runtime-server
-      # exFAT cannot carry a container_file_t label, so the pod needs the host label to write.
-      - op: add
-        path: /spec/template/spec/securityContext
-        value:
-          seLinuxOptions: {type: spc_t}
-      # The built-in hostmount-anyuid-v2 SCC does not admit an explicit seccomp profile.
-      # runAsNonRoot, allowPrivilegeEscalation=false and dropping ALL capabilities remain active.
-      - op: remove
-        path: /spec/template/spec/containers/0/securityContext/seccompProfile
-      - op: replace
-        path: /spec/template/spec/volumes/0
-        value:
-          name: object-store
-          hostPath:
-            path: /var/mnt/external-hdd/agent-runtime-objects
-            type: DirectoryOrCreate
-  - path: backend-memory.yaml
+- target:
+    kind: Deployment
+    name: agent-runtime-server
+  patch: "- op: add\n  path: /spec/template/spec/containers/0/env\n  value:\n    -\
+    \ {name: AR_ENVIRONMENT, value: PRODUCTION}\n    - {name: AR_PVDD_PROVIDERS, value:\
+    \ CODEX}\n    - {name: AR_PVDD_MODELS, value: gpt-5.6-sol}\n    - {name: AR_SOFTWARE_FACTORY_REPOSITORY_ALIASES,\
+    \ value: \"software-factory,agent-runtime,test-repository,pvdd,hkh,hkh-autopilot,product-factory,personal-news-feed,robberts-assistent\"\
+    }\n    - {name: AR_PRODUCT_FACTORY_ENVIRONMENT_PREFIXES, value: \"PF,HKH,HKH_AUTOPILOT,PERSONAL_FEED,ROBBERTS_ASSISTENT,SF,PVDD\"\
+    }\n    - {name: AR_SOFTWARE_FACTORY_ENVIRONMENT_PREFIXES, value: \"SF,PF,HKH,HKH_AUTOPILOT,PERSONAL_FEED,ROBBERTS_ASSISTENT,PVDD\"\
+    }\n    - {name: AR_OBJECT_STORE_PATH, value: /var/lib/agent-runtime-objects}\n\
+    \    - {name: AR_OBJECT_STORE_MIN_FREE_BYTES, value: \"536870912000\"}\n- op:\
+    \ add\n  path: /spec/template/spec/serviceAccountName\n  value: agent-runtime-server\n\
+    # exFAT cannot carry a container_file_t label, so the pod needs the host label\
+    \ to write.\n- op: add\n  path: /spec/template/spec/securityContext\n  value:\n\
+    \    seLinuxOptions: {type: spc_t}\n# The built-in hostmount-anyuid-v2 SCC does\
+    \ not admit an explicit seccomp profile.\n# runAsNonRoot, allowPrivilegeEscalation=false\
+    \ and dropping ALL capabilities remain active.\n- op: remove\n  path: /spec/template/spec/containers/0/securityContext/seccompProfile\n\
+    - op: replace\n  path: /spec/template/spec/volumes/0\n  value:\n    name: object-store\n\
+    \    hostPath:\n      path: /var/mnt/external-hdd/agent-runtime-objects\n    \
+    \  type: DirectoryOrCreate"
+- path: backend-memory.yaml
+- path: central-postgres-patch.yaml
+- path: ar_prod-retired-database.yaml
+- path: retired-backup-patch.yaml

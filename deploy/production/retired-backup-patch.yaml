@@ -1,0 +1,6 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: agent-runtime-database-backup
+spec:
+  suspend: true
