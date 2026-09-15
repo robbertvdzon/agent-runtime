@@ -47,3 +47,4 @@ patches:
           hostPath:
             path: /var/mnt/external-hdd/agent-runtime-objects
             type: DirectoryOrCreate
+  - path: backend-memory.yaml
