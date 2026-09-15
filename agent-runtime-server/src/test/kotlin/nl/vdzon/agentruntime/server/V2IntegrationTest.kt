@@ -23,6 +23,29 @@ import java.util.UUID
 @AutoConfigureMockMvc
 class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private val mapper:ObjectMapper,@Autowired private val jdbc:JdbcTemplate) {
     @Test
+    fun `cancellation keeps a live worker cooperative but fences an expired attempt immediately`() {
+        val model = "cancel-${UUID.randomUUID()}"
+        val capability = ExecutorCapability("openai", model, ExecutionMode.SUBSCRIPTION, setOf(TaskType.REPOSITORY_AGENT))
+        val worker = "cancel-worker-${UUID.randomUUID()}"
+        val boot = UUID.randomUUID().toString()
+        postJson("/v2/workers/register", WORKER, WorkerRegistrationRequest(worker, boot, setOf(capability), availableRepositoryAliases = setOf("test-repository")), 200)
+        val jobId = postJson("/v2/jobs", SOFTWARE, repositoryJob(model), 202).path("id").asText()
+        val claim = postJson("/v2/workers/$worker/claims", WORKER, ClaimRequest(boot, setOf(capability), 0), 200)
+        val attemptId = claim.path("attempt").path("id").asText()
+        val auth = AttemptAuth(attemptId, claim.path("fencingToken").asText())
+        assertThat(postJson("/v2/jobs/$jobId/cancel", SOFTWARE, null, 200).path("status").asText()).isEqualTo("RUNNING")
+        assertThat(postJson("/v2/workers/$worker/jobs/$jobId/heartbeat", WORKER, auth, 200).path("cancelRequested").asBoolean()).isTrue()
+        jdbc.update("UPDATE runtime_v2_attempt SET lease_until=? WHERE id=?", java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(1), attemptId)
+        repeat(2) {
+            assertThat(postJson("/v2/jobs/$jobId/cancel", SOFTWARE, null, 200).path("status").asText()).isEqualTo("CANCELLED")
+        }
+        assertThat(getJson("/v2/jobs/$jobId/attempts", SOFTWARE).first().path("status").asText()).isEqualTo("CANCELLED")
+        postJson("/v2/workers/$worker/jobs/$jobId/heartbeat", WORKER, auth, 409)
+        postJson("/v2/workers/$worker/jobs/$jobId/attempts/$attemptId/result", WORKER,
+            SubmitResultRequest(auth.fencingToken, mapper.readTree("""{"text":"late"}""")), 409)
+    }
+
+    @Test
     fun `built in API price catalog covers current subscription models`() {
         val openAi = getJson("/v2/management/prices?vendorId=openai&model=gpt-5.6-sol", ADMIN)
         assertThat(openAi.any {

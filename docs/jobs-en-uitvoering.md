@@ -262,6 +262,12 @@ attempt `SUSPECTED`; dezelfde worker kan hem binnen het standaardherstelvenster 
 terugnemen. Daarna plant de server een retry met begrensde exponentiële back-off. De standaardlimiet
 is drie technische attempts.
 
+Bij een expliciet annuleringsverzoek voor een v2-job met een verlopen workerlease
+worden job en attempt direct `CANCELLED`. De oude attempt kan daarna geen resultaat
+of publicatie meer indienen. Voor een worker met een geldige lease blijft annuleren
+coöperatief via de volgende heartbeat; het herstelvenster blijft gelden voor jobs
+die niet zijn geannuleerd.
+
 Bij claimen berekent de server een harde `attemptDeadline` uit `executionTimeoutSeconds`. De worker
 en server dwingen deze grens onafhankelijk af. Heartbeats, slaapstand en herstel verlengen hem
 niet. Na het verstrijken worden verdere voortgang, transcriptdelen, artifacts en resultaten

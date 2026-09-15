@@ -151,12 +151,22 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
     }
     fun markAttemptAbandoned(attemptId:String){jdbc.update("UPDATE runtime_v2_attempt SET status='ABANDONED' WHERE id=? AND status='FAILED'",attemptId)}
 
+    @Transactional
     fun cancel(job:StoredV2Job) {
         val now=Instant.now()
         if(job.view.status in setOf(JobStatus.QUEUED,JobStatus.WAITING_FOR_WORKER)) {
             jdbc.update("UPDATE runtime_v2_job SET status='CANCELLED',phase='CANCELLED',cancel_requested=TRUE,completed_at=?,updated_at=? WHERE id=?",utc(now),utc(now),job.view.id)
             addEvent(job.view.id,null,EventType.JOB_FINISHED,"CANCELLED","Job cancelled.",status=JobStatus.CANCELLED)
-        } else if(job.view.status==JobStatus.RUNNING) jdbc.update("UPDATE runtime_v2_job SET cancel_requested=TRUE,updated_at=? WHERE id=?",utc(now),job.view.id)
+        } else if(job.view.status==JobStatus.RUNNING) {
+            jdbc.update("UPDATE runtime_v2_job SET cancel_requested=TRUE,updated_at=? WHERE id=?",utc(now),job.view.id)
+            val attempt = activeAttempt(job.view.id)
+            // An explicit cancellation needs no recovery window for a worker that stopped
+            // heartbeating. Cancel the attempt too, fencing any late result/publication.
+            if (attempt != null && !attempt.leaseUntil.isAfter(now)) {
+                failAttempt(job.copy(cancelRequested = true), attempt.view.id, "CANCELLED",
+                    "Job cancelled after its worker lease expired.", false)
+            }
+        }
     }
 
     fun addEvent(jobId:String,attemptId:String?,type:EventType,phase:String?,message:String?,kind:LogKind?=null,text:String?=null,streamId:String?=null,final:Boolean?=null,status:JobStatus?=null,percent:Int?=null,externalId:String?=null) {
