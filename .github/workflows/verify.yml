@@ -27,6 +27,7 @@ jobs:
           ':(exclude)agent-runtime-server/src/main/resources/static/canvaskit/**'
       - run: mvn -B --no-transfer-progress verify
       - run: bash execution-images/test-run-agent.sh
+      - run: bash deploy/macos/test-immutable-worker-jar.sh
       - run: |
           docker build --target build -t agent-runtime-build .
           docker build -t agent-runtime-server .
