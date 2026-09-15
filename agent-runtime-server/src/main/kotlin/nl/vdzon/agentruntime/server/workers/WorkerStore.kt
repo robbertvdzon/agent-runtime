@@ -1,5 +1,7 @@
 package nl.vdzon.agentruntime.server.workers
 
+import nl.vdzon.agentruntime.contracts.ExecutionCredentialPolicy
+
 import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.ObjectMapper
 import nl.vdzon.agentruntime.contracts.*
@@ -48,7 +50,7 @@ class WorkerStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMapp
             """UPDATE runtime_worker SET boot_id=?, status='ONLINE', capabilities_json=?, providers_json=?, models_json=?,
                environment_keys_json=?, max_concurrency=?, versions_json=?, advertised_models_json=?, last_heartbeat_at=? WHERE worker_id=?""",
             request.bootId, mapper.writeValueAsString(request.capabilities), mapper.writeValueAsString(request.providers),
-            mapper.writeValueAsString(request.models), mapper.writeValueAsString(request.availableEnvironmentKeys), request.maxConcurrency,
+            mapper.writeValueAsString(request.models), mapper.writeValueAsString(request.availableEnvironmentKeys.filter(ExecutionCredentialPolicy::allows)), request.maxConcurrency,
             mapper.writeValueAsString(request.versions), mapper.writeValueAsString(request.advertisedModels), now, request.workerId,
         )
         if (updated == 0) try {
@@ -56,7 +58,7 @@ class WorkerStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMapp
                 """INSERT INTO runtime_worker(worker_id,boot_id,status,capabilities_json,providers_json,models_json,environment_keys_json,max_concurrency,versions_json,advertised_models_json,last_heartbeat_at,registered_at)
                    VALUES (?,?,'ONLINE',?,?,?,?,?,?,?,?,?)""",
                 request.workerId, request.bootId, mapper.writeValueAsString(request.capabilities), mapper.writeValueAsString(request.providers),
-                mapper.writeValueAsString(request.models), mapper.writeValueAsString(request.availableEnvironmentKeys), request.maxConcurrency,
+                mapper.writeValueAsString(request.models), mapper.writeValueAsString(request.availableEnvironmentKeys.filter(ExecutionCredentialPolicy::allows)), request.maxConcurrency,
                 mapper.writeValueAsString(request.versions), mapper.writeValueAsString(request.advertisedModels), now, now,
             )
         } catch (_: DuplicateKeyException) { register(request) }

@@ -286,6 +286,7 @@ components:
         repositorySnapshot: {$ref: '#/components/schemas/RepositorySnapshot'}
         repositoryRequest: {$ref: '#/components/schemas/RepositoryRequest'}
         environmentKeys:
+        description: Only PROJECT__TEST_*, PROJECT__ACCEPTANCE_* and PROJECT__PREVIEW_* names are allowed. Production, unscoped, cluster and session-signing credentials are forbidden.
           type: array
           maxItems: 50
           uniqueItems: true

@@ -1,5 +1,7 @@
 package nl.vdzon.agentruntime.worker
 
+import nl.vdzon.agentruntime.contracts.ExecutionCredentialPolicy
+
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import nl.vdzon.agentruntime.contracts.Provider
@@ -194,6 +196,7 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
             "-w", containerWorkingDirectory,
         )
         val selected = claim.request.environmentKeys.associateWith { key ->
+            ExecutionCredentialPolicy.requireAllowed(key)
             config.projectCredentials[key] ?: throw JobFailure("REQUIRED_ENVIRONMENT_KEY_UNAVAILABLE", "Required environment key is unavailable on this worker.", false)
         }
         selected.keys.forEach { docker += listOf("-e", it) }
@@ -333,6 +336,7 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
             client.download(claim, ref.objectId, dir.resolve("content"))
         }
         val selected = claim.request.environmentKeys.associateWith { key ->
+            ExecutionCredentialPolicy.requireAllowed(key)
             config.projectCredentials[key] ?: throw JobFailure("REQUIRED_ENVIRONMENT_KEY_UNAVAILABLE", "Required environment key is unavailable on this worker.", false)
         }
         val secretFile = secrets.resolve("secrets.env")
@@ -419,7 +423,9 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
             "-v", "${task.resolve("docs")}:/job/docs:ro", "-v", "${task.resolve("output")}:/job/output",
         )
         if (claim.request.repositoryCheckout != null) command += listOf("-v", "${workspace.resolve(".git")}:/work/.git:ro", "-e", "GIT_OPTIONAL_LOCKS=0")
-        credentials?.let { command += listOf("-v", "${it.toAbsolutePath()}:/credential-source:ro") }
+        val credentialSource = if (engine == "CLAUDE" && !config.claudeOauthToken.isNullOrBlank()) null
+            else credentials?.let { isolateProviderCredentials(it, task, engine) }
+        credentialSource?.let { command += listOf("-v", "$it:/credential-source:ro") }
         if (engine == "CLAUDE" && !config.claudeOauthToken.isNullOrBlank()) command += listOf("-e", "CLAUDE_CODE_OAUTH_TOKEN")
         command += listOf("-e", "AR_ENGINE=$engine", "-e", "AR_MODEL=${claim.job.execution.model}", "-e", "AR_JOB_KIND=${claim.job.jobKind.name}", "-e", "AR_OUTPUT_ATTEMPT=$agentRound", "-e", "AR_RESULT_FILE=/job/output/result.json", config.executionImage)
         val process = ProcessBuilder(command).redirectErrorStream(true).also {

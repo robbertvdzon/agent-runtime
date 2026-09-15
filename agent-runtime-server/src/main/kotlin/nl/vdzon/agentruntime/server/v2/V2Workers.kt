@@ -1,5 +1,7 @@
 package nl.vdzon.agentruntime.server.v2
 
+import nl.vdzon.agentruntime.contracts.ExecutionCredentialPolicy
+
 import com.fasterxml.jackson.databind.ObjectMapper
 import nl.vdzon.agentruntime.contracts.v2.*
 import nl.vdzon.agentruntime.server.config.ApiException
@@ -25,9 +27,9 @@ class V2WorkerStore(private val jdbc:JdbcTemplate,private val mapper:ObjectMappe
     fun register(request:WorkerRegistrationRequest):WorkerView {
         val now=Instant.now()
         val updated=jdbc.update("""UPDATE runtime_v2_worker SET boot_id=?,executors_json=?,environment_keys_json=?,repository_aliases_json=?,max_concurrency=?,versions_json=?,last_heartbeat_at=? WHERE worker_id=?""",
-            request.bootId,mapper.writeValueAsString(request.executors),mapper.writeValueAsString(request.availableEnvironmentKeys),mapper.writeValueAsString(request.availableRepositoryAliases),request.maxConcurrency,mapper.writeValueAsString(request.versions),V2JobStore.utc(now),request.workerId)
+            request.bootId,mapper.writeValueAsString(request.executors),mapper.writeValueAsString(request.availableEnvironmentKeys.filter(ExecutionCredentialPolicy::allows)),mapper.writeValueAsString(request.availableRepositoryAliases),request.maxConcurrency,mapper.writeValueAsString(request.versions),V2JobStore.utc(now),request.workerId)
         if(updated==0)jdbc.update("""INSERT INTO runtime_v2_worker(worker_id,boot_id,executors_json,environment_keys_json,repository_aliases_json,max_concurrency,versions_json,last_heartbeat_at,registered_at) VALUES (?,?,?,?,?,?,?,?,?)""",
-            request.workerId,request.bootId,mapper.writeValueAsString(request.executors),mapper.writeValueAsString(request.availableEnvironmentKeys),mapper.writeValueAsString(request.availableRepositoryAliases),request.maxConcurrency,mapper.writeValueAsString(request.versions),V2JobStore.utc(now),V2JobStore.utc(now))
+            request.workerId,request.bootId,mapper.writeValueAsString(request.executors),mapper.writeValueAsString(request.availableEnvironmentKeys.filter(ExecutionCredentialPolicy::allows)),mapper.writeValueAsString(request.availableRepositoryAliases),request.maxConcurrency,mapper.writeValueAsString(request.versions),V2JobStore.utc(now),V2JobStore.utc(now))
         return WorkerView(request.workerId,request.bootId,request.executors,request.availableRepositoryAliases,request.maxConcurrency,now)
     }
     fun bootId(workerId:String):String?=jdbc.query("SELECT boot_id FROM runtime_v2_worker WHERE worker_id=?",{rs,_->rs.getString(1)},workerId).firstOrNull()

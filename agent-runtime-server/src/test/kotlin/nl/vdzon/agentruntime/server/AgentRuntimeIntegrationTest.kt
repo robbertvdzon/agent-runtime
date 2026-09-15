@@ -252,14 +252,23 @@ class AgentRuntimeIntegrationTest(
     }
 
     @Test
+    fun `production and unscoped credentials cannot be requested`() {
+        for (key in listOf("HKH__PRODUCTION_TOKEN", "HKH__DATABASE_PASSWORD", "HKH__PREVIEW_KUBECONFIG_BASE64")) {
+            val request = applicationRequest(UUID.randomUUID().toString(), Provider.CODEX).copy(environmentKeys = listOf(key))
+            mvc.perform(post("/v1/jobs").bearer(PRODUCT_TOKEN).contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsBytes(request)))
+                .andExpect(status().isBadRequest)
+        }
+    }
+
+    @Test
     fun `attachments and environment catalog are bounded and values never appear`() {
         val workerId = "catalog-${UUID.randomUUID()}"; val bootId = UUID.randomUUID().toString()
         postJson("/v1/workers/register", WORKER_TOKEN, WorkerRegistrationRequest(
             workerId, bootId, setOf("application-work"), setOf(Provider.CODEX), emptySet(),
-            setOf("HKH__SCREENSHOT_USER", "ROBBERTS_ASSISTENT__TEST_USER"), 1,
+            setOf("HKH__TEST_SCREENSHOT_USER", "HKH__PRODUCTION_TOKEN", "ROBBERTS_ASSISTENT__TEST_USER"), 1,
         ))
         val catalog = getJson("/v1/environment-keys?project=HKH", PRODUCT_TOKEN)
-        assertThat(catalog.single().path("name").asText()).isEqualTo("HKH__SCREENSHOT_USER")
+        assertThat(catalog.single().path("name").asText()).isEqualTo("HKH__TEST_SCREENSHOT_USER")
         assertThat(catalog.toString()).doesNotContain("password", "secret-value")
         val assistantCatalog = getJson("/v1/environment-keys?project=ROBBERTS_ASSISTENT", PRODUCT_TOKEN)
         assertThat(assistantCatalog.single().path("name").asText()).isEqualTo("ROBBERTS_ASSISTENT__TEST_USER")

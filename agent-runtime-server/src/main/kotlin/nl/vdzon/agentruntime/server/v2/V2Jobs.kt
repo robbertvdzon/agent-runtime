@@ -1,5 +1,7 @@
 package nl.vdzon.agentruntime.server.v2
 
+import nl.vdzon.agentruntime.contracts.ExecutionCredentialPolicy
+
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import nl.vdzon.agentruntime.contracts.v2.*
@@ -202,7 +204,7 @@ class V2JobService(private val properties:RuntimeProperties,private val jobs:V2J
         if(request.taskType in setOf(TaskType.STRUCTURED_GENERATION,TaskType.REPOSITORY_AGENT) && request.output.resultSchema==null) throw ApiException("RESULT_SCHEMA_REQUIRED","Structured and repository jobs require resultSchema.")
         validateRepositoryRequest(tenantId, request)
         val prefixes=properties.allowedEnvironmentPrefixes(tenantId)
-        request.environmentKeys.forEach { key -> if(key.substringBefore("__") !in prefixes) throw ApiException("ENVIRONMENT_KEY_NOT_ALLOWED","Environment key $key is outside the tenant policy.") }
+        request.environmentKeys.forEach { key -> if (!ExecutionCredentialPolicy.allows(key)) throw ApiException("ENVIRONMENT_KEY_NOT_ALLOWED", "Only scoped test/acceptance/preview credentials may enter execution jobs."); if(key.substringBefore("__") !in prefixes) throw ApiException("ENVIRONMENT_KEY_NOT_ALLOWED","Environment key $key is outside the tenant policy.") }
         if(request.output.artifacts.map{it.name}.distinct().size!=request.output.artifacts.size) throw ApiException("DUPLICATE_OUTPUT_NAME","Output artifact names must be unique.")
         val refs=request.input.objects
         if(refs.map{it.name}.distinct().size!=refs.size) throw ApiException("DUPLICATE_INPUT_NAME","Input object names must be unique.")

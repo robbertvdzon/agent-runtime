@@ -1208,6 +1208,7 @@ components:
             - $ref: '#/components/schemas/JobVerification'
           description: Only valid for mutating REPOSITORY_WORK. REPOSITORY_CONFIG requires a timeout of at least 600 seconds.
         environmentKeys:
+        description: Only PROJECT__TEST_*, PROJECT__ACCEPTANCE_* and PROJECT__PREVIEW_* names are allowed. Production, unscoped, cluster and session-signing credentials are forbidden.
           type: array
           maxItems: 50
           uniqueItems: true

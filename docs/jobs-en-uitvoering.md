@@ -285,3 +285,15 @@ gebruiken. De mock doorloopt dezelfde jobopslag, JSON-normalisatie, schemavalida
 outputpogingen en resultaatroutes zonder worker, lease of container. Acceptatie accepteert geen
 `CODEX`- of `CLAUDE`-jobs en de worker-API retourneert daar not-found. `PRODUCTION` weigert
 `MOCKED`.
+
+## Uitvoeringstoegang tot applicaties
+
+Jobs mogen uitsluitend expliciet voor TEST, ACCEPTANCE of PREVIEW ingerichte waarden selecteren,
+met namen zoals `PF__ACCEPTANCE_AGENT_TOKEN`. Server en worker weigeren productie-, ongescopeerde,
+cluster- en sessie-ondertekeningscredentials. Oude namen in een workerbestand worden niet meer
+geadverteerd. Zet productiecredentials niet onder een testnaam; provision de testcredential in de
+betrokken omgeving. Productietoegang voor begeleid onderzoek blijft buiten de workerconfiguratie.
+
+Alleen `auth.json` (Codex) of `.credentials.json` (Claude) wordt vanuit een tijdelijke, private map
+voor providerlogin gemount. Met Claude OAuth wordt geen persoonlijke profielmap gemount. Persoonlijke
+historie, hooks, instructies en MCP-configuratie blijven op de host.

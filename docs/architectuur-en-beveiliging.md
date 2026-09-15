@@ -170,3 +170,15 @@ Productie gebruikt PostgreSQL op een persistente volumeclaim. Flyway beheert het
 De nachtelijke backupjob maakt een custom-format dump, valideert hem met `pg_restore --list`,
 schrijft een SHA-256-bestand en bewaart veertien dagen. Restore-oefeningen gebruiken een lege,
 afzonderlijke database.
+
+## Uitvoeringstoegang tot applicaties
+
+Jobs mogen uitsluitend expliciet voor TEST, ACCEPTANCE of PREVIEW ingerichte waarden selecteren,
+met namen zoals `PF__ACCEPTANCE_AGENT_TOKEN`. Server en worker weigeren productie-, ongescopeerde,
+cluster- en sessie-ondertekeningscredentials. Oude namen in een workerbestand worden niet meer
+geadverteerd. Zet productiecredentials niet onder een testnaam; provision de testcredential in de
+betrokken omgeving. Productietoegang voor begeleid onderzoek blijft buiten de workerconfiguratie.
+
+Alleen `auth.json` (Codex) of `.credentials.json` (Claude) wordt vanuit een tijdelijke, private map
+voor providerlogin gemount. Met Claude OAuth wordt geen persoonlijke profielmap gemount. Persoonlijke
+historie, hooks, instructies en MCP-configuratie blijven op de host.

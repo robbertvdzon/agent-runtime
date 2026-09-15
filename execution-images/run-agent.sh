@@ -13,11 +13,11 @@ provider_prompt() {
 
 copy_credentials() {
   local source="$1" target="$2"
-  # Alleen top-level bestanden zijn credentials/configuratie. Sessies, logs en
-  # de live .codex/ipc-socket zijn niet nodig en kunnen tijdens de kopie wijzigen.
-  while IFS= read -r -d '' credential; do
-    cp -- "$credential" "$target/${credential##*/}" 2>/dev/null || true
-  done < <(find "$source" -maxdepth 1 -type f -print0)
+  for filename in auth.json .credentials.json; do
+    if [[ -f "$source/$filename" && ! -L "$source/$filename" ]]; then
+      cp -- "$source/$filename" "$target/$filename"
+    fi
+  done
 }
 
 # Maak de helper zonder side effects sourcebaar voor de regressietest.
@@ -39,9 +39,6 @@ case "${AR_ENGINE:-}" in
   CLAUDE)
     if [[ -d /credential-source ]]; then
       copy_credentials /credential-source /home/agent/.claude
-    fi
-    if [[ -f /credential-config.json ]]; then
-      cp /credential-config.json /home/agent/.claude.json
     fi
     args=(-p --no-session-persistence --dangerously-skip-permissions --model "$AR_MODEL" --output-format text)
     if [[ -s /job/input/response-schema.json ]]; then

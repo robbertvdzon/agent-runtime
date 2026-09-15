@@ -1,5 +1,7 @@
 package nl.vdzon.agentruntime.worker
 
+import nl.vdzon.agentruntime.contracts.ExecutionCredentialPolicy
+
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
@@ -360,6 +362,7 @@ class JobExecutor(
         }
 
         val selected = claim.request.environmentKeys.associateWith { key ->
+            ExecutionCredentialPolicy.requireAllowed(key)
             config.projectCredentials[key] ?: throw JobFailure("REQUIRED_ENVIRONMENT_KEY_UNAVAILABLE", "Required environment key is not locally available.", false)
         }
         val secretFile = secrets.resolve("secrets.env")
@@ -405,19 +408,11 @@ class JobExecutor(
             "-v", "${taskRoot.resolve("docs")}:/job/docs:ro",
             "-v", "${taskRoot.resolve("output")}:/job/output",
         )
-        if (claim.job.provider == Provider.CLAUDE) {
-            if (credentials != null) {
-                command += listOf("-v", "${credentials.toAbsolutePath()}:/credential-source:ro")
-                val claudeConfig = credentials.toAbsolutePath().parent.resolve(".claude.json")
-                if (!claudeConfig.isSymbolicLink() && claudeConfig.isRegularFile()) {
-                    command += listOf("-v", "$claudeConfig:/credential-config.json:ro")
-                }
-            }
-            if (!config.claudeOauthToken.isNullOrBlank()) {
-                command += listOf("-e", "CLAUDE_CODE_OAUTH_TOKEN")
-            }
-        } else if (credentials != null) {
-            command += listOf("-v", "${credentials.toAbsolutePath()}:/credential-source:ro")
+        val credentialSource = if (claim.job.provider == Provider.CLAUDE && !config.claudeOauthToken.isNullOrBlank()) null
+            else credentials?.let { isolateProviderCredentials(it, taskRoot, claim.job.provider.name) }
+        credentialSource?.let { command += listOf("-v", "$it:/credential-source:ro") }
+        if (claim.job.provider == Provider.CLAUDE && !config.claudeOauthToken.isNullOrBlank()) {
+            command += listOf("-e", "CLAUDE_CODE_OAUTH_TOKEN")
         }
         command += listOf(
             "-e", "AR_ENGINE=${claim.job.provider.name}", "-e", "AR_MODEL=${claim.job.model}", "-e", "AR_JOB_KIND=${claim.job.jobKind.name}",
@@ -751,7 +746,7 @@ object ProjectCredentials {
         SecureEnvFiles.requireOwnerOnly(path)
         return SecureEnvFiles.parse(path, name).also { values ->
             values.keys.forEach { key -> require(key.substringBefore("__") !in forbiddenPrefixes) { "Forbidden project credential key $key" } }
-        }
+        }.filterKeys(ExecutionCredentialPolicy::allows)
     }
 }
 
