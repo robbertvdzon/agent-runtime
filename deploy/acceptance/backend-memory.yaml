@@ -1,0 +1,18 @@
+# Container memory includes heap, metaspace, stacks and native buffers.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-runtime-server
+spec:
+  template:
+    spec:
+      containers:
+      - name: server
+        resources:
+          requests:
+            memory: 288Mi
+          limits:
+            memory: 384Mi
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: -Xmx128m -XX:+UseSerialGC

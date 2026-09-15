@@ -25,3 +25,4 @@ patches:
           - {name: AR_DB_URL, value: "jdbc:h2:mem:agent_runtime_acceptance;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"}
           - {name: AR_DB_USERNAME, value: sa}
           - {name: AR_DB_PASSWORD, value: ""}
+  - path: backend-memory.yaml
