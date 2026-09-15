@@ -154,3 +154,14 @@ Herstel bij een applicatiefout door een nieuwe, gerepareerde immutable release v
 CI-keten te publiceren. Wanneer terugkeer naar een oudere server noodzakelijk is, worden writers
 gestopt en wordt een backup van vóór de incompatibele migratie naar een nieuwe database hersteld.
 De actieve productiedatabase krijgt geen handmatige neerwaartse Flywaymigratie.
+
+## Lokale workerinstallatie
+
+De macOS-installer kopieert de gebouwde worker-JAR naar
+`work/installed-worker/worker-<sha256>.jar` en laat de LaunchAgent dat bestand starten.
+Deze installatiebestanden worden nooit overschreven: een nieuwe Maven-build of `clean`
+mag geen classes verwijderen uit een nog draaiende JVM. Oude installatiebestanden
+blijven staan zolang een eerder gestarte worker ze kan gebruiken. Installeer een
+nieuwe versie wanneer actieve jobs zijn afgerond; `install` herstart de worker.
+
+Controleer dit gedrag met `bash deploy/macos/test-immutable-worker-jar.sh`.

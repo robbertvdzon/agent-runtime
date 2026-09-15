@@ -11,6 +11,7 @@ readonly TARGET="$HOME/Library/LaunchAgents/$LABEL.plist"
 readonly LOG_DIRECTORY="$REPOSITORY_ROOT/work/logs"
 readonly STDOUT_PATH="$LOG_DIRECTORY/worker.log"
 readonly STDERR_PATH="$LOG_DIRECTORY/worker-error.log"
+source "$SCRIPT_DIR/immutable-worker-jar.sh"
 
 usage() {
     printf 'Gebruik: %s check|migrate|install|uninstall\n' "$0"
@@ -225,6 +226,9 @@ case "$action" in
         temporary_plist="$(mktemp -t agent-runtime-worker.XXXXXX.plist)"
         trap 'rm -f "$temporary_plist"' EXIT
         preflight_and_render "$temporary_plist"
+        built_jar="$(/usr/bin/plutil -extract ProgramArguments.2 raw "$temporary_plist")"
+        installed_jar="$(stage_worker_jar "$built_jar" "$REPOSITORY_ROOT/work/installed-worker")"
+        /usr/bin/plutil -replace ProgramArguments.2 -string "$installed_jar" "$temporary_plist"
         mkdir -p "$(dirname -- "$TARGET")"
         if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
             launchctl bootout "$DOMAIN/$LABEL"
