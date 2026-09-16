@@ -1214,6 +1214,7 @@ components:
         readyAt: {type: string, format: date-time}
 
     CreateJobRequest:
+      description: Production credentials are forbidden except PVDD__PRODUCTION_READ_ONLY_TOKEN for the explicitly authorized Product Factory PvdD advisor; the application enforces read-only routes.
       type: object
       additionalProperties: false
       description: |

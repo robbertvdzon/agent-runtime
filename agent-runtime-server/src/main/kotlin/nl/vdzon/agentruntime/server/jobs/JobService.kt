@@ -91,7 +91,7 @@ class JobService(
         requireRequest(request.environmentKeys.size == request.environmentKeys.toSet().size, "Environment keys must be unique.")
         val prefixes = properties.allowedEnvironmentPrefixes(tenant)
         request.environmentKeys.forEach { key ->
-            requireRequest(ExecutionCredentialPolicy.allows(key), "Production and unscoped credentials are forbidden in execution jobs.")
+            requireRequest(ExecutionCredentialPolicy.allowsNonProduction(key), "Production and unscoped credentials are forbidden in execution jobs.")
             requireRequest(ENVIRONMENT_KEY.matches(key), "Invalid environment key name.")
             requireRequest(key.substringBefore("__") in prefixes, "Environment key prefix is not allowed for this consumer.")
         }

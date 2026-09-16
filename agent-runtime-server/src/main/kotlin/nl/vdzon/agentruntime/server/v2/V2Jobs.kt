@@ -213,6 +213,13 @@ class V2JobService(private val properties:RuntimeProperties,private val jobs:V2J
         validator.validateSchema(request.output.resultSchema)
         if(request.taskType in setOf(TaskType.STRUCTURED_GENERATION,TaskType.REPOSITORY_AGENT) && request.output.resultSchema==null) throw ApiException("RESULT_SCHEMA_REQUIRED","Structured and repository jobs require resultSchema.")
         validateRepositoryRequest(tenantId, request)
+        if (ExecutionCredentialPolicy.PVDD_PRODUCTION_READ_ONLY in request.environmentKeys &&
+            (tenantId != "product-factory" || request.jobKind != JobKind.APPLICATION_WORK ||
+                !request.idempotencyKey.startsWith("pf-product-advisor-") ||
+                request.repositoryCheckout != null ||
+                request.repositorySnapshot?.url !in setOf("https://github.com/robbertvdzon/pvdd", "https://github.com/robbertvdzon/pvdd.git"))) {
+            throw ApiException("ENVIRONMENT_KEY_NOT_ALLOWED", "Production read access is restricted to the PvdD Product Factory advisor.")
+        }
         val prefixes=properties.allowedEnvironmentPrefixes(tenantId)
         request.environmentKeys.forEach { key -> if (!ExecutionCredentialPolicy.allows(key)) throw ApiException("ENVIRONMENT_KEY_NOT_ALLOWED", "Only scoped test/acceptance/preview credentials may enter execution jobs."); if(key.substringBefore("__") !in prefixes) throw ApiException("ENVIRONMENT_KEY_NOT_ALLOWED","Environment key $key is outside the tenant policy.") }
         if(request.output.artifacts.map{it.name}.distinct().size!=request.output.artifacts.size) throw ApiException("DUPLICATE_OUTPUT_NAME","Output artifact names must be unique.")

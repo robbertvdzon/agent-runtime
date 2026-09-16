@@ -303,3 +303,13 @@ betrokken omgeving. Productietoegang voor begeleid onderzoek blijft buiten de wo
 Alleen `auth.json` (Codex) of `.credentials.json` (Claude) wordt vanuit een tijdelijke, private map
 voor providerlogin gemount. Met Claude OAuth wordt geen persoonlijke profielmap gemount. Persoonlijke
 historie, hooks, instructies en MCP-configuratie blijven op de host.
+
+## Beperkte PvdD-productieleestoegang
+
+Vanaf 16 september 2026 is uitsluitend `PVDD__PRODUCTION_READ_ONLY_TOKEN` als uitzondering toegestaan.
+De PvdD-applicatie dwingt een expliciete lijst leesroutes af; dit is geen gewone productielogintoken.
+V2 beperkt selectie tot tenant `product-factory`, `APPLICATION_WORK`, een PvdD-repositorysnapshot en
+idempotentiesleutels `pf-product-advisor-*`. Product Factory beperkt de grant aanvullend tot de
+PvdD-productadviseur. V1, repositoryjobs en Software Factory krijgen deze uitzondering niet.
+Nieuwe productiecredentials blijven standaard verboden. De worker materialiseert en redigeert deze
+key zoals andere geselecteerde credentials. Geheime waarden blijven uitsluitend lokaal.

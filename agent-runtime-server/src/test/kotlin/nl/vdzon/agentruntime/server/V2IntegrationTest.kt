@@ -23,6 +23,20 @@ import java.util.UUID
 @AutoConfigureMockMvc
 class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private val mapper:ObjectMapper,@Autowired private val jdbc:JdbcTemplate) {
     @Test
+    fun `production read capability is restricted to PvdD product advisor jobs`() {
+        val request = jobRequest(ExecutionSelection("anthropic", "claude-opus-5", ExecutionMode.SUBSCRIPTION), emptyList()).copy(
+            idempotencyKey = "pf-product-advisor-${java.util.UUID.randomUUID()}",
+            repositorySnapshot = RepositorySnapshot("https://github.com/robbertvdzon/pvdd", "a".repeat(40)),
+            environmentKeys = listOf("PVDD__PRODUCTION_READ_ONLY_TOKEN"),
+        )
+        postJson("/v2/jobs", PRODUCT, request, 202)
+        postJson("/v2/jobs", SOFTWARE, request, 400)
+        postJson("/v2/jobs", PRODUCT, request.copy(idempotencyKey = "pf-quality-${java.util.UUID.randomUUID()}"), 400)
+        postJson("/v2/jobs", PRODUCT, request.copy(idempotencyKey = "pf-product-advisor-${java.util.UUID.randomUUID()}", repositorySnapshot = null), 400)
+        postJson("/v2/jobs", PRODUCT, request.copy(idempotencyKey = "pf-product-advisor-${java.util.UUID.randomUUID()}", environmentKeys = listOf("PVDD__PRODUCTION_AGENT_TOKEN")), 400)
+    }
+
+    @Test
     fun `cancellation keeps a live worker cooperative but fences an expired attempt immediately`() {
         val model = "cancel-${UUID.randomUUID()}"
         val capability = ExecutorCapability("openai", model, ExecutionMode.SUBSCRIPTION, setOf(TaskType.REPOSITORY_AGENT))
