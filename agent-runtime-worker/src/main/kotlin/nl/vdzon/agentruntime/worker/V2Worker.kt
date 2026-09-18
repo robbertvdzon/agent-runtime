@@ -23,7 +23,9 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.*
 
-class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: ObjectMapper, private val bootId: String, private val maxConcurrency: Int = 1) {
+class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: ObjectMapper, private val bootId: String, private val maxConcurrency: Int = 1,
+    private val startContainer: (ProcessBuilder) -> Process = { it.start() },
+) {
     private val client = V2RuntimeClient(config, mapper)
     private val repositories = V2RepositorySupport(config.repositoryAliases)
     private val verification = V2VerificationSupport()
@@ -63,6 +65,7 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
     fun execute(claim: ClaimedJob) {
         if (claim.job.execution.mode == ExecutionMode.LOCAL) return transcriber.execute(claim)
         val root = config.workRoot.resolve("v2-${claim.job.id}-${claim.attempt.id}")
+        val usage = ExecutionUsageReporter(claim.fencingToken, { client.usage(claim, it) })
         try {
             root.createDirectories()
             if (reconcilePublication(claim, root)) return
@@ -72,16 +75,11 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
             client.progress(claim, "PREPARING", 5, "Preparing streamed inputs and repository checkout.")
             val repositoryState = prepare(claim, workspace, task)
             val started = Instant.now()
-            val roundsOutcome = executeAgentRounds(claim, workspace, task, repositoryState)
+            val roundsOutcome = executeAgentRounds(claim, workspace, task, repositoryState, usage)
             val verificationResult = roundsOutcome.verificationResult
             client.progress(claim, "UPLOADING_OUTPUT", 85, "Uploading declared output artifacts.")
             val outputIds = uploadOutputs(claim, task)
             val result = roundsOutcome.result
-            val inputBytes = task.resolve("input/objects").takeIf(Path::exists)?.let { inputRoot ->
-                Files.walk(inputRoot).use { paths -> paths.filter(Path::isRegularFile).mapToLong(Path::fileSize).sum() }
-            } ?: 0L
-            val rounds = verificationResult?.agentRounds ?: 1
-            client.measuredUsage(claim, ((claim.request.input.instruction.length.toLong() * rounds + inputBytes) / 4).coerceAtLeast(1), ((result.toString().length.toLong() * rounds) / 4).coerceAtLeast(1))
             client.log(claim, LogKind.SYSTEM, "Execution finished in ${Duration.between(started, Instant.now()).seconds} seconds.")
             complete(claim, workspace, repositoryState, result, outputIds, verificationResult)
         } catch (failure: JobFailure) {
@@ -89,6 +87,7 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
         } catch (error: Exception) {
             runCatching { client.fail(claim, "WORKER_ERROR", safe(error.message), true) }
         } finally {
+            usage.finish()
             runCatching { deleteTree(root) }
         }
     }
@@ -96,7 +95,7 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
     private data class AgentRoundsOutcome(val result: JsonNode, val verificationResult: VerificationResult?)
     private data class ContainerRunResult(val exitCode: Int, val timedOut: Boolean)
 
-    private fun executeAgentRounds(claim: ClaimedJob, workspace: Path, task: Path, repositoryState: V2RepositoryState?): AgentRoundsOutcome {
+    private fun executeAgentRounds(claim: ClaimedJob, workspace: Path, task: Path, repositoryState: V2RepositoryState?, usage: ExecutionUsageReporter): AgentRoundsOutcome {
         val request = claim.request.verification
         val enabled = request?.mode == VerificationMode.REPOSITORY_CONFIG
         val maximumRounds = if (enabled) request!!.maxRepairAttempts + 1 else 1
@@ -108,7 +107,7 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
         while (true) {
             task.resolve("output/result.json").deleteIfExists()
             client.progress(claim, "EXECUTING", (10 + round * 10).coerceAtMost(55), "Starting agent round $round of $maximumRounds.")
-            val container = runContainer(claim, workspace, task, round, executionDeadline)
+            val container = runContainer(claim, workspace, task, round, executionDeadline, usage)
             if (container.timedOut && lastValidatedResult != null) {
                 return AgentRoundsOutcome(lastValidatedResult, timeoutResult(lastVerificationResult, round))
             }
@@ -410,7 +409,7 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
         }
     }
 
-    private fun runContainer(claim: ClaimedJob, workspace: Path, task: Path, agentRound: Int, executionDeadline: Instant): ContainerRunResult {
+    private fun runContainer(claim: ClaimedJob, workspace: Path, task: Path, agentRound: Int, executionDeadline: Instant, usage: ExecutionUsageReporter): ContainerRunResult {
         val provider = claim.job.execution.vendorId
         val engine = if (provider == "openai") "CODEX" else "CLAUDE"
         val credentials = if (engine == "CODEX") config.codexCredentials else config.claudeCredentials
@@ -428,35 +427,61 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
         credentialSource?.let { command += listOf("-v", "$it:/credential-source:ro") }
         if (engine == "CLAUDE" && !config.claudeOauthToken.isNullOrBlank()) command += listOf("-e", "CLAUDE_CODE_OAUTH_TOKEN")
         command += listOf("-e", "AR_ENGINE=$engine", "-e", "AR_MODEL=${claim.job.execution.model}", "-e", "AR_JOB_KIND=${claim.job.jobKind.name}", "-e", "AR_OUTPUT_ATTEMPT=$agentRound", "-e", "AR_RESULT_FILE=/job/output/result.json", config.executionImage)
-        val process = ProcessBuilder(command).redirectErrorStream(true).also {
-            if (engine == "CLAUDE" && !config.claudeOauthToken.isNullOrBlank()) it.environment()["CLAUDE_CODE_OAUTH_TOKEN"] = config.claudeOauthToken
-        }.start()
-        val reader = Thread { process.inputStream.bufferedReader().useLines { lines -> lines.forEach { line ->
-            val cleaned = redact(line, 8192)
-            if (cleaned.isNotBlank()) runCatching { client.log(claim, LogKind.AGENT_TEXT, cleaned) }
-        } } }.apply { start() }
+        val transcript = ExecutionTranscript(task.resolve("provider-$agentRound.log"))
+        val process = try {
+            startContainer(ProcessBuilder(command).redirectErrorStream(true).also {
+                if (engine == "CLAUDE" && !config.claudeOauthToken.isNullOrBlank()) it.environment()["CLAUDE_CODE_OAUTH_TOKEN"] = config.claudeOauthToken
+            })
+        } catch (error: Exception) {
+            transcript.close()
+            throw error
+        }
+        val roundUsage = usage.round(provider, mapper)
+        val streamFailed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val reader = Thread {
+            runCatching {
+                process.inputStream.bufferedReader().useLines { lines -> lines.forEach { line ->
+                    roundUsage.observe(line)
+                    val cleaned = redact(line, 8192)
+                    if (cleaned.isNotBlank()) transcript.append(cleaned)
+                } }
+            }.onFailure { streamFailed.set(true) }
+        }.apply { start() }
         var timedOut = false
-        while (!process.waitFor(1, TimeUnit.SECONDS)) {
-            val heartbeat = try {
-                heartbeatWithGrace(config.heartbeatGrace) { client.heartbeat(claim) }
-            } catch (error: IOException) {
-                // Server blijvend onbereikbaar: laat de container niet verweesd doordraaien.
-                process.destroy()
-                if (!process.waitFor(10, TimeUnit.SECONDS)) process.destroyForcibly()
-                throw error
-            }
-            if (!heartbeat.accepted || heartbeat.fenced || heartbeat.cancelRequested || !Instant.now().isBefore(executionDeadline)) {
-                process.destroy()
-                if (!process.waitFor(10, TimeUnit.SECONDS)) process.destroyForcibly()
-                if (heartbeat.cancelRequested || !heartbeat.accepted || heartbeat.fenced) {
+        try {
+            while (!process.waitFor(1, TimeUnit.SECONDS)) {
+                usage.flush()
+                val heartbeat = heartbeatWithGrace(config.heartbeatGrace) { client.heartbeat(claim) }
+                if (!heartbeat.accepted || heartbeat.fenced || heartbeat.cancelRequested) {
                     throw JobFailure(if (heartbeat.cancelRequested) "CANCELLED" else "ATTEMPT_FENCED", "Execution was stopped.", false)
                 }
-                timedOut = true
-                break
+                if (!Instant.now().isBefore(executionDeadline)) {
+                    timedOut = true
+                    break
+                }
+                transcript.forward(32) { client.log(claim, LogKind.AGENT_TEXT, it) }
             }
+            return ContainerRunResult(if (timedOut) 124 else process.exitValue(), timedOut)
+        } finally {
+            // Stop the actual container too, including exceptions and cancellation. Preserve
+            // usage before JSON validation, artifact upload, publication or workspace cleanup.
+            if (process.isAlive) stopContainer(name, process)
+            reader.join(5000)
+            if (reader.isAlive) {
+                runCatching { process.inputStream.close() }
+                reader.join(1000)
+            }
+            val estimatedOutput = task.resolve("output/result.json").takeIf { it.isRegularFile() && !it.isSymbolicLink() }
+                ?.fileSize()?.takeIf { it > 0 }?.let { (it / 4).coerceAtLeast(1) } ?: 0L
+            val inputBytes = task.resolve("input/objects").takeIf(Path::exists)?.let { inputRoot ->
+                Files.walk(inputRoot).use { paths -> paths.filter { Files.isRegularFile(it, java.nio.file.LinkOption.NOFOLLOW_LINKS) }.mapToLong(Path::fileSize).sum() }
+            } ?: 0L
+            val promptBytes = task.resolve("input/prompt.md").fileSize()
+            roundUsage.finish(((promptBytes + inputBytes) / 4).coerceAtLeast(1), estimatedOutput, streamDrained = !reader.isAlive && !streamFailed.get())
+            usage.flush(force = true)
+            transcript.forward { client.log(claim, LogKind.AGENT_TEXT, it) }
+            transcript.close()
         }
-        reader.join(5000)
-        return ContainerRunResult(if (timedOut) 124 else process.exitValue(), timedOut)
     }
 
     private fun uploadOutputs(claim: ClaimedJob, task: Path): Set<String> = claim.request.output.artifacts.mapNotNull { declaration ->
@@ -491,7 +516,7 @@ class V2RuntimeClient(private val config: WorkerConfig, private val mapper: Obje
     fun progress(claim: ClaimedJob, phase: String, percent: Int?, message: String?) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/progress", ProgressRequest(claim.attempt.id, claim.fencingToken, phase, percent, message), Void::class.java) }
     fun log(claim: ClaimedJob, kind: LogKind, text: String) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/logs", AppendLogRequest(claim.fencingToken, UUID.randomUUID().toString(), kind, text.take(8192), observedAt = Instant.now()), Void::class.java) }
     fun audioUsage(claim: ClaimedJob, seconds: Long) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/usage-events", AppendUsageRequest(claim.fencingToken, UUID.randomUUID().toString(), Instant.now(), listOf(UsageMetricValue(UsageMetric.AUDIO_INPUT_SECONDS, seconds.toString(), UsageUnit.SECOND)), source = UsageSource.WORKER_MEASURED), Void::class.java) }
-    fun measuredUsage(claim: ClaimedJob, inputTokens: Long, outputTokens: Long) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/usage-events", AppendUsageRequest(claim.fencingToken, UUID.randomUUID().toString(), Instant.now(), listOf(UsageMetricValue(UsageMetric.INPUT_TOKENS, inputTokens.toString(), UsageUnit.TOKEN), UsageMetricValue(UsageMetric.OUTPUT_TOKENS, outputTokens.toString(), UsageUnit.TOKEN)), source = UsageSource.WORKER_MEASURED), Void::class.java) }
+    fun usage(claim: ClaimedJob, request: AppendUsageRequest) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/usage-events", request, Void::class.java) }
     fun submit(claim: ClaimedJob, result: JsonNode, objectIds: Set<String>, repositoryResult: RepositoryResult?, verificationResult: VerificationResult?) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/result", SubmitResultRequest(claim.fencingToken, result, objectIds, repositoryResult, verificationResult), Void::class.java) }
     fun preparePublication(claim: ClaimedJob, result: JsonNode, objectIds: Set<String>, repositoryResult: RepositoryResult, verificationResult: VerificationResult?) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/repository-publication", PrepareRepositoryPublicationRequest(claim.fencingToken, result, objectIds, repositoryResult, verificationResult), RepositoryPublicationIntentView::class.java) }
     fun confirmPublication(claim: ClaimedJob, commitSha: String) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/repository-publication/confirm", ConfirmRepositoryPublicationRequest(claim.fencingToken, commitSha), Void::class.java) }

@@ -125,7 +125,22 @@ class V2WorkerService(
     fun outputUpload(workerId:String,jobId:String,uploadId:String,attemptId:String,token:String):StoredV2Upload { authenticate(workerId,jobId,attemptId,token);return objects.upload(uploadId)?.takeIf{it.jobId==jobId&&it.attemptId==attemptId&&it.direction=="OUTPUT"}?:throw ApiException("NOT_FOUND","Output upload not found.",HttpStatus.NOT_FOUND) }
     fun appendOutput(workerId:String,jobId:String,uploadId:String,attemptId:String,token:String,offset:Long,input:java.io.InputStream):Long { val upload=outputUpload(workerId,jobId,uploadId,attemptId,token);return uploads.append(upload.tenantId,uploadId,offset,input,"OUTPUT") }
     @Transactional fun completeOutput(workerId:String,jobId:String,uploadId:String,auth:AttemptAuth):ObjectView { val (job,_)=authenticate(workerId,jobId,auth.attemptId,auth.fencingToken);val upload=outputUpload(workerId,jobId,uploadId,auth.attemptId,auth.fencingToken);val objectView=uploads.complete(job.view.tenantId,uploadId,"OUTPUT");if(!objects.isBound(objectView.objectId)){objects.link(jobId,objectView.objectId,"OUTPUT",null,upload.logicalName!!,objects.outputObjects(jobId).size);jobs.addEvent(jobId,auth.attemptId,EventType.OUTPUT_OBJECT_READY,"EXECUTING","Output ${upload.logicalName} is ready.")};return objectView }
-    fun appendUsage(workerId:String,jobId:String,attemptId:String,request:AppendUsageRequest){val(job,_)=authenticate(workerId,jobId,attemptId,request.fencingToken);usage.append(job,attemptId,request)}
+    fun appendUsage(workerId:String,jobId:String,attemptId:String,request:AppendUsageRequest) {
+        // Accounting may arrive after cancellation, timeout or a failed result. This does
+        // not grant the old attempt access to outputs, heartbeats or job transitions.
+        val attempt=jobs.attempt(attemptId)?:throw ApiException("ATTEMPT_FENCED","Attempt is unavailable.",HttpStatus.CONFLICT)
+        val job=jobs.find(jobId)?:throw ApiException("NOT_FOUND","Job not found.",HttpStatus.NOT_FOUND)
+        val endedAt=attempt.view.completedAt ?: attempt.attemptDeadline
+        val valid=attempt.workerId==workerId && attempt.view.jobId==jobId &&
+            MessageDigest.isEqual(attempt.fencingTokenHash.toByteArray(),V2JobStore.hash(request.fencingToken).toByteArray()) &&
+            Instant.now().isBefore(endedAt.plusSeconds(86400))
+        if(!valid) throw ApiException("ATTEMPT_FENCED","Usage reporting credentials have expired or are invalid.",HttpStatus.CONFLICT)
+        if(request.observedAt.isBefore(attempt.view.startedAt) || request.observedAt.isAfter(Instant.now().plusSeconds(60)) ||
+            request.observedAt.isAfter(minOf(endedAt,attempt.attemptDeadline).plusSeconds(60))) {
+            throw ApiException("INVALID_USAGE","Usage must have been observed during this attempt.")
+        }
+        usage.append(job,attemptId,request)
+    }
     fun appendLog(workerId:String,jobId:String,attemptId:String,request:AppendLogRequest){authenticate(workerId,jobId,attemptId,request.fencingToken);jobs.addEvent(jobId,attemptId,EventType.LOG_MESSAGE,"EXECUTING",null,request.kind,request.text,request.streamId,request.final,externalId=request.eventId)}
     @Transactional fun submit(workerId:String,jobId:String,attemptId:String,request:SubmitResultRequest):OutputRejectedResponse? {
         val(job,_)=authenticate(workerId,jobId,attemptId,request.fencingToken)

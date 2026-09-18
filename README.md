@@ -305,6 +305,10 @@ geschatte abonnementswaarde blijven herkenbaar, met filters voor API, abonnement
 productie Google-login met een server-side e-mailallowlist en heeft een ingeklapte
 beheertoken-noodroute.
 
+Zie [Verbruiksregistratie](docs/verbruiksregistratie.md) voor de verwerking van
+tokens bij mislukte en afgebroken uitvoeringen en de betekenis van onbekend of
+gedeeltelijk geregistreerd verbruik.
+
 De monitorbuild gebruikt geen service-worker. De appbundle heeft per inhoud een nieuwe
 bestandsnaam; uitsluitend dat content-gehashte bestand wordt immutable gecachet. Alle API-GET's
 hebben daarnaast een cache-buster en de server antwoordt daarop met `no-store`. Een kill-switch

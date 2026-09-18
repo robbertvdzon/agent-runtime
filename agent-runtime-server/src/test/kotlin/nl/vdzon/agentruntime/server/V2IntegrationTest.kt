@@ -37,6 +37,42 @@ class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private va
     }
 
     @Test
+    fun `late accounting survives terminal attempts without reopening fenced execution and is idempotent`() {
+        for (terminal in listOf("FAILED", "CANCELLED", "ABANDONED", "INVALID_OUTPUT", "SUCCEEDED")) {
+            val model = "usage-${UUID.randomUUID()}"
+            val worker = "usage-worker-${UUID.randomUUID()}"
+            val boot = UUID.randomUUID().toString()
+            val capability = ExecutorCapability("openai", model, ExecutionMode.SUBSCRIPTION, setOf(TaskType.REPOSITORY_AGENT))
+            postJson("/v2/workers/register", WORKER, WorkerRegistrationRequest(worker, boot, setOf(capability), availableRepositoryAliases = setOf("test-repository")), 200)
+            postJson("/v2/management/prices", ADMIN, CreatePriceRateRequest("openai", model, ExecutionMode.API, TaskType.REPOSITORY_AGENT, UsageMetric.OUTPUT_TOKENS, "1000", "2", "USD", Instant.now().minusSeconds(3600), sourceReference = "test"), 201)
+            val jobId = postJson("/v2/jobs", SOFTWARE, repositoryJob(model), 202).path("id").asText()
+            val claim = postJson("/v2/workers/$worker/claims", WORKER, ClaimRequest(boot, setOf(capability), 0), 200)
+            val attempt = claim.path("attempt").path("id").asText()
+            val fence = claim.path("fencingToken").asText()
+            val observed = Instant.now()
+            jdbc.update("UPDATE runtime_v2_attempt SET status=?,completed_at=CURRENT_TIMESTAMP,attempt_deadline=CURRENT_TIMESTAMP WHERE id=?", terminal, attempt)
+            val path = "/v2/workers/$worker/jobs/$jobId/attempts/$attempt/usage-events"
+            val request = AppendUsageRequest(fence, "late-usage", observed, listOf(UsageMetricValue(UsageMetric.OUTPUT_TOKENS, "400", UsageUnit.TOKEN)), source = UsageSource.PROVIDER_REPORTED, complete = false)
+            postJson(path, WORKER, request.copy(fencingToken = "wrong-token"), 409)
+            postJson(path.replace(worker, "another-worker"), WORKER, request, 409)
+            postJson(path, WORKER, request.copy(observedAt = observed.minusSeconds(3600)), 400)
+            postJson(path, WORKER, request.copy(observedAt = observed.plusSeconds(3600)), 400)
+            repeat(2) { postJson(path, WORKER, request, 204) }
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM runtime_v2_usage WHERE attempt_id=?", Int::class.java, attempt)).isEqualTo(1)
+            assertThat(jdbc.queryForObject("SELECT SUM(amount) FROM runtime_v2_cost WHERE attempt_id=?", java.math.BigDecimal::class.java, attempt)).isEqualByComparingTo("0.8")
+            assertThat(jdbc.queryForObject("SELECT usage_quality FROM runtime_v2_attempt WHERE id=?", String::class.java, attempt)).isEqualTo("PARTIAL")
+            postJson(path, WORKER, request.copy(eventId = "complete", metrics = listOf(UsageMetricValue(UsageMetric.OUTPUT_TOKENS, "0", UsageUnit.TOKEN)), complete = true), 204)
+            postJson(path, WORKER, request, 204) // old delivery cannot downgrade final quality
+            assertThat(jdbc.queryForObject("SELECT usage_quality FROM runtime_v2_attempt WHERE id=?", String::class.java, attempt)).isEqualTo("COMPLETE")
+            postJson("/v2/workers/$worker/jobs/$jobId/heartbeat", WORKER, AttemptAuth(attempt, fence), 409)
+            postJson("/v2/workers/$worker/jobs/$jobId/attempts/$attempt/result", WORKER, SubmitResultRequest(fence, mapper.readTree("{}")), 409)
+            assertThat(jdbc.queryForObject("SELECT status FROM runtime_v2_attempt WHERE id=?", String::class.java, attempt)).isEqualTo(terminal)
+            jdbc.update("UPDATE runtime_v2_attempt SET completed_at=? WHERE id=?", java.time.OffsetDateTime.now().minusDays(2), attempt)
+            postJson(path, WORKER, request.copy(eventId = "too-late"), 409)
+        }
+    }
+
+    @Test
     fun `cancellation keeps a live worker cooperative but fences an expired attempt immediately`() {
         val model = "cancel-${UUID.randomUUID()}"
         val capability = ExecutorCapability("openai", model, ExecutionMode.SUBSCRIPTION, setOf(TaskType.REPOSITORY_AGENT))

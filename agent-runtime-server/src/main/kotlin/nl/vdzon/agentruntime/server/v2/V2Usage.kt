@@ -26,16 +26,19 @@ data class UsageFact(
 class V2UsageStore(private val jdbc:JdbcTemplate) {
     @Transactional
     fun append(job:StoredV2Job,attemptId:String,request:AppendUsageRequest) {
+        var appended = false
         request.metrics.forEach { metric ->
             val quantity=decimal(metric.quantity,"quantity")
             if(quantity<BigDecimal.ZERO) throw ApiException("INVALID_USAGE","Usage quantity cannot be negative.")
-            try {
-                jdbc.update("""INSERT INTO runtime_v2_usage(job_id,attempt_id,external_event_id,metric,quantity,unit,source,observed_at,created_at)
-                    VALUES (?,?,?,?,?,?,?,?,?)""",job.view.id,attemptId,request.eventId,metric.metric.name,quantity,metric.unit.name,request.source.name,V2JobStore.utc(request.observedAt),V2JobStore.utc(Instant.now()))
-            } catch(_:DuplicateKeyException) { return@forEach }
+            // ON CONFLICT also keeps a PostgreSQL transaction usable after a replay.
+            val inserted = jdbc.update("""INSERT INTO runtime_v2_usage(job_id,attempt_id,external_event_id,metric,quantity,unit,source,observed_at,created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING""",job.view.id,attemptId,request.eventId,metric.metric.name,quantity,metric.unit.name,request.source.name,V2JobStore.utc(request.observedAt),V2JobStore.utc(Instant.now()))
+            if (inserted == 0) return@forEach
+            appended = true
             calculateCost(job,attemptId,request.eventId,metric,request.observedAt)
         }
-        val quality=when(request.source){UsageSource.MOCK->UsageQuality.MOCK;UsageSource.PROVIDER_REPORTED->UsageQuality.COMPLETE;UsageSource.WORKER_MEASURED->UsageQuality.PARTIAL}
+        if (!appended) return
+        val quality=when(request.source){UsageSource.MOCK->UsageQuality.MOCK;UsageSource.PROVIDER_REPORTED->if(request.complete) UsageQuality.COMPLETE else UsageQuality.PARTIAL;UsageSource.WORKER_MEASURED->UsageQuality.PARTIAL}
         jdbc.update("UPDATE runtime_v2_attempt SET usage_quality=?,provider_request_id=COALESCE(?,provider_request_id) WHERE id=?",quality.name,request.providerRequestId,attemptId)
     }
 

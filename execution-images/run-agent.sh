@@ -20,6 +20,13 @@ copy_credentials() {
   done
 }
 
+capture_claude_result() {
+  # An interrupted stream may end with a truncated line. Retain any complete result.
+  jq -Rrs 'split("\n") | map(fromjson? | select(.type == "result")) | last |
+    if .structured_output != null then .structured_output | tojson
+    elif .result != null then .result else empty end' "$1" > "$2"
+}
+
 # Maak de helper zonder side effects sourcebaar voor de regressietest.
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
   return 0
@@ -30,7 +37,7 @@ fi
 case "${AR_ENGINE:-}" in
   CODEX)
     copy_credentials /credential-source /home/agent/.codex
-    args=(exec --ephemeral --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -C /work -m "$AR_MODEL" -o "$result_file")
+    args=(exec --json --ephemeral --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -C /work -m "$AR_MODEL" -o "$result_file")
     if [[ -s /job/input/response-schema.json ]]; then
       args+=(--output-schema /job/input/response-schema.json)
     fi
@@ -40,11 +47,18 @@ case "${AR_ENGINE:-}" in
     if [[ -d /credential-source ]]; then
       copy_credentials /credential-source /home/agent/.claude
     fi
-    args=(-p --no-session-persistence --dangerously-skip-permissions --model "$AR_MODEL" --output-format text)
+    args=(-p --no-session-persistence --dangerously-skip-permissions --model "$AR_MODEL" --output-format stream-json --verbose --include-partial-messages)
     if [[ -s /job/input/response-schema.json ]]; then
       args+=(--json-schema "$(cat /job/input/response-schema.json)")
     fi
-    provider_prompt | claude "${args[@]}" > "$result_file"
+    # Keep usage events visible to the worker even when Claude exits unsuccessfully.
+    # The consumer result remains the JSON/text payload, not the stream envelope.
+    stream_file="$(mktemp)"
+    trap 'rm -f "$stream_file"' EXIT
+    provider_status=0
+    provider_prompt | claude "${args[@]}" | tee "$stream_file" || provider_status=$?
+    capture_claude_result "$stream_file" "$result_file"
+    if (( provider_status != 0 )); then exit "$provider_status"; fi
     ;;
   *)
     echo "Unsupported execution engine" >&2

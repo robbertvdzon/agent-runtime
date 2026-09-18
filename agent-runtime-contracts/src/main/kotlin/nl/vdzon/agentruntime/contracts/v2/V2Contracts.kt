@@ -380,6 +380,7 @@ data class AppendUsageRequest(
     val fencingToken: String, val eventId: String, val observedAt: Instant,
     @field:NotEmpty val metrics: List<UsageMetricValue>, val providerRequestId: String? = null,
     val source: UsageSource,
+    val complete: Boolean = true,
 )
 data class AppendLogRequest(
     val fencingToken: String, val eventId: String, val kind: LogKind,
