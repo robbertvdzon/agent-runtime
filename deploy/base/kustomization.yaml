@@ -6,4 +6,4 @@ resources:
 images:
   - name: ghcr.io/robbertvdzon/agent-runtime-server
     newName: ghcr.io/robbertvdzon/agent-runtime-server
-    newTag: sha-a6221489f654b98bb0d237af2b4391caf197cafe
+    newTag: sha-6fc671d454337ae5f2d331029ae83e386a60601f
