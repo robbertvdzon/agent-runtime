@@ -129,9 +129,9 @@ AR_WORKER_ID=voornaam-macbook
 AR_WORK_ROOT=work/worker
 AR_WORKER_TOKEN=<productieworkertoken>
 AR_CODEX_CREDENTIALS_DIR=/Users/<account>/.codex
-AR_CODEX_MODELS=gpt-5.6-sol
+AR_CODEX_MODELS=gpt-6-astra,gpt-6-sol,gpt-6-luna,gpt-5.6-sol
 AR_CLAUDE_OAUTH_TOKEN=<uitvoer-van-claude-setup-token>
-AR_CLAUDE_MODELS=<exacte-claude-model-id>
+AR_CLAUDE_MODELS=claude-sonnet-5-5,claude-opus-5-5,claude-sonnet-5,claude-opus-5
 ```
 
 `properties.env` staat in `.gitignore`, is een regulier bestand met mode `0600` en bevat ook alle

@@ -116,6 +116,23 @@ class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private va
                 it.path("metric").asText() == "OUTPUT_TOKENS" &&
                 java.math.BigDecimal(it.path("unitPrice").asText()).compareTo(java.math.BigDecimal("10.00")) == 0
         }).isTrue()
+
+        val latestModels = listOf(
+            Triple("openai", "gpt-6-astra", "50.00"),
+            Triple("openai", "gpt-6-sol", "10.00"),
+            Triple("openai", "gpt-6-luna", "0.50"),
+            Triple("anthropic", "claude-opus-5-5", "20.00"),
+            Triple("anthropic", "claude-sonnet-5-5", "10.00"),
+        )
+        latestModels.forEach { (vendor, model, outputPrice) ->
+            val prices = getJson("/v2/management/prices?vendorId=$vendor&model=$model", ADMIN)
+            assertThat(prices.any {
+                it.path("mode").asText() == "API" &&
+                    it.path("taskType").asText() == "STRUCTURED_GENERATION" &&
+                    it.path("metric").asText() == "OUTPUT_TOKENS" &&
+                    java.math.BigDecimal(it.path("unitPrice").asText()).compareTo(java.math.BigDecimal(outputPrice)) == 0
+            }).withFailMessage("Missing price for $vendor/$model").isTrue()
+        }
     }
 
     @Test
