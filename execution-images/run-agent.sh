@@ -49,7 +49,9 @@ case "${AR_ENGINE:-}" in
     fi
     args=(-p --no-session-persistence --dangerously-skip-permissions --model "$AR_MODEL" --output-format stream-json --verbose --include-partial-messages)
     if [[ -s /job/input/response-schema.json ]]; then
-      args+=(--json-schema "$(cat /job/input/response-schema.json)")
+      # De Claude-CLI kent de "$schema"-URI van draft 2020-12 niet en weigert het hele schema;
+      # de server valideert het resultaat daarna nog steeds tegen het volledige schema.
+      args+=(--json-schema "$(jq -c 'del(."$schema")' /job/input/response-schema.json)")
     fi
     # Keep usage events visible to the worker even when Claude exits unsuccessfully.
     # The consumer result remains the JSON/text payload, not the stream envelope.
