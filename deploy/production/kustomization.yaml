@@ -21,7 +21,7 @@ patches:
     name: agent-runtime-server
   patch: "- op: add\n  path: /spec/template/spec/containers/0/env\n  value:\n    -\
     \ {name: AR_ENVIRONMENT, value: PRODUCTION}\n    - {name: AR_PVDD_PROVIDERS, value:\
-    \ \"CODEX,CLAUDE\"}\n    - {name: AR_PVDD_MODELS, value: \"gpt-5.6-sol,claude-opus-5\"}\n    - {name: AR_SOFTWARE_FACTORY_REPOSITORY_ALIASES,\
+    \ \"CODEX,CLAUDE\"}\n    - {name: AR_PVDD_MODELS, value: \"*\"}\n    - {name: AR_SOFTWARE_FACTORY_REPOSITORY_ALIASES,\
     \ value: \"software-factory,agent-runtime,test-repository,pvdd,hkh,hkh-autopilot,product-factory,personal-news-feed,robberts-assistent\"\
     }\n    - {name: AR_PRODUCT_FACTORY_ENVIRONMENT_PREFIXES, value: \"PF,HKH,HKH_AUTOPILOT,PERSONAL_FEED,ROBBERTS_ASSISTENT,SF,PVDD\"\
     }\n    - {name: AR_SOFTWARE_FACTORY_ENVIRONMENT_PREFIXES, value: \"SF,PF,HKH,HKH_AUTOPILOT,PERSONAL_FEED,ROBBERTS_ASSISTENT,PVDD\"\
