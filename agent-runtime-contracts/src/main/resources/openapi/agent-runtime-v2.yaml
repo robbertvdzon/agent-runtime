@@ -1820,6 +1820,14 @@ components:
         kind: {type: string, enum: [AGENT_TEXT, REASONING_SUMMARY, TOOL_CALL, TOOL_OUTPUT, SYSTEM]}
         text: {type: string, maxLength: 8192}
         redacted: {type: boolean}
+        streamId:
+          type: [string, 'null']
+          maxLength: 200
+          description: Provider chunks share provider-event:<agentRound>:<unique-line-id>. Concatenate in sequence order before interpreting the provider event.
+        final:
+          type: boolean
+          default: true
+          description: Final chunk of streamId. Parts without streamId are complete standalone logs.
 
     ManagementTranscriptPage:
       type: object
@@ -1829,6 +1837,10 @@ components:
         items: {type: array, items: {$ref: '#/components/schemas/ManagementTranscriptPart'}}
         nextSequence: {type: integer, format: int64, minimum: 1}
         active: {type: boolean}
+        hasMore:
+          type: boolean
+          default: false
+          description: True when the underlying event page reached its limit; fetch the next page even if items is empty. A final empty page is possible.
 
     ManagementWorkerList:
       type: object

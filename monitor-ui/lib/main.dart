@@ -9,6 +9,8 @@ import 'package:http/http.dart' as http;
 
 import 'browser_platform.dart';
 import 'usage_dashboard.dart';
+import 'transcript_model.dart';
+import 'transcript_view.dart';
 import 'google_signin_button_stub.dart'
     if (dart.library.html) 'google_signin_button_web.dart'
     as gis_button;
@@ -1337,59 +1339,157 @@ class JobDetail extends StatefulWidget {
 class _JobDetailState extends State<JobDetail> {
   Map<String, dynamic>? detail;
   final transcript = <Map<String, dynamic>>[];
+  final _partIds = <String>{};
+  final _scrollController = ScrollController();
+  TranscriptDocument _conversation = normalizeTranscript(const []);
   int? transcriptCursor;
-  String transcriptStatus = 'Live';
+  String transcriptStatus = 'Laden…';
+  bool _loading = false;
+  bool _active = false;
+  bool _initialLoad = true;
+  bool _followTail = true;
+  bool _technicalDetails = false;
+  bool _newActivity = false;
+  String? _loadError;
   Timer? timer;
   @override
   void initState() {
     super.initState();
     load();
-    timer = Timer.periodic(const Duration(seconds: 3), (_) => loadTranscript());
+    timer = Timer.periodic(const Duration(seconds: 3), (_) => load());
   }
 
   @override
   void dispose() {
     timer?.cancel();
+    _scrollController.dispose();
     super.dispose();
   }
 
   Future<void> load() async {
+    if (_loading) return;
+    _loading = true;
+    final previousResult = jsonEncode(detail?['result']);
     try {
       final value = await widget.api.get('/v2/management/jobs/${widget.id}');
-      if (mounted) setState(() => detail = value);
+      if (!mounted) return;
+      setState(() {
+        detail = value;
+        _loadError = null;
+      });
       await loadTranscript();
-    } catch (_) {
-      if (mounted) setState(() => transcriptStatus = 'Verbinding onderbroken');
+      if (!mounted) return;
+      // The job may have finished while its final transcript pages were loading.
+      if (!_active && !_terminal(detail?['job']?['status'])) {
+        final completed = await widget.api.get(
+          '/v2/management/jobs/${widget.id}',
+        );
+        if (!mounted) return;
+        setState(() => detail = completed);
+      }
+      if (!_active && _terminal(detail?['job']?['status'])) timer?.cancel();
+      if (!_initialLoad && previousResult != jsonEncode(detail?['result'])) {
+        if (_followTail && !_technicalDetails) {
+          _scrollToLatest();
+        } else {
+          setState(() => _newActivity = true);
+        }
+      }
+      _initialLoad = false;
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          transcriptStatus = 'Verbinding onderbroken';
+          _loadError = error is ApiError ? error.message : 'Laden is mislukt.';
+        });
+      }
+    } finally {
+      _loading = false;
     }
   }
 
   Future<void> loadTranscript() async {
-    try {
+    var more = true;
+    while (mounted && more) {
       final after = transcriptCursor;
       final page = await widget.api.get(
-        '/v2/management/jobs/${widget.id}/transcript${after == null ? '' : '?afterSequence=$after'}',
+        '/v2/management/jobs/${widget.id}/transcript?limit=500${after == null ? '' : '&afterSequence=$after'}',
       );
+      if (!mounted) return;
       final incoming = (page['items'] as List? ?? [])
           .cast<Map<String, dynamic>>();
-      if (mounted) {
-        setState(() {
-          final known = transcript.map((x) => x['partId']).toSet();
-          transcript.addAll(
-            incoming.where((x) => !known.contains(x['partId'])),
-          );
-          transcriptCursor = page['nextSequence'] as int?;
-          transcriptStatus = page['active'] == true ? 'Live' : 'Afgerond';
-        });
+      final next = (page['nextSequence'] as num?)?.toInt();
+      final advanced = next != null && next > (after ?? 0);
+      // Old servers have no hasMore flag. Drain those pages until the cursor
+      // stops, including pages containing only non-transcript job events.
+      more = page['hasMore'] as bool? ?? advanced;
+      if (more && !advanced) {
+        throw const ApiError('Het transcript kon niet verder worden geladen.');
       }
-    } catch (_) {
-      if (mounted) setState(() => transcriptStatus = 'Verbinding onderbroken');
+      var changed = false;
+      for (final part in incoming) {
+        final key =
+            '${part['attemptId']}:${part['partId'] ?? part['sequence']}';
+        if (_partIds.add(key)) {
+          transcript.add(part);
+          changed = true;
+        }
+      }
+      setState(() {
+        if (advanced) transcriptCursor = next;
+        _active = page['active'] == true;
+        transcriptStatus = _active ? 'Live' : 'Afgerond';
+        if (changed) {
+          _conversation = normalizeTranscript(transcript);
+          if (!_initialLoad && (!_followTail || _technicalDetails)) {
+            _newActivity = true;
+          }
+        }
+      });
+      if (changed &&
+          _followTail &&
+          !_technicalDetails &&
+          (_active || !_initialLoad)) {
+        _scrollToLatest();
+      }
     }
+  }
+
+  bool _terminal(dynamic status) =>
+      const {'SUCCEEDED', 'FAILED', 'CANCELLED'}.contains(status);
+
+  void _scrollToLatest() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !_scrollController.hasClients ||
+          _technicalDetails ||
+          !_followTail) {
+        return;
+      }
+      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+    });
+  }
+
+  String get _statusLabel {
+    if (_loadError != null || transcriptStatus == 'Laden…') {
+      return transcriptStatus;
+    }
+    return switch (detail?['job']?['status']) {
+      'FAILED' => 'Mislukt',
+      'CANCELLED' => 'Geannuleerd',
+      'QUEUED' || 'WAITING_FOR_WORKER' => 'Wacht op uitvoering',
+      _ => transcriptStatus,
+    };
   }
 
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: Text(detail?['job']?['technicalName']?.toString() ?? 'Jobdetail'),
+      title: Text(
+        detail?['job']?['technicalName']?.toString() ?? 'Jobdetail',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
       actions: [
         IconButton(
           onPressed: load,
@@ -1398,89 +1498,181 @@ class _JobDetailState extends State<JobDetail> {
         ),
       ],
     ),
+    floatingActionButton: _newActivity && !_technicalDetails
+        ? FloatingActionButton.extended(
+            onPressed: () {
+              setState(() {
+                _followTail = true;
+                _newActivity = false;
+              });
+              _scrollToLatest();
+            },
+            icon: const Icon(Icons.arrow_downward),
+            label: const Text('Nieuwe activiteit'),
+          )
+        : null,
     body: detail == null
-        ? const Center(child: CircularProgressIndicator())
-        : ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              _section(
-                'Metadata',
-                const JsonEncoder.withIndent('  ').convert(detail!['job']),
-              ),
-              _section('Volledige prompt', detail!['prompt']?.toString() ?? ''),
-              if ((detail!['inputAttachments'] as List? ?? const []).isNotEmpty)
-                FileCollection(
-                  title: 'Meegegeven attachments',
-                  emptyText: 'Geen attachments meegegeven',
-                  items: (detail!['inputAttachments'] as List)
-                      .cast<Map<String, dynamic>>(),
-                  api: widget.api,
-                  pathFor: (item) =>
-                      '/v2/management/jobs/${widget.id}/attachments/${item['id']}',
-                ),
-              if (detail!['errorCode'] != null)
-                _section(
-                  'Fout',
-                  '${detail!['errorCode']}\n${detail!['errorMessage'] ?? ''}',
-                ),
-              if (detail!['result'] != null)
-                _section(
-                  'Resultaat',
-                  const JsonEncoder.withIndent(
-                    '  ',
-                  ).convert(detail!['result']['result']),
-                ),
-              if (detail!['result']?['repositoryResult'] != null)
-                _section(
-                  'Repositorypublicatie',
-                  const JsonEncoder.withIndent(
-                    '  ',
-                  ).convert(detail!['result']['repositoryResult']),
-                ),
-              if (detail!['result']?['verificationResult'] != null)
-                VerificationPanel(
-                  result: (detail!['result']['verificationResult'] as Map)
-                      .cast<String, dynamic>(),
-                ),
-              if (detail!['result'] != null &&
-                  (detail!['result']['artifacts'] as List? ?? const [])
-                      .isNotEmpty)
-                FileCollection(
-                  title: 'Teruggekomen artifacts',
-                  emptyText: 'Geen artifacts teruggekomen',
-                  items: (detail!['result']['artifacts'] as List)
-                      .cast<Map<String, dynamic>>(),
-                  api: widget.api,
-                  pathFor: (item) =>
-                      '/v2/management/jobs/${widget.id}/artifacts/${item['id']}',
-                ),
-              _section(
-                'Technische attempts',
-                const JsonEncoder.withIndent('  ').convert(detail!['attempts']),
-              ),
-              Text(
-                'Transcript · $transcriptStatus',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 8),
-              if (transcript.isEmpty)
-                const Card(
-                  child: Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Text('Nog geen zichtbaar transcript beschikbaar.'),
+        ? Center(
+            child: _loadError == null
+                ? const CircularProgressIndicator()
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(_loadError!),
+                      TextButton(
+                        onPressed: load,
+                        child: const Text('Opnieuw proberen'),
+                      ),
+                    ],
                   ),
-                ),
-              ...transcript.map(
-                (part) => Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: SelectableText(
-                      '${part['kind']}${part['redacted'] == true ? ' · Waarde door Agent Runtime afgeschermd' : ''}\n\n${part['text']}',
+          )
+        : NotificationListener<UserScrollNotification>(
+            onNotification: (notification) {
+              if (notification.depth != 0 ||
+                  notification.metrics.axis != Axis.vertical) {
+                return false;
+              }
+              _followTail = notification.metrics.extentAfter < 80;
+              if (_followTail && _newActivity) {
+                setState(() => _newActivity = false);
+              }
+              return false;
+            },
+            child: ListView(
+              controller: _scrollController,
+              padding: const EdgeInsets.fromLTRB(16, 20, 16, 88),
+              children: [
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 840),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Wrap(
+                          alignment: WrapAlignment.spaceBetween,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          spacing: 16,
+                          runSpacing: 8,
+                          children: [
+                            Text(
+                              'Transcript',
+                              style: Theme.of(context).textTheme.headlineSmall,
+                            ),
+                            Semantics(
+                              liveRegion: true,
+                              child: Chip(label: Text(_statusLabel)),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '${detail!['job']['provider']} · ${detail!['job']['model']} · ${_formatInstant(detail!['job']['createdAt'])}'
+                          '${detail!['job']['durationMillis'] == null ? '' : ' · ${_formatDuration(detail!['job']['durationMillis'])}'}',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        if (_loadError != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: Text(
+                              '$_loadError De eerder geladen berichten blijven zichtbaar.',
+                            ),
+                          ),
+                        const SizedBox(height: 20),
+                        if ((detail!['inputAttachments'] as List? ?? const [])
+                            .isNotEmpty)
+                          FileCollection(
+                            title: 'Meegegeven attachments',
+                            emptyText: 'Geen attachments meegegeven',
+                            items: (detail!['inputAttachments'] as List)
+                                .cast<Map<String, dynamic>>(),
+                            api: widget.api,
+                            pathFor: (item) =>
+                                '/v2/management/jobs/${widget.id}/attachments/${item['id']}',
+                          ),
+                        if (detail!['errorCode'] != null)
+                          _section(
+                            'Fout',
+                            '${detail!['errorCode']}\n${detail!['errorMessage'] ?? ''}',
+                          ),
+                        TranscriptView(
+                          transcript: _conversation,
+                          prompt: detail!['prompt']?.toString() ?? '',
+                          agentLabel: switch (detail!['job']['provider']) {
+                            'CLAUDE' || 'ANTHROPIC' => 'Claude',
+                            'CODEX' || 'OPENAI' => 'Codex',
+                            _ => 'Agent',
+                          },
+                          result: detail!['result']?['result'] == null
+                              ? null
+                              : detail!['result']['result'] is String
+                              ? detail!['result']['result'] as String
+                              : jsonEncode(detail!['result']['result']),
+                          isRunning:
+                              _active && detail!['job']['status'] == 'RUNNING',
+                          activeAttemptIds: {
+                            for (final attempt
+                                in detail!['attempts'] as List? ?? const [])
+                              if (attempt['status'] == 'RUNNING')
+                                attempt['id'].toString(),
+                          },
+                          onTechnicalDetailsChanged: (value) {
+                            setState(() => _technicalDetails = value);
+                          },
+                          technicalDetails: [
+                            _section(
+                              'Metadata',
+                              const JsonEncoder.withIndent(
+                                '  ',
+                              ).convert(detail!['job']),
+                            ),
+                            _section(
+                              'Technische attempts',
+                              const JsonEncoder.withIndent(
+                                '  ',
+                              ).convert(detail!['attempts']),
+                            ),
+                            if (detail!['result']?['repositoryResult'] != null)
+                              _section(
+                                'Repositorypublicatie',
+                                const JsonEncoder.withIndent('  ').convert(
+                                  detail!['result']['repositoryResult'],
+                                ),
+                              ),
+                            if (detail!['result'] != null)
+                              _section(
+                                'Oorspronkelijk resultaat',
+                                const JsonEncoder.withIndent(
+                                  '  ',
+                                ).convert(detail!['result']['result']),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+                        if (detail!['result']?['verificationResult'] != null)
+                          VerificationPanel(
+                            result:
+                                (detail!['result']['verificationResult'] as Map)
+                                    .cast<String, dynamic>(),
+                          ),
+                        if (detail!['result'] != null &&
+                            (detail!['result']['artifacts'] as List? ??
+                                    const [])
+                                .isNotEmpty)
+                          FileCollection(
+                            title: 'Teruggekomen artifacts',
+                            emptyText: 'Geen artifacts teruggekomen',
+                            items: (detail!['result']['artifacts'] as List)
+                                .cast<Map<String, dynamic>>(),
+                            api: widget.api,
+                            pathFor: (item) =>
+                                '/v2/management/jobs/${widget.id}/artifacts/${item['id']}',
+                          ),
+                      ],
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
   );
 

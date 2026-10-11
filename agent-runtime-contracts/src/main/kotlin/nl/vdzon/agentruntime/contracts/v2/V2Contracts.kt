@@ -384,7 +384,7 @@ data class AppendUsageRequest(
 )
 data class AppendLogRequest(
     val fencingToken: String, val eventId: String, val kind: LogKind,
-    @field:NotBlank @field:Size(max = 8_192) val text: String,
+    @field:NotEmpty @field:Size(max = 8_192) val text: String,
     val streamId: String? = null, val final: Boolean = true, val observedAt: Instant,
 )
 data class SubmitResultRequest(

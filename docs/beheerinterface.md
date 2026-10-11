@@ -122,25 +122,39 @@ providercredentials.
 
 ## Jobdetail
 
-Jobdetail laadt `GET /v1/management/jobs/{jobId}` en toont:
+Jobdetail laadt `GET /v2/management/jobs/{jobId}` en opent standaard **Gesprek**. De opdracht staat
+bovenaan, gevolgd door selecteerbare agentberichten met Markdown-opmaak. Claude-streamfragmenten
+en Codex-events worden naar hetzelfde gespreksmodel vertaald. Een volledig bericht vervangt de
+bijbehorende gestreamde tekst; het verschijnt niet nogmaals als een losse kaart.
+Lange opdrachten beginnen ingeklapt en blijven volledig beschikbaar via **Volledige opdracht tonen**.
 
-- volledige jobmetadata;
-- de volledige prompt;
-- foutcode en veilige foutmelding wanneer de job faalde;
-- het gevalideerde JSON-resultaat wanneer beschikbaar;
-- technische attempts;
-- duurzame outputpogingen en hun validatiefouten;
-- het zichtbare transcript;
-- inputattachments en outputartifacts.
+Toolaanroepen staan als compacte, inklapbare stappen tussen de berichten. Uitklappen toont invoer
+en uitvoer. De status **Bezig**, **Afgerond** of **Mislukt** blijft ook dichtgeklapt zichtbaar. Bij een
+afgeronde job wordt een tool zonder ontvangen eindstatus als **Niet afgerond** getoond. Fouten
+blijven zichtbaar zonder eerst de volledige uitvoer te openen. Het gevalideerde eindresultaat wordt
+met zijn eigen velden leesbaar weergegeven; de monitor verzint geen samenvatting.
 
-De detailpagina ververst het transcript iedere drie seconden met alleen delen na het laatste
-sequence-nummer. Herhaalde delen worden op `partId` ontdubbeld. De status boven het transcript is
-**Live**, **Afgerond** of **Verbinding onderbroken**. Tekst is selecteerbaar en wordt nooit als HTML
-gerenderd.
+**Technische details** bevat de jobmetadata, attempts, het oorspronkelijke resultaat en de ruwe
+events. Opstartmeldingen, onbekende events en historische JSON-regels die al vóór opslag waren
+afgekapt, blijven daar beschikbaar. Interne providerredenering wordt niet als agentbericht
+weergegeven; expliciet aangeleverde openbare voortgangssamenvattingen wel. Inputattachments,
+outputartifacts, verificatieresultaten en veilige foutmeldingen blijven op de detailpagina aanwezig.
 
-Transcriptdelen bevatten zichtbare prompt-, correctie- en provideruitvoer. Een geredigeerd deel
-krijgt het label **Waarde door Agent Runtime afgeschermd**. Niet door de provider geleverde
-modelredenering staat niet in het transcript.
+De detailpagina ververst iedere drie seconden, met alleen transcriptdelen na het laatste
+sequence-nummer. Alle beschikbare pagina's worden direct opgehaald, ook als een pagina uitsluitend
+technische jobevents bevat. De cursor blijft behouden na een lege poll en herhaalde delen worden
+per attempt en `partId` ontdubbeld. Overlappende polls worden voorkomen. Bij afronding worden ook
+de eindstatus en het resultaat vernieuwd.
+
+Tijdens live volgen blijft de weergave bij de nieuwste tekst. Terugscrollen pauzeert dat volgen;
+**Nieuwe activiteit** brengt de lezer weer naar het einde. Uitgeklapte stappen blijven open bij
+updates. Bij een verbindingsfout blijft de eerder geladen inhoud zichtbaar.
+
+Nieuwe workeruitvoer wordt vóór opslag geredigeerd en in delen van maximaal 8192 tekens verzonden.
+De management-API geeft `streamId` en `final` door, zodat de monitor een lange providerregel eerst
+volledig kan samenvoegen en daarna interpreteren. `hasMore` geeft aan of de volgende eventpagina
+moet worden opgehaald. Deze velden zijn aanvullend; bestaande opgeslagen transcripten zonder
+streammetadata blijven ondersteund.
 
 ## Attachments en artifacts
 
@@ -148,14 +162,14 @@ De detailrespons bevat voor inputattachments alleen ID, bestandsnaam, MIME-type,
 en aanmaaktijd. De UI haalt de bytes met beheerauthenticatie op via:
 
 ```text
-GET /v1/management/jobs/{jobId}/attachments/{attachmentId}
+GET /v2/management/jobs/{jobId}/attachments/{attachmentId}
 ```
 
 Een geslaagd resultaat bevat dezelfde metadata voor artifacts. De UI gebruikt hiervoor de
 tenant-/adminroute:
 
 ```text
-GET /v1/jobs/{jobId}/artifacts/{artifactId}
+GET /v2/management/jobs/{jobId}/artifacts/{artifactId}
 ```
 
 PNG-, JPEG- en WebP-bestanden worden inline als afbeelding weergegeven. Ieder bestand behoudt een

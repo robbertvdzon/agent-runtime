@@ -6,22 +6,112 @@ import nl.vdzon.agentruntime.contracts.v2.*
 import java.time.Instant
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.UUID
+import com.fasterxml.jackson.databind.node.TextNode
 
-/** Spool redacted logs so a slow log endpoint cannot block reading provider usage. */
-internal class ExecutionTranscript(path: Path) : AutoCloseable {
+internal data class TranscriptChunk(
+    val text: String,
+    val eventId: String,
+    val streamId: String,
+    val final: Boolean,
+    val observedAt: Instant,
+)
+
+/** Redact decoded JSON strings, preserving the provider envelope and escaped secret values. */
+internal fun redactProviderEvent(line: String, mapper: ObjectMapper): String {
+    val parsed = runCatching { mapper.readTree(line) }.getOrNull()
+        ?: return redact(line, Int.MAX_VALUE)
+    fun clean(node: JsonNode): JsonNode = when {
+        node.isTextual -> TextNode(redact(node.asText(), Int.MAX_VALUE))
+        node.isArray -> mapper.createArrayNode().also { array -> node.forEach { array.add(clean(it)) } }
+        node.isObject -> mapper.createObjectNode().also { result ->
+            node.fields().forEach { (key, value) ->
+                val sensitive = key.matches(Regex("(?i)token|secret|password|api[_-]?key"))
+                result.set<JsonNode>(SecretRedactor.clean(key), if (sensitive && !value.isNull) TextNode("[REDACTED]") else clean(value))
+            }
+        }
+        else -> node
+    }
+    return mapper.writeValueAsString(clean(parsed))
+}
+
+/** Spool complete redacted lines; retries retain the same chunk and idempotency key. */
+internal class ExecutionTranscript(path: Path, private val agentRound: Int = 1) : AutoCloseable {
     private val writer = Files.newBufferedWriter(path)
     private val reader = Files.newBufferedReader(path)
+    private val pending = ArrayDeque<TranscriptChunk>()
+    private var deliveryFailed = false
+    @Volatile private var closing = false
+    @Volatile private var lastDeliveryNanos = 0L
+    private var sender: Thread? = null
+
     @Synchronized fun append(line: String) {
         writer.appendLine(line)
         writer.flush()
     }
-    fun forward(limit: Int = Int.MAX_VALUE, send: (String) -> Unit) {
+
+    /** True means the spool was drained; a failed request stays pending for the next call. */
+    fun forward(limit: Int = 32, send: (TranscriptChunk) -> Unit): Boolean {
+        deliveryFailed = false
         repeat(limit) {
-            val line = synchronized(this) { reader.readLine() } ?: return
-            try { send(line) } catch (_: Exception) { return }
+            if (pending.isEmpty()) {
+                val line = synchronized(this) { reader.readLine() } ?: return true
+                val streamId = "provider-event:$agentRound:${UUID.randomUUID()}"
+                val observedAt = Instant.now()
+                var offset = 0
+                while (offset < line.length) {
+                    var end = minOf(offset + 8192, line.length)
+                    // UTF-8 serialization must never see half of a surrogate pair.
+                    if (end < line.length && line[end - 1].isHighSurrogate() && line[end].isLowSurrogate()) end--
+                    pending += TranscriptChunk(line.substring(offset, end), UUID.randomUUID().toString(), streamId, end == line.length, observedAt)
+                    offset = end
+                }
+            }
+            val chunk = pending.firstOrNull() ?: return@repeat
+            try { send(chunk) }
+            catch (_: InterruptedException) { deliveryFailed = true; Thread.currentThread().interrupt(); return false }
+            catch (_: Exception) { deliveryFailed = true; return false }
+            pending.removeFirst()
+            lastDeliveryNanos = System.nanoTime()
         }
+        return false
     }
-    @Synchronized override fun close() { writer.close(); reader.close() }
+
+    /** HTTP log delivery has its own thread, so neither usage reads nor heartbeats wait on it. */
+    fun startForwarding(send: (TranscriptChunk) -> Unit) {
+        check(sender == null)
+        sender = Thread {
+            try {
+                while (!Thread.currentThread().isInterrupted) {
+                    val drained = forward(send = send)
+                    if (closing && drained) break
+                    if (drained || deliveryFailed) Thread.sleep(250)
+                }
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }.apply { isDaemon = true; name = "provider-transcript-$agentRound"; start() }
+    }
+
+    override fun close() {
+        closing = true
+        sender?.let {
+            val started = System.nanoTime()
+            var lastProgress = started
+            var observedDelivery = lastDeliveryNanos
+            // A healthy backlog gets time to drain; a failed endpoint must not hold the job.
+            while (it.isAlive && System.nanoTime() - started < 60_000_000_000L && System.nanoTime() - lastProgress < 5_000_000_000L) {
+                it.join(100)
+                if (lastDeliveryNanos != observedDelivery) { observedDelivery = lastDeliveryNanos; lastProgress = System.nanoTime() }
+            }
+            if (it.isAlive) {
+                System.err.println("Provider transcript delivery did not drain; the remaining transcript may be incomplete.")
+                it.interrupt()
+                it.join(1000)
+            }
+        }
+        synchronized(this) { writer.close(); reader.close() }
+    }
 }
 
 /** One CLI invocation. Snapshots are monotonic; repeated assistant/tool messages are not billed twice. */

@@ -15,15 +15,86 @@ class ExecutionUsageTest {
         ExecutionTranscript(root.resolve("transcript.log")).use { transcript ->
             val lines = mutableListOf<String>()
             transcript.append("eerste regel")
-            transcript.forward { lines += it }
+            transcript.forward { lines += it.text }
             transcript.append("tweede regel één")
-            transcript.forward { lines += it }
+            transcript.forward { lines += it.text }
             transcript.append("logverbinding weg")
             transcript.forward { throw IOException("offline") }
             transcript.append("uitvoering gaat door")
-            transcript.forward { lines += it }
-            assertThat(lines).containsExactly("eerste regel", "tweede regel één", "uitvoering gaat door")
+            transcript.forward { lines += it.text }
+            assertThat(lines).containsExactly("eerste regel", "tweede regel één", "logverbinding weg", "uitvoering gaat door")
         }
+    }
+
+    @Test fun `long Claude event retains complete JSON and a stable retry identity`(@TempDir root: Path) {
+        val text = "lange tekst ".repeat(2000)
+        val event = mapper.writeValueAsString(mapOf("type" to "assistant", "message" to mapOf("id" to "m1", "content" to listOf(mapOf("type" to "text", "text" to text)))))
+        ExecutionTranscript(root.resolve("transcript.log"), 3).use { transcript ->
+            transcript.append(redactProviderEvent(event, mapper))
+            val requests = mutableListOf<TranscriptChunk>()
+            transcript.forward { requests += it; throw IOException("lost acknowledgement") }
+            transcript.forward { requests += it }
+            assertThat(requests[1]).isEqualTo(requests[0])
+            val chunks = requests.distinctBy { it.eventId }
+            assertThat(chunks).hasSizeGreaterThan(1)
+            assertThat(chunks.map { it.streamId }.distinct()).hasSize(1)
+            assertThat(chunks.first().streamId).startsWith("provider-event:3:")
+            assertThat(chunks.all { it.text.length <= 8192 }).isTrue()
+            assertThat(chunks.dropLast(1).none { it.final }).isTrue()
+            assertThat(chunks.last().final).isTrue()
+            assertThat(mapper.readTree(chunks.joinToString("") { it.text }).path("message").path("content")[0].path("text").asText()).isEqualTo(text)
+        }
+    }
+
+    @Test fun `redaction precedes chunk boundaries and decodes escaped secrets`(@TempDir root: Path) {
+        val secret = "secret-quote-\"-slash-\\-emoji-😀"
+        SecretRedactor.configure(listOf(secret))
+        try {
+            val prefix = " ".repeat(20000)
+            val event = mapper.writeValueAsString(mapOf("type" to "assistant", "text" to prefix + secret + " 😀 end", "password" to "unknown-sensitive-value"))
+                .replace("secret-quote", "\\u0073ecret-quote")
+            ExecutionTranscript(root.resolve("transcript.log")).use { transcript ->
+                transcript.append(redactProviderEvent(event, mapper))
+                val chunks = mutableListOf<TranscriptChunk>()
+                transcript.forward { chunks += it }
+                val reconstructed = chunks.joinToString("") { it.text }
+                assertThat(chunks.any { it.text.isNotEmpty() && it.text.isBlank() }).isTrue()
+                assertThat(reconstructed).doesNotContain("secret-quote", "unknown-sensitive-value")
+                assertThat(mapper.readTree(reconstructed).path("text").asText()).isEqualTo(prefix + "[REDACTED] 😀 end")
+                assertThat(mapper.readTree(reconstructed).path("password").asText()).isEqualTo("[REDACTED]")
+            }
+        } finally { SecretRedactor.configure(emptyList()) }
+    }
+
+    @Test fun `chunk boundaries preserve supplementary Unicode and standalone logs`(@TempDir root: Path) {
+        val line = "x".repeat(8191) + "😀" + "y"
+        ExecutionTranscript(root.resolve("transcript.log")).use { transcript ->
+            transcript.append(line)
+            transcript.append(redactProviderEvent("Docker image is up to date", mapper))
+            val chunks = mutableListOf<TranscriptChunk>()
+            transcript.forward { chunks += it }
+            assertThat(chunks).hasSize(3)
+            assertThat(chunks.first().text).hasSize(8191)
+            assertThat(chunks.take(2).joinToString("") { String(it.text.toByteArray()) }).isEqualTo(line)
+            assertThat(chunks.last().text).isEqualTo("Docker image is up to date")
+            assertThat(chunks.last().final).isTrue()
+            assertThat(chunks.last().streamId).isNotEqualTo(chunks.first().streamId)
+        }
+    }
+
+    @Test fun `slow log delivery does not block producer and drains when closed`(@TempDir root: Path) {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val chunks = java.util.concurrent.CopyOnWriteArrayList<TranscriptChunk>()
+        ExecutionTranscript(root.resolve("transcript.log")).use { transcript ->
+            transcript.startForwarding { chunk -> entered.countDown(); release.await(); chunks += chunk }
+            transcript.append("first")
+            assertThat(entered.await(2, java.util.concurrent.TimeUnit.SECONDS)).isTrue()
+            transcript.append("second")
+            assertThat(chunks).isEmpty()
+            release.countDown()
+        }
+        assertThat(chunks.map { it.text }).containsExactly("first", "second")
     }
 
     @Test fun `Codex cached input is separate and repeated summaries do not double count`() {

@@ -427,7 +427,7 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
         credentialSource?.let { command += listOf("-v", "$it:/credential-source:ro") }
         if (engine == "CLAUDE" && !config.claudeOauthToken.isNullOrBlank()) command += listOf("-e", "CLAUDE_CODE_OAUTH_TOKEN")
         command += listOf("-e", "AR_ENGINE=$engine", "-e", "AR_MODEL=${claim.job.execution.model}", "-e", "AR_JOB_KIND=${claim.job.jobKind.name}", "-e", "AR_OUTPUT_ATTEMPT=$agentRound", "-e", "AR_RESULT_FILE=/job/output/result.json", config.executionImage)
-        val transcript = ExecutionTranscript(task.resolve("provider-$agentRound.log"))
+        val transcript = ExecutionTranscript(task.resolve("provider-$agentRound.log"), agentRound)
         val process = try {
             startContainer(ProcessBuilder(command).redirectErrorStream(true).also {
                 if (engine == "CLAUDE" && !config.claudeOauthToken.isNullOrBlank()) it.environment()["CLAUDE_CODE_OAUTH_TOKEN"] = config.claudeOauthToken
@@ -437,12 +437,13 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
             throw error
         }
         val roundUsage = usage.round(provider, mapper)
+        transcript.startForwarding { client.log(claim, it) }
         val streamFailed = java.util.concurrent.atomic.AtomicBoolean(false)
         val reader = Thread {
             runCatching {
                 process.inputStream.bufferedReader().useLines { lines -> lines.forEach { line ->
                     roundUsage.observe(line)
-                    val cleaned = redact(line, 8192)
+                    val cleaned = redactProviderEvent(line, mapper)
                     if (cleaned.isNotBlank()) transcript.append(cleaned)
                 } }
             }.onFailure { streamFailed.set(true) }
@@ -459,7 +460,6 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
                     timedOut = true
                     break
                 }
-                transcript.forward(32) { client.log(claim, LogKind.AGENT_TEXT, it) }
             }
             return ContainerRunResult(if (timedOut) 124 else process.exitValue(), timedOut)
         } finally {
@@ -479,7 +479,6 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
             val promptBytes = task.resolve("input/prompt.md").fileSize()
             roundUsage.finish(((promptBytes + inputBytes) / 4).coerceAtLeast(1), estimatedOutput, streamDrained = !reader.isAlive && !streamFailed.get())
             usage.flush(force = true)
-            transcript.forward { client.log(claim, LogKind.AGENT_TEXT, it) }
             transcript.close()
         }
     }
@@ -515,6 +514,7 @@ class V2RuntimeClient(private val config: WorkerConfig, private val mapper: Obje
     fun heartbeat(claim: ClaimedJob) = post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/heartbeat", AttemptAuth(claim.attempt.id, claim.fencingToken), HeartbeatResponse::class.java)!!
     fun progress(claim: ClaimedJob, phase: String, percent: Int?, message: String?) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/progress", ProgressRequest(claim.attempt.id, claim.fencingToken, phase, percent, message), Void::class.java) }
     fun log(claim: ClaimedJob, kind: LogKind, text: String) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/logs", AppendLogRequest(claim.fencingToken, UUID.randomUUID().toString(), kind, text.take(8192), observedAt = Instant.now()), Void::class.java) }
+    internal fun log(claim: ClaimedJob, chunk: TranscriptChunk) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/logs", AppendLogRequest(claim.fencingToken, chunk.eventId, LogKind.AGENT_TEXT, chunk.text, chunk.streamId, chunk.final, chunk.observedAt), Void::class.java) }
     fun audioUsage(claim: ClaimedJob, seconds: Long) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/usage-events", AppendUsageRequest(claim.fencingToken, UUID.randomUUID().toString(), Instant.now(), listOf(UsageMetricValue(UsageMetric.AUDIO_INPUT_SECONDS, seconds.toString(), UsageUnit.SECOND)), source = UsageSource.WORKER_MEASURED), Void::class.java) }
     fun usage(claim: ClaimedJob, request: AppendUsageRequest) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/usage-events", request, Void::class.java) }
     fun submit(claim: ClaimedJob, result: JsonNode, objectIds: Set<String>, repositoryResult: RepositoryResult?, verificationResult: VerificationResult?) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/result", SubmitResultRequest(claim.fencingToken, result, objectIds, repositoryResult, verificationResult), Void::class.java) }

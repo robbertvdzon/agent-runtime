@@ -23,6 +23,55 @@ import java.util.UUID
 @AutoConfigureMockMvc
 class V2IntegrationTest(@Autowired private val mvc:MockMvc,@Autowired private val mapper:ObjectMapper,@Autowired private val jdbc:JdbcTemplate) {
     @Test
+    fun `management transcript preserves chunk metadata and pages through events without logs`() {
+        val model = "transcript-${UUID.randomUUID()}"
+        val worker = "transcript-worker-${UUID.randomUUID()}"
+        val boot = UUID.randomUUID().toString()
+        val capability = ExecutorCapability("openai", model, ExecutionMode.SUBSCRIPTION, setOf(TaskType.STRUCTURED_GENERATION))
+        val jobId = postJson("/v2/jobs", PRODUCT, jobRequest(ExecutionSelection("openai", model, ExecutionMode.SUBSCRIPTION)), 202).path("id").asText()
+        postJson("/v2/workers/register", WORKER, WorkerRegistrationRequest(worker, boot, setOf(capability)), 200)
+        val claim = postJson("/v2/workers/$worker/claims", WORKER, ClaimRequest(boot, setOf(capability), 0), 200)
+        val attempt = claim.path("attempt").path("id").asText()
+        val fence = claim.path("fencingToken").asText()
+        val logPath = "/v2/workers/$worker/jobs/$jobId/attempts/$attempt/logs"
+        val streamId = "provider-event:1:example"
+        val first = AppendLogRequest(fence, "chunk-1", LogKind.AGENT_TEXT, "{\"type\":\"assistant\",", streamId, false, Instant.now())
+        repeat(2) { postJson(logPath, WORKER, first, 204) }
+        postJson(logPath, WORKER, AppendLogRequest(fence, "chunk-2", LogKind.AGENT_TEXT, "\"text\":\"Hello\"}", streamId, true, Instant.now()), 204)
+        postJson(logPath, WORKER, AppendLogRequest(fence, "standalone", LogKind.SYSTEM, "Worker connected", observedAt = Instant.now()), 204)
+
+        var cursor = 0L
+        val parts = mutableListOf<JsonNode>()
+        var emptyPageWithMore = false
+        var pages = 0
+        do {
+            val page = getJson("/v2/management/jobs/$jobId/transcript?afterSequence=$cursor&limit=1", ADMIN)
+            val more = page.path("hasMore").asBoolean()
+            if (page.path("items").isEmpty && more) emptyPageWithMore = true
+            parts += page.path("items").toList()
+            val next = page.path("nextSequence").asLong()
+            assertThat(next).isGreaterThanOrEqualTo(cursor)
+            cursor = next
+            assertThat(++pages).isLessThan(20)
+        } while (more)
+        assertThat(emptyPageWithMore).isTrue()
+        assertThat(parts).hasSize(3)
+        assertThat(parts.take(2).map { it.path("streamId").asText() }).containsExactly(streamId, streamId)
+        assertThat(parts.take(2).map { it.path("final").asBoolean() }).containsExactly(false, true)
+        assertThat(parts.last().path("final").asBoolean()).isTrue()
+        assertThat(parts.last().path("streamId").asText("")).isEmpty()
+        val empty = getJson("/v2/management/jobs/$jobId/transcript?afterSequence=$cursor&limit=1", ADMIN)
+        assertThat(empty.path("items")).isEmpty()
+        assertThat(empty.path("nextSequence").asLong()).isEqualTo(cursor)
+        assertThat(empty.path("hasMore").asBoolean()).isFalse()
+        postJson(logPath, WORKER, AppendLogRequest(fence, "spaces", LogKind.AGENT_TEXT, " ".repeat(8192), "provider-event:1:spaces", false, Instant.now()), 204)
+        val spaces = getJson("/v2/management/jobs/$jobId/transcript?afterSequence=$cursor", ADMIN).path("items").single()
+        assertThat(spaces.path("text").asText()).isEqualTo(" ".repeat(8192))
+        postJson(logPath, WORKER, AppendLogRequest(fence, "empty", LogKind.AGENT_TEXT, "", observedAt = Instant.now()), 400)
+        postJson(logPath, WORKER, AppendLogRequest(fence, "oversized", LogKind.AGENT_TEXT, " ".repeat(8193), observedAt = Instant.now()), 400)
+    }
+
+    @Test
     fun `production read capability is restricted to PvdD product advisor jobs`() {
         val request = jobRequest(ExecutionSelection("anthropic", "claude-opus-5", ExecutionMode.SUBSCRIPTION), emptyList()).copy(
             idempotencyKey = "pf-product-advisor-${java.util.UUID.randomUUID()}",

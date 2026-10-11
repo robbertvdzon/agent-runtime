@@ -115,12 +115,15 @@ data class V2ManagementTranscriptPart(
     val kind: String,
     val text: String,
     val redacted: Boolean = false,
+    val streamId: String? = null,
+    val final: Boolean = true,
 )
 
 data class V2ManagementTranscriptPage(
     val items: List<V2ManagementTranscriptPart>,
     val nextSequence: Long?,
     val active: Boolean,
+    val hasMore: Boolean = false,
 )
 
 data class V2ManagementWorkerView(
@@ -257,14 +260,16 @@ class V2AdminController(
     ): V2ManagementTranscriptPage {
         request.requireAdmin()
         val job = requireJob(id)
-        val events = jobs.events(id, afterSequence ?: 0, limit.coerceIn(1, 500))
+        val pageLimit = limit.coerceIn(1, 500)
+        val events = jobs.events(id, afterSequence ?: 0, pageLimit)
         val parts = events.filter { it.logText != null }.map { event ->
             V2ManagementTranscriptPart(
                 id, event.attemptIdOrNull(), event.sequence.toString(), event.sequence, event.createdAt,
                 event.logKind?.name ?: "SYSTEM", event.logText!!,
+                streamId = event.logStreamId, final = event.logFinal ?: true,
             )
         }
-        return V2ManagementTranscriptPage(parts, events.lastOrNull()?.sequence, job.view.status !in TERMINAL_STATUSES)
+        return V2ManagementTranscriptPage(parts, events.lastOrNull()?.sequence ?: afterSequence, job.view.status !in TERMINAL_STATUSES, events.size == pageLimit)
     }
 
     @GetMapping("/workers")
