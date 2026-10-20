@@ -14,6 +14,7 @@ import nl.vdzon.agentruntime.server.config.ApiException
 import nl.vdzon.agentruntime.server.config.RuntimeProperties
 import nl.vdzon.agentruntime.server.v2.RegisteredV2WorkerDetails
 import nl.vdzon.agentruntime.server.v2.StoredV2Job
+import nl.vdzon.agentruntime.server.v2.StoredV2JobSummary
 import nl.vdzon.agentruntime.server.v2.V2Download
 import nl.vdzon.agentruntime.server.v2.V2JobStore
 import nl.vdzon.agentruntime.server.v2.V2ObjectStore
@@ -164,6 +165,9 @@ class V2AdminController(
         return ManagementList(Instant.now(), jobs.managementList().filter { it.view.status == JobStatus.RUNNING }.map(::item))
     }
 
+    /** Beheerlijsten werken op lichte rijen; alleen voor een getoond item wordt de volledige job geladen. */
+    private fun item(summary: StoredV2JobSummary, waitingReason: String? = null): V2ManagementJobItem = item(requireJob(summary.view.id), waitingReason)
+
     @GetMapping("/queue")
     fun queue(request: HttpServletRequest): ManagementList<V2ManagementJobItem> {
         request.requireAdmin()
@@ -171,7 +175,7 @@ class V2AdminController(
         val waiting = jobs.managementList()
             .filter { it.view.status in setOf(JobStatus.QUEUED, JobStatus.WAITING_FOR_WORKER) }
             .sortedBy { it.view.createdAt }
-            .map { item(it, waitingReason(it, registered)) }
+            .map { summary -> requireJob(summary.view.id).let { job -> item(job, waitingReason(job, registered)) } }
         return ManagementList(Instant.now(), waiting)
     }
 
@@ -201,7 +205,7 @@ class V2AdminController(
                 query.isBlank() || listOf(job.view.id, technicalName(job), job.view.idempotencyKey, job.view.tenantId)
                     .any { it.contains(query, ignoreCase = true) }
             }
-            .sortedWith(compareByDescending<StoredV2Job> { it.view.completedAt ?: it.view.updatedAt }.thenByDescending { it.view.id })
+            .sortedWith(compareByDescending<StoredV2JobSummary> { it.view.completedAt ?: it.view.updatedAt }.thenByDescending { it.view.id })
         val bounded = limit.coerceIn(1, 30)
         val offset = decodeCursor(cursor).coerceIn(0, all.size)
         val page = all.drop(offset).take(bounded).map(::item)
@@ -396,8 +400,10 @@ class V2AdminController(
         }
         ?.view?.id
 
-    private fun technicalName(job: StoredV2Job) =
-        "${job.view.tenantId}-${job.view.jobKind.name.lowercase().replace('_', '-')}-${job.view.id.take(8)}"
+    private fun technicalName(job: StoredV2Job) = technicalName(job.view)
+    private fun technicalName(job: StoredV2JobSummary) = technicalName(job.view)
+    private fun technicalName(view: nl.vdzon.agentruntime.contracts.v2.JobView) =
+        "${view.tenantId}-${view.jobKind.name.lowercase().replace('_', '-')}-${view.id.take(8)}"
 
     private fun preview(value: String): String = value.replace(Regex("\\s+"), " ").trim().take(AdminController.PREVIEW_CHARACTERS)
     private fun encodeCursor(offset: Int): String = Base64.getUrlEncoder().withoutPadding()

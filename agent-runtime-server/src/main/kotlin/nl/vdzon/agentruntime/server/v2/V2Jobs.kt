@@ -29,6 +29,16 @@ data class StoredV2Job(
     val verificationResult: VerificationResult?,
     val cancelRequested: Boolean,
 )
+/**
+ * Lichte jobrij voor beheerlijsten: zonder request_json en result_json. Die kolommen zijn per job tot
+ * tientallen kilobytes (instructie, schema, resultaat) en duizenden jobs tegelijk inladen vulde de
+ * heap van de server; de volledige job wordt alleen per getoond item opgehaald.
+ */
+data class StoredV2JobSummary(
+    val view: JobView,
+    val repositoryResult: RepositoryResult?,
+    val verificationResult: VerificationResult?,
+)
 data class StoredV2Attempt(
     val view: AttemptView, val workerId: String, val workerBootId: String, val fencingTokenHash: String,
     val leaseUntil: Instant, val attemptDeadline: Instant,
@@ -62,8 +72,8 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
         return jdbc.query("SELECT * FROM runtime_v2_job$where ORDER BY created_at DESC,id DESC LIMIT ?",rowMapper(),*args.toTypedArray())
     }
 
-    fun managementList(): List<StoredV2Job> =
-        jdbc.query("SELECT * FROM runtime_v2_job ORDER BY created_at DESC,id DESC LIMIT 5000", rowMapper())
+    fun managementList(): List<StoredV2JobSummary> =
+        jdbc.query("SELECT $SUMMARY_COLUMNS FROM runtime_v2_job ORDER BY created_at DESC,id DESC LIMIT 5000", summaryRowMapper())
 
     fun queued(): List<StoredV2Job> = jdbc.query("""SELECT * FROM runtime_v2_job WHERE status IN ('QUEUED','WAITING_FOR_WORKER')
         AND (not_before IS NULL OR not_before<=CURRENT_TIMESTAMP) ORDER BY created_at,id""",rowMapper())
@@ -180,6 +190,16 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
 
     fun requestContentDelete(jobId:String):Instant { val now=Instant.now(); jdbc.update("UPDATE runtime_v2_job SET content_delete_requested_at=? WHERE id=?",utc(now),jobId); return now }
 
+    private fun viewOf(rs: java.sql.ResultSet) = JobView(rs.getString("id"),rs.getString("tenant_id"),rs.getString("idempotency_key"),JobKind.valueOf(rs.getString("job_kind")),TaskType.valueOf(rs.getString("task_type")),ExecutionSelection(rs.getString("vendor_id"),rs.getString("model"),ExecutionMode.valueOf(rs.getString("execution_mode"))),JobStatus.valueOf(rs.getString("status")),rs.getString("phase"),rs.getInt("attempt_count"),rs.getInt("max_attempts"),rs.getObject("progress_percent") as? Int,rs.getString("progress_message"),rs.getString("error_code"),rs.getString("error_message"),instant(rs.getObject("created_at")),instant(rs.getObject("updated_at")),rs.getObject("completed_at")?.let(::instant))
+
+    private fun summaryRowMapper() = org.springframework.jdbc.core.RowMapper<StoredV2JobSummary> { rs,_ ->
+        StoredV2JobSummary(
+            viewOf(rs),
+            rs.getString("repository_result_json")?.let { mapper.readValue(it,RepositoryResult::class.java) },
+            rs.getString("verification_result_json")?.let { mapper.readValue(it,VerificationResult::class.java) },
+        )
+    }
+
     private fun rowMapper() = org.springframework.jdbc.core.RowMapper<StoredV2Job> { rs,_ ->
         val requestTree=mapper.readTree(rs.getString("request_json")).also { if(it.isObject)(it as com.fasterxml.jackson.databind.node.ObjectNode).remove("repositoryRequest") }
         val request=mapper.treeToValue(requestTree,CreateJobRequest::class.java)
@@ -196,7 +216,10 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
         val quality=UsageQuality.valueOf(rs.getString("usage_quality")); val view=AttemptView(rs.getString("id"),rs.getString("job_id"),rs.getInt("attempt_number"),AttemptReason.valueOf(rs.getString("reason")),AttemptStatus.valueOf(rs.getString("status")),ExecutionSelection(rs.getString("vendor_id"),rs.getString("model"),ExecutionMode.valueOf(rs.getString("execution_mode"))),rs.getString("provider_request_id"),quality,JobUsageSummary(rs.getInt("attempt_number"),quality),rs.getString("error_code"),instant(rs.getObject("started_at")),rs.getObject("completed_at")?.let(::instant))
         StoredV2Attempt(view,rs.getString("worker_id"),rs.getString("worker_boot_id"),rs.getString("fencing_token_hash"),instant(rs.getObject("lease_until")),instant(rs.getObject("attempt_deadline")))
     }
-    companion object { fun utc(value:Instant)=value.atOffset(ZoneOffset.UTC); fun instant(value:Any):Instant=when(value){is OffsetDateTime->value.toInstant();is java.sql.Timestamp->value.toInstant();else->error("Unsupported timestamp")}; fun hash(value:String)=MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString(""){"%02x".format(it)} }
+    companion object {
+        /** Alle kolommen van runtime_v2_job behalve de zware JSON-kolommen request_json en result_json. */
+        const val SUMMARY_COLUMNS = "id,tenant_id,idempotency_key,job_kind,task_type,vendor_id,model,execution_mode,status,phase,attempt_count,max_attempts,progress_percent,progress_message,error_code,error_message,created_at,updated_at,completed_at,repository_result_json,verification_result_json"
+        fun utc(value:Instant)=value.atOffset(ZoneOffset.UTC); fun instant(value:Any):Instant=when(value){is OffsetDateTime->value.toInstant();is java.sql.Timestamp->value.toInstant();else->error("Unsupported timestamp")}; fun hash(value:String)=MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString(""){"%02x".format(it)} }
 }
 
 internal fun v2ProviderName(vendorId:String)=when(vendorId){"openai"->"CODEX";"anthropic"->"CLAUDE";"mock"->"MOCKED";else->vendorId.uppercase()}
