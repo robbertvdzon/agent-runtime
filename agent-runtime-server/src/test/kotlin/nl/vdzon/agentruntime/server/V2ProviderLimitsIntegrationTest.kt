@@ -53,7 +53,9 @@ class V2ProviderLimitsIntegrationTest(@Autowired private val mvc: MockMvc, @Auto
         postJson("$base/fail","worker",FailAttemptRequest(fence,"PROVIDER_RATE_LIMIT","Limited",true,listOf(observation)),204)
         val view=getJson("/v2/jobs/$job","hkh")
         assertThat(view.path("status").asText()).isEqualTo("QUEUED")
-        assertThat(Instant.parse(view.path("retryNotBefore").asText())).isAfterOrEqualTo(observation.observedAt.plusSeconds(900))
+        // PostgreSQL/H2 timestamps store microseconds; Linux Instant.now() can include nanoseconds.
+        assertThat(Instant.parse(view.path("retryNotBefore").asText()))
+            .isAfterOrEqualTo(observation.observedAt.plusSeconds(900).truncatedTo(java.time.temporal.ChronoUnit.MICROS))
         claim(f,204)
         // Late evidence is still append-only; it cannot submit a result for the old attempt.
         postJson("$base/provider-limits","worker",AppendProviderLimitRequest(fence,observation),204)
