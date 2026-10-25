@@ -165,3 +165,10 @@ blijven staan zolang een eerder gestarte worker ze kan gebruiken. Installeer een
 nieuwe versie wanneer actieve jobs zijn afgerond; `install` herstart de worker.
 
 Controleer dit gedrag met `bash deploy/macos/test-immutable-worker-jar.sh`.
+
+## Ophalen van immutable serverimages
+
+De releasepipeline pint de server op `sha-<commit>`. De deployment gebruikt daarom
+`IfNotPresent`: een al gecontroleerde, lokaal aanwezige immutable image hoeft bij
+een herstart niet opnieuw via GHCR te worden opgehaald. Dat voorkomt afhankelijkheid
+van registry-/IPv6-bereikbaarheid voor een reeds gecachete release.
