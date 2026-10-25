@@ -38,7 +38,7 @@ een eigen bearercredential en mogen alleen projectcredentials onder respectievel
   management-API en ingebedde Flutter Web-monitor;
 - `agent-runtime-worker`: Kotlin-worker voor Codex, Claude, Dockeruitvoering, projectcredentials en
   gecontroleerde Git-publicatie;
-- `execution-images`: multi-arch execution-image met agent-CLI's, browser, buildtools,
+- `execution-images`: ARM64 execution-image met agent-CLI's, browser, buildtools,
   OpenShift/Kubernetes-CLI's en databaseclients;
 - `monitor-ui`: responsive Flutter Web-beheerinterface;
 - `deploy`: Kustomize-overlays, Argo CD Applications, Sealed Secrets, PostgreSQL en backups.
@@ -365,9 +365,22 @@ seconden `version.json` en herlaadt zichzelf wanneer een nieuwere frontend live 
 ## CI en productie
 
 Een push naar `main` start repositoryverificatie voor Flutter, Maven, Docker en beide
-Kustomize-overlays. Na een groene verificatie bouwt GitHub Actions de server- en execution-images
-onder `main` en een immutable `sha-...`-tag. De workflow commit daarna de serverimage-pin naar
-`main`. Argo CD synchroniseert acceptatie en productie automatisch met prune en self-heal.
+Kustomize-overlays. Na alle controles bouwt en publiceert de verificatiejob de serverimage één keer
+(`linux/amd64`), met een persistente Docker-laagcache. Daarbij verpakt `Dockerfile.runtime`
+de al door Maven geteste JAR, zonder opnieuw dependencies te downloaden of te compileren.
+De execution-image draait alleen op
+Apple Silicon en wordt native op `ubuntu-24.04-arm` gebouwd. De immutable versie
+`tree-<git-tree-id van execution-images>` staat los van serverreleases: als die tag al
+bestaat, wordt er niets gebouwd. `main` blijft de compatibele standaard voor workers;
+`deploy/execution-image.txt` legt de immutable versie vast voor expliciete
+`AR_EXECUTION_IMAGE`-configuratie en rollback. De vervolgworkflow pint alleen een nieuw
+gepubliceerde serverimage voor Argo CD.
+
+Controles worden geselecteerd op basis van wijzigingen sinds de laatste geslaagde
+pushverificatie, zodat wijzigingen uit afgebroken runs niet verloren gaan. PR's worden
+tegen hun doelbranch gecontroleerd. Een handmatige verificatie draait alle controles.
+De serverimage uit een PR wordt niet gepubliceerd en schrijft niet naar de releasecache.
+Zie [deployment en operatie](docs/deployment-en-operatie.md) voor cache- en versiebeheer.
 
 ## Documentatie
 

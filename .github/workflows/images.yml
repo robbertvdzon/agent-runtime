@@ -7,62 +7,87 @@ concurrency:
   group: runtime-images-${{ github.event.workflow_run.head_branch || github.ref }}
   cancel-in-progress: true
 jobs:
-  images:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository)
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - {image: agent-runtime-server, file: Dockerfile, context: ., platforms: linux/amd64}
-          - {image: agent-runtime-execution, file: execution-images/Dockerfile, context: execution-images, platforms: "linux/amd64,linux/arm64"}
-    steps:
-      - uses: actions/checkout@v4
-        with: {ref: "${{ github.event.workflow_run.head_sha || github.sha }}"}
-      - uses: docker/login-action@v3
-        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.file }}
-          platforms: ${{ matrix.platforms }}
-          push: true
-          tags: |
-            ghcr.io/robbertvdzon/${{ matrix.image }}:main
-            ghcr.io/robbertvdzon/${{ matrix.image }}:sha-${{ github.event.workflow_run.head_sha || github.sha }}
-
-  pin-release:
-    needs: images
+  execution:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository)
-    runs-on: ubuntu-latest
-    permissions: {contents: write}
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-        with: {ref: "${{ github.event.workflow_run.head_sha || github.sha }}"}
-      - name: Pin the verified release for Argo CD
+        with: {ref: '${{ github.event.workflow_run.head_sha || github.sha }}'}
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Resolve independent execution image version
+        id: version
+        run: |
+          # Git tree ID includes every build input, including pinned tool versions.
+          tag="tree-$(git rev-parse HEAD:execution-images)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          image="ghcr.io/$GITHUB_REPOSITORY_OWNER/agent-runtime-execution:$tag"
+          if docker manifest inspect "$image" >/tmp/execution-manifest.log 2>&1; then
+            echo 'build=false' >> "$GITHUB_OUTPUT"
+          elif grep -Eqi 'manifest unknown|no such manifest' /tmp/execution-manifest.log; then
+            echo 'build=true' >> "$GITHUB_OUTPUT"
+          else
+            cat /tmp/execution-manifest.log >&2
+            exit 1
+          fi
+      - uses: docker/setup-buildx-action@v3
+        if: steps.version.outputs.build == 'true'
+      - name: Build execution tools natively for Apple Silicon
+        if: steps.version.outputs.build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: execution-images
+          file: execution-images/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/agent-runtime-execution:${{ steps.version.outputs.tag }}
+          cache-from: type=gha,scope=runtime-execution-arm64
+          cache-to: type=gha,mode=max,scope=runtime-execution-arm64
+      - name: Update worker compatibility tag only for the current main release
         env:
-          RELEASE_SHA: "${{ github.event.workflow_run.head_sha || github.sha }}"
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          EXECUTION_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git fetch --no-tags origin main
+          if [[ "$(git rev-parse FETCH_HEAD)" != "$RELEASE_SHA" ]]; then exit 0; fi
+          image="ghcr.io/$GITHUB_REPOSITORY_OWNER/agent-runtime-execution"
+          # imagetools changes a manifest only; no image layers are downloaded.
+          docker buildx imagetools create -t "$image:main" "$image:$EXECUTION_TAG"
+
+  pin-release:
+    needs: execution
+    runs-on: ubuntu-latest
+    permissions: {contents: write, packages: read}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.event.workflow_run.head_sha || github.sha }}'}
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Pin independently versioned verified images for Argo CD and workers
+        env:
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          EXECUTION_TAG: ${{ needs.execution.outputs.tag }}
         run: |
           set -euo pipefail
           [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git fetch --no-tags origin main
-          if [[ "$(git rev-parse FETCH_HEAD)" != "$RELEASE_SHA" ]]; then
-            echo "A newer main commit exists; its workflow will publish and deploy that release."
-            exit 0
+          if [[ "$(git rev-parse FETCH_HEAD)" != "$RELEASE_SHA" ]]; then exit 0; fi
+          # Documentation/worker-only changes don't publish a new server image.
+          image="ghcr.io/$GITHUB_REPOSITORY_OWNER/agent-runtime-server:sha-$RELEASE_SHA"
+          if docker manifest inspect "$image" >/tmp/server-manifest.log 2>&1; then
+            sed -i -E "s#newTag: sha-[0-9a-f]{40}#newTag: sha-$RELEASE_SHA#" deploy/base/kustomization.yaml
+          elif ! grep -Eqi 'manifest unknown|no such manifest' /tmp/server-manifest.log; then
+            cat /tmp/server-manifest.log >&2
+            exit 1
           fi
-          sed -i -E "s#newTag: sha-[0-9a-f]{40}#newTag: sha-$RELEASE_SHA#" deploy/base/kustomization.yaml
-          grep -qx "    newTag: sha-$RELEASE_SHA" deploy/base/kustomization.yaml
+          echo "ghcr.io/$GITHUB_REPOSITORY_OWNER/agent-runtime-execution:$EXECUTION_TAG" > deploy/execution-image.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- deploy/base/kustomization.yaml
-          if git diff --cached --quiet; then
-            echo "Release $RELEASE_SHA is already pinned."
-            exit 0
-          fi
+          git add -- deploy/base/kustomization.yaml deploy/execution-image.txt
+          if git diff --cached --quiet; then exit 0; fi
           git commit -m "deploy: pin runtime release ${RELEASE_SHA:0:7} [skip ci]"
           git push origin HEAD:main

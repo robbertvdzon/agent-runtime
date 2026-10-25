@@ -1,0 +1,9 @@
+# CI packages the JAR already built and tested by Maven verify.
+FROM eclipse-temurin:21-jre-noble
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN useradd --uid 1001 --create-home --shell /usr/sbin/nologin runtime
+WORKDIR /app
+COPY agent-runtime-server/target/agent-runtime-server-*.jar /app/agent-runtime.jar
+USER 1001
+EXPOSE 8080
+ENTRYPOINT ["java","-XX:MaxRAMPercentage=75","-Djava.security.egd=file:/dev/urandom","-jar","/app/agent-runtime.jar"]

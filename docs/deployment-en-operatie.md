@@ -56,19 +56,20 @@ vereist expliciete echte providers en modellen.
 - server-Dockerbuild;
 - rendercontrole van acceptatie- en productie-Kustomize-overlays.
 
-Na een groene `main`-verificatie start `.github/workflows/images.yml`. Deze workflow publiceert:
+De verificatiejob publiceert de gecontroleerde serverimage. Na een groene `main`-verificatie
+start `.github/workflows/images.yml` voor de onafhankelijke execution-image en releasepins:
 
 ```text
 ghcr.io/robbertvdzon/agent-runtime-server:main
 ghcr.io/robbertvdzon/agent-runtime-server:sha-<main-commit>
 ghcr.io/robbertvdzon/agent-runtime-execution:main
-ghcr.io/robbertvdzon/agent-runtime-execution:sha-<main-commit>
+ghcr.io/robbertvdzon/agent-runtime-execution:tree-<execution-images-tree-id>
 ```
 
-De execution-image wordt voor `linux/amd64` en `linux/arm64` gebouwd. De serverimage gebruikt
+De execution-image wordt native voor `linux/arm64` gebouwd (Docker op Apple Silicon). De serverimage gebruikt
 `linux/amd64`.
 
-Nadat beide images zijn gepubliceerd, past de workflow `deploy/base/kustomization.yaml` aan naar de
+Nadat de benodigde images beschikbaar zijn, past de workflow `deploy/base/kustomization.yaml` aan naar de
 immutable servertag en pusht een `[skip ci]`-systeemcommit naar `main`. Daardoor ontstaat geen
 nieuwe buildlus.
 
@@ -172,3 +173,36 @@ De releasepipeline pint de server op `sha-<commit>`. De deployment gebruikt daar
 `IfNotPresent`: een al gecontroleerde, lokaal aanwezige immutable image hoeft bij
 een herstart niet opnieuw via GHCR te worden opgehaald. Dat voorkomt afhankelijkheid
 van registry-/IPv6-bereikbaarheid voor een reeds gecachete release.
+
+## Snelle CI en onafhankelijke execution-versies
+
+De verificatiejob test gewijzigde onderdelen en bouwt de serverimage één keer.
+`Dockerfile.runtime` verpakt daarbij de JAR die Maven `verify` al
+heeft gebouwd en getest: er draait geen tweede Maven-build binnen Docker. De volledige
+`Dockerfile` blijft beschikbaar voor lokale builds uit broncode. Pas na
+alle controles publiceert dezelfde job het geladen Docker-resultaat onder `sha-<commit>`.
+De server blijft `linux/amd64`; de execution-image gebruikt `ubuntu-24.04-arm`, zonder QEMU.
+Beide hebben een eigen GitHub Actions Docker-cache met `mode=max` voor hun tool- en runtimelagen.
+Maven buiten Docker gebruikt daarnaast de bestaande setup-java-cache.
+
+De execution-image krijgt `tree-<git-tree-id van execution-images>`. Een bestaande tag
+wordt hergebruikt bij server-, worker- en documentatiewijzigingen. De `main`-alias wordt
+alleen bijgewerkt als de broncommit nog de actuele main is. De releasecommit schrijft de
+immutable referentie naar `deploy/execution-image.txt`; gebruik die als `AR_EXECUTION_IMAGE`
+om een worker vast te zetten. Bestaande workers blijven met `main` werken en controleren
+bij iedere job de registry. Een execution-only release verandert de serverimage-pin niet.
+
+Codex, Claude, Playwright, Flutter, Vibe en de OpenShift CLI zijn expliciet gepind in
+`execution-images/Dockerfile`. Werk die versies bewust bij via een commit; dat verandert
+de execution-versie. OS-pakketten en basisimages worden bij een koude build opnieuw
+opgehaald. Voor een bewuste refresh van die lagen: verwijder de bijbehorende Actions-cache
+en wijzig een buildinput (bijvoorbeeld een gepinde versie). Alleen opnieuw uitvoeren van
+een workflow vervangt een bestaande immutable execution-tag niet.
+
+Gebruik de Actions job/step-tijden om koude en warme builds te vergelijken. Noteer
+wachtrijtijd afzonderlijk. De eerste build vult de cache en is daarom geen maatstaf
+voor de snelheid van volgende builds. De native ARM-runner is de standaard publieke
+GitHub-runner; er is geen betaalde grotere runner ingesteld.
+
+De serverselectie vergelijkt bovendien met de huidige GitOps-serverpin. Daardoor kan een
+nieuwere documentatie- of workerpush een nog niet gedeployde serverwijziging niet verliezen.

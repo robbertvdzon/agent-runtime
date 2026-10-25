@@ -4,6 +4,10 @@ FROM eclipse-temurin:21-jdk-noble
 
 ARG TARGETARCH
 ARG FLUTTER_VERSION=3.44.6
+ARG CODEX_VERSION=0.164.0
+ARG CLAUDE_VERSION=2.1.310
+ARG PLAYWRIGHT_VERSION=1.64.1
+ARG OPENSHIFT_VERSION=4.20.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
@@ -17,10 +21,10 @@ COPY --from=node-runtime /usr/local/ /usr/local/
 
 RUN node --version \
     && npm --version \
-    && npm install -g @openai/codex @anthropic-ai/claude-code playwright \
+    && npm install -g "@openai/codex@$CODEX_VERSION" "@anthropic-ai/claude-code@$CLAUDE_VERSION" "playwright@$PLAYWRIGHT_VERSION" \
     && npx playwright install --with-deps chromium \
     && case "${TARGETARCH:-$(dpkg --print-architecture)}" in amd64) oc_suffix="" ;; arm64) oc_suffix="-arm64" ;; *) exit 64 ;; esac \
-    && curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux${oc_suffix}.tar.gz" -o /tmp/oc.tar.gz \
+    && curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OPENSHIFT_VERSION}/openshift-client-linux${oc_suffix}.tar.gz" -o /tmp/oc.tar.gz \
     && tar -xzf /tmp/oc.tar.gz -C /usr/local/bin oc kubectl \
     && rm -f /tmp/oc.tar.gz
 
@@ -42,6 +46,17 @@ ENV PATH="/opt/flutter/bin:${PATH}" \
     JAVA_HOME_17_X64=/usr/lib/jvm/java-17-openjdk-amd64 \
     JAVA_HOME_17_ARM64=/usr/lib/jvm/java-17-openjdk-arm64
 
+USER agent
+RUN flutter config --no-analytics \
+    && flutter precache --web
+USER root
+# Ubuntu's Maven 3.8 does not satisfy the repositories' Maven >=3.9 requirement.
+# Keep this pinned tool layer separate from the expensive Flutter/browser layers.
+ARG MAVEN_VERSION=3.9.10
+RUN curl -fsSL "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/${MAVEN_VERSION}/apache-maven-${MAVEN_VERSION}-bin.tar.gz" -o /tmp/maven.tar.gz \
+    && tar -xzf /tmp/maven.tar.gz -C /opt \
+    && ln -sf "/opt/apache-maven-${MAVEN_VERSION}/bin/mvn" /usr/local/bin/mvn \
+    && rm /tmp/maven.tar.gz
 COPY ollama-model-catalog.py /usr/local/lib/agent-runtime/ollama-model-catalog.py
 COPY ollama-agent.py /usr/local/lib/agent-runtime/ollama-agent.py
 COPY mistral-agent.py /usr/local/lib/agent-runtime/mistral-agent.py
@@ -49,7 +64,5 @@ COPY run-agent.sh /usr/local/bin/run-agent
 RUN chmod 0755 /usr/local/bin/run-agent
 
 USER agent
-RUN flutter config --no-analytics \
-    && flutter precache --web
 WORKDIR /work
 ENTRYPOINT ["/usr/local/bin/run-agent"]
