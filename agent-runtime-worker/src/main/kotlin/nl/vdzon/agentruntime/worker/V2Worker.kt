@@ -41,6 +41,9 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
         if (!config.mistralApiKey.isNullOrBlank()) config.mistralModels.forEach { model ->
             add(ExecutorCapability("mistral", model, ExecutionMode.SUBSCRIPTION, setOf(TaskType.STRUCTURED_GENERATION)))
         }
+        config.ollamaModels.forEach { model ->
+            add(ExecutorCapability("ollama", model, ExecutionMode.API, setOf(TaskType.STRUCTURED_GENERATION)))
+        }
         V2LocalTranscriber.availableModels(config).forEach { model ->
             add(ExecutorCapability("local", model, ExecutionMode.LOCAL, setOf(TaskType.TRANSCRIPTION)))
         }
@@ -66,7 +69,7 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
         if (!enabled) null else client.claim(ClaimRequest(bootId, capabilities, waitSeconds, jobKinds, taskTypes))
 
     fun execute(claim: ClaimedJob) {
-        if (claim.job.execution.mode == ExecutionMode.LOCAL) return transcriber.execute(claim)
+        if (claim.job.execution.mode == ExecutionMode.LOCAL && claim.job.taskType == TaskType.TRANSCRIPTION) return transcriber.execute(claim)
         val root = config.workRoot.resolve("v2-${claim.job.id}-${claim.attempt.id}")
         val usage = ExecutionUsageReporter(claim.fencingToken, { client.usage(claim, it) })
         val limits = ProviderLimitReporter { client.providerLimit(claim,it) }
@@ -119,10 +122,10 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
                 val longLimit = limits.snapshot().any { it.kind in setOf(ProviderLimitKind.WEEK,ProviderLimitKind.MONTH) }
                 throw JobFailure(if (longLimit) "PROVIDER_QUOTA_EXCEEDED" else "PROVIDER_RATE_LIMIT", "Provider reported an execution limit; see provider limit events.", !longLimit)
             }
-            if (container.exitCode != 0 && claim.job.execution.vendorId == "mistral") {
-                val status = runCatching { mapper.readTree(task.resolve("output/mistral-status.json").toFile()) }.getOrNull()
+            if (container.exitCode != 0 && claim.job.execution.vendorId in setOf("mistral", "ollama")) {
+                val status = runCatching { mapper.readTree(task.resolve("output/${claim.job.execution.vendorId}-status.json").toFile()) }.getOrNull()
                 val code = status?.path("code")?.asText()?.takeIf { it in setOf("MODEL_OUTPUT_NOT_JSON", "MODEL_OUTPUT_SCHEMA_INVALID", "PROVIDER_UNAVAILABLE", "EXECUTION_TIMEOUT", "SESSION_TOKEN_LIMIT", "SESSION_TURN_LIMIT", "SESSION_PRICE_LIMIT", "MODEL_OUTPUT_LIMIT", "ENGINE_FAILED") } ?: "ENGINE_FAILED"
-                throw JobFailure(if (container.timedOut) "EXECUTION_TIMEOUT" else code, "Mistral execution failed: $code.", code == "PROVIDER_UNAVAILABLE" || container.timedOut)
+                throw JobFailure(if (container.timedOut) "EXECUTION_TIMEOUT" else code, "${claim.job.execution.vendorId} execution failed: $code.", code == "PROVIDER_UNAVAILABLE" || container.timedOut)
             }
             if (container.exitCode != 0) throw JobFailure(if (container.timedOut) "VERIFICATION_TIMEOUT" else "ENGINE_FAILED", "Provider process exited with code ${container.exitCode}.", !container.timedOut && container.exitCode in setOf(124, 137))
             repositoryState?.let { repositories.verifyAgentDidNotMutate(it, workspace) }
@@ -428,11 +431,14 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
             "openai" -> "CODEX"
             "anthropic" -> "CLAUDE"
             "mistral" -> "MISTRAL"
+            "ollama" -> "OLLAMA"
             else -> throw JobFailure("EXECUTION_NOT_SUPPORTED", "Unknown execution vendor.", false)
         }
         if (engine == "MISTRAL" && (claim.job.tenantId != "hkh" || claim.job.jobKind != JobKind.APPLICATION_WORK || claim.job.taskType != TaskType.STRUCTURED_GENERATION || claim.job.execution.mode != ExecutionMode.SUBSCRIPTION))
             throw JobFailure("EXECUTION_NOT_SUPPORTED", "Mistral is restricted to HKH structured subscription jobs.", false)
         if (engine == "MISTRAL" && config.mistralApiKey.isNullOrBlank()) throw JobFailure("PROVIDER_UNAVAILABLE", "Mistral subscription credentials are unavailable.", true)
+        if (engine == "OLLAMA" && (claim.job.execution.mode != ExecutionMode.API || claim.job.taskType != TaskType.STRUCTURED_GENERATION || claim.job.jobKind != JobKind.APPLICATION_WORK || claim.job.execution.model !in config.ollamaModels))
+            throw JobFailure("EXECUTION_NOT_SUPPORTED", "Ollama requires an advertised local model and an application structured API job.", false)
         val credentials = when (engine) { "CODEX" -> config.codexCredentials; "CLAUDE" -> config.claudeCredentials; else -> null }
         if (engine == "CODEX" && credentials == null) throw JobFailure("PROVIDER_UNAVAILABLE", "Codex credentials are unavailable.", true)
         if (engine == "CLAUDE" && credentials == null && config.claudeOauthToken.isNullOrBlank()) throw JobFailure("PROVIDER_UNAVAILABLE", "Claude credentials are unavailable.", true)
@@ -448,6 +454,7 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
         credentialSource?.let { command += listOf("-v", "$it:/credential-source:ro") }
         if (engine == "CLAUDE" && !config.claudeOauthToken.isNullOrBlank()) command += listOf("-e", "CLAUDE_CODE_OAUTH_TOKEN")
         if (engine == "MISTRAL") command += listOf("-e", "MISTRAL_API_KEY", "-e", "AR_TIME_LIMIT_SECONDS=${Duration.between(Instant.now(), executionDeadline).seconds.coerceAtLeast(1)}")
+        if (engine == "OLLAMA") command += listOf("-e", "AR_OLLAMA_BASE_URL=${config.ollamaBaseUrl}", "-e", "AR_OLLAMA_CONTEXT_WINDOW=${config.ollamaContextWindow}")
         command += listOf("-e", "AR_ENGINE=$engine", "-e", "AR_MODEL=${claim.job.execution.model}", "-e", "AR_JOB_KIND=${claim.job.jobKind.name}", "-e", "AR_OUTPUT_ATTEMPT=$agentRound", "-e", "AR_RESULT_FILE=/job/output/result.json", config.executionImage)
         val transcript = ExecutionTranscript(task.resolve("provider-$agentRound.log"), agentRound)
         val process = try {

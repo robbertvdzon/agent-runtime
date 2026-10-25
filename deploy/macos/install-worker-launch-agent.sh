@@ -109,7 +109,9 @@ validate_provider_credentials() {
 
     if [[ -n "$(read_config_value AR_MISTRAL_API_KEY)" ]]; then configured=1; fi
 
-    [[ "$configured" -eq 1 ]] || fail "configureer ten minste AR_CODEX_CREDENTIALS_DIR, AR_CLAUDE_OAUTH_TOKEN of AR_CLAUDE_CREDENTIALS_DIR of AR_MISTRAL_API_KEY in properties.env."
+    if [[ -n "$(read_config_value AR_OLLAMA_MODELS)" ]]; then configured=1; fi
+
+    [[ "$configured" -eq 1 ]] || fail "configureer ten minste AR_CODEX_CREDENTIALS_DIR, AR_CLAUDE_OAUTH_TOKEN of AR_CLAUDE_CREDENTIALS_DIR of AR_MISTRAL_API_KEY of AR_OLLAMA_MODELS in properties.env."
 }
 
 migrate_legacy_config() {

@@ -144,7 +144,7 @@ internal class ProviderUsageTracker(private val vendor: String, private val mapp
             }
             return
         }
-        if (vendor == "openai") {
+        if (vendor in setOf("openai", "ollama")) {
             if (event.path("type").asText() == "turn.completed" && event.path("usage").isObject) {
                 val usage = event.path("usage")
                 val counts = counts(usage)

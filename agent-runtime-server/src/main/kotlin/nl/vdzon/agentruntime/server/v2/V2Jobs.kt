@@ -284,13 +284,13 @@ class V2JobService(private val properties:RuntimeProperties,private val jobs:V2J
             ExecutionMode.MOCK -> e.vendorId=="mock"
             ExecutionMode.SUBSCRIPTION -> (e.vendorId in setOf("openai","anthropic") && request.taskType in setOf(TaskType.STRUCTURED_GENERATION,TaskType.REPOSITORY_AGENT)) ||
                 (e.vendorId == "mistral" && tenantId == "hkh" && request.jobKind == JobKind.APPLICATION_WORK && request.taskType == TaskType.STRUCTURED_GENERATION)
-            ExecutionMode.API -> (e.vendorId=="openai" && request.taskType in setOf(TaskType.STRUCTURED_GENERATION,TaskType.TRANSCRIPTION,TaskType.SPEECH_SYNTHESIS)) || (e.vendorId=="elevenlabs" && request.taskType==TaskType.SPEECH_SYNTHESIS)
+            ExecutionMode.API -> (e.vendorId=="ollama" && request.jobKind==JobKind.APPLICATION_WORK && request.taskType==TaskType.STRUCTURED_GENERATION) || (e.vendorId=="openai" && request.taskType in setOf(TaskType.STRUCTURED_GENERATION,TaskType.TRANSCRIPTION,TaskType.SPEECH_SYNTHESIS)) || (e.vendorId=="elevenlabs" && request.taskType==TaskType.SPEECH_SYNTHESIS)
             ExecutionMode.LOCAL -> e.vendorId=="local" && request.taskType==TaskType.TRANSCRIPTION
         }
         if(!supported) throw ApiException("EXECUTION_NOT_SUPPORTED","This exact vendor/model/mode/task combination has no executor.",HttpStatus.UNPROCESSABLE_ENTITY)
         if(e.mode==ExecutionMode.API && e.vendorId=="openai" && properties.openAiApiKey.isBlank()) throw ApiException("EXECUTION_NOT_CONFIGURED","OpenAI API execution is not configured on this Runtime.",HttpStatus.UNPROCESSABLE_ENTITY)
         if(e.mode==ExecutionMode.API && e.vendorId=="elevenlabs" && properties.elevenLabsApiKey.isBlank()) throw ApiException("EXECUTION_NOT_CONFIGURED","ElevenLabs API execution is not configured on this Runtime.",HttpStatus.UNPROCESSABLE_ENTITY)
-        if(e.mode==ExecutionMode.API && request.taskType==TaskType.STRUCTURED_GENERATION && request.output.artifacts.any{it.required}) throw ApiException("EXECUTION_NOT_SUPPORTED","OpenAI structured API jobs cannot currently produce required file artifacts.",HttpStatus.UNPROCESSABLE_ENTITY)
+        if(e.mode==ExecutionMode.API && e.vendorId=="openai" && request.taskType==TaskType.STRUCTURED_GENERATION && request.output.artifacts.any{it.required}) throw ApiException("EXECUTION_NOT_SUPPORTED","OpenAI structured API jobs cannot currently produce required file artifacts.",HttpStatus.UNPROCESSABLE_ENTITY)
         if(request.taskType==TaskType.SPEECH_SYNTHESIS) validateSynthesis(request)
         if(request.taskType==TaskType.TRANSCRIPTION && e.mode in setOf(ExecutionMode.API,ExecutionMode.LOCAL) && request.input.objects.size!=1) throw ApiException("INVALID_TRANSCRIPTION_INPUT","Transcription requires exactly one input object.",HttpStatus.UNPROCESSABLE_ENTITY)
     }

@@ -347,3 +347,13 @@ Onbekende procesfouten worden `ENGINE_FAILED`.
 
 Zie [Providerlimieten en capaciteit](providerlimieten-en-capaciteit.md) voor events,
 retrygedrag, verbruik bij mislukte jobs en providergebonden workercapaciteit.
+
+## Ollama (v2)
+
+`APPLICATION_WORK` / `STRUCTURED_GENERATION` kan via `execution: {vendorId: ollama,
+model: "qwen3.5:35b", mode: API}` op een worker met Ollama draaien. De worker gebruikt
+Codex met een expliciet Ollama Responses-endpoint en zonder cloudcredentials of
+webzoekfunctie. Inputbestanden, schemaherstel, artifacts en deadlines volgen dezelfde
+workerketen als andere CLI-providers. `LOCAL` blijft de native transcriptie-uitvoering.
+De server-side API-executor claimt deze jobs niet; de geregistreerde Ollama-worker doet dat.
+Zie [workerconfiguratie](../README.md#ollama-via-codex-cli).

@@ -60,10 +60,17 @@ data class WorkerConfig(
     val mistralApiKey: String? = null,
     val mistralModels: Set<String> = emptySet(),
     val providerConcurrencyLimits: Map<String, Int> = emptyMap(),
+    val ollamaModels: Set<String> = emptySet(),
+    val ollamaBaseUrl: String = "http://host.docker.internal:11434/v1",
+    val ollamaContextWindow: Int = 65536,
 ) {
     init {
         require(applicationSlots + repositorySlots + transcriptionSlots in 1..256) { "Total worker slots must be between 1 and 256." }
         require(providerConcurrencyLimits.all { (vendor, limit) -> vendor.matches(Regex("[a-z][a-z0-9-]{0,99}")) && limit in 1..256 }) { "Invalid provider concurrency limits." }
+        require(ollamaContextWindow in 65536..262144) { "Ollama context must be between 65536 and 262144 tokens." }
+        require(ollamaModels.all { it.isNotBlank() && it.length <= 160 && !it.contains("cloud", ignoreCase = true) }) { "Only local Ollama models are supported." }
+        val ollamaUri = URI.create(ollamaBaseUrl)
+        require(ollamaUri.scheme in setOf("http", "https") && !ollamaUri.host.isNullOrBlank() && ollamaUri.userInfo == null && ollamaUri.query == null && ollamaUri.fragment == null) { "Invalid Ollama endpoint." }
         require(mistralModels.all { it == "glm-5-3" }) { "Only glm-5-3 is supported for Mistral." }
     }
 
@@ -98,7 +105,10 @@ data class WorkerConfig(
                 Duration.ofSeconds(slots(values, "AR_WORKER_HEARTBEAT_GRACE_SECONDS", 300).toLong()),
                 values["AR_MISTRAL_API_KEY"]?.takeIf(String::isNotBlank),
                 models("AR_MISTRAL_MODELS"),
-                providerLimits(values["AR_WORKER_PROVIDER_LIMITS"]),
+                (if (models("AR_OLLAMA_MODELS").isEmpty()) emptyMap() else mapOf("ollama" to 1)) + providerLimits(values["AR_WORKER_PROVIDER_LIMITS"]),
+                models("AR_OLLAMA_MODELS"),
+                values["AR_OLLAMA_BASE_URL"] ?: "http://host.docker.internal:11434/v1",
+                values["AR_OLLAMA_CONTEXT_WINDOW"]?.toIntOrNull() ?: 65536,
             )
         }
 
@@ -134,7 +144,7 @@ fun main(args: Array<String>) {
         if (config.codexCredentials?.exists() == true) add(Provider.CODEX)
         if (!config.claudeOauthToken.isNullOrBlank() || config.claudeCredentials?.exists() == true) add(Provider.CLAUDE)
     }
-    require(providers.isNotEmpty() || (!config.mistralApiKey.isNullOrBlank() && config.mistralModels.isNotEmpty())) { "No provider credentials configured." }
+    require(providers.isNotEmpty() || config.ollamaModels.isNotEmpty() || (!config.mistralApiKey.isNullOrBlank() && config.mistralModels.isNotEmpty())) { "No provider credentials configured." }
     val capabilities = buildSet { add("application-work"); if (config.repositoryAliases.isNotEmpty()) add("repository-work") }
     fun register() {
         if (providers.isEmpty()) return // Mistral is v2-only.

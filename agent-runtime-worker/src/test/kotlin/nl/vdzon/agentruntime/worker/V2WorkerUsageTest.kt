@@ -43,7 +43,11 @@ class V2WorkerUsageTest {
             limitEvent="""{"type":"mistral.limit","kind":"MONTH","http_status":429,"provider_code":"monthly_quota_exceeded"}""")
     }
 
-    private fun exercise(root: Path, expectedError: String, exit: Int, output: String?, requiredArtifact: Boolean = false, mistral: Boolean = false, failureCode: String? = null, limitEvent: String? = null) {
+    @Test fun `Ollama uses Codex without cloud credentials and preserves usage on invalid output`(@TempDir root: Path) {
+        exercise(root, "MODEL_OUTPUT_NOT_JSON", 0, "not JSON", ollama = true)
+    }
+
+    private fun exercise(root: Path, expectedError: String, exit: Int, output: String?, requiredArtifact: Boolean = false, mistral: Boolean = false, failureCode: String? = null, limitEvent: String? = null, ollama: Boolean = false) {
         val calls = CopyOnWriteArrayList<Pair<String, JsonNode>>()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { exchange ->
@@ -56,9 +60,9 @@ class V2WorkerUsageTest {
             val credentials = root.resolve("credentials").createDirectories()
             credentials.resolve("auth.json").writeText("{}")
             val config = WorkerConfig("http://127.0.0.1:${server.address.port}", "test-worker-token", "usage-test", root, "test-image",
-                credentials, null, null, emptyMap(), root.resolve("unused.env"), mutableMapOf(), emptyMap(), mistralApiKey = if (mistral) "mistral-subscription-secret" else null, mistralModels = if (mistral) setOf("glm-5-3") else emptySet())
+                if (ollama) null else credentials, null, null, emptyMap(), root.resolve("unused.env"), mutableMapOf(), emptyMap(), mistralApiKey = if (mistral) "mistral-subscription-secret" else null, mistralModels = if (mistral) setOf("glm-5-3") else emptySet(), ollamaModels = if (ollama) setOf("test-model") else emptySet())
             val now = Instant.now()
-            val execution = ExecutionSelection(if (mistral) "mistral" else "openai", if (mistral) "glm-5-3" else "test-model", ExecutionMode.SUBSCRIPTION)
+            val execution = ExecutionSelection(if (ollama) "ollama" else if (mistral) "mistral" else "openai", if (mistral) "glm-5-3" else "test-model", if (ollama) ExecutionMode.API else ExecutionMode.SUBSCRIPTION)
             val job = JobView("test-job", if (mistral) "hkh" else "test-tenant", "test-key", JobKind.APPLICATION_WORK, TaskType.STRUCTURED_GENERATION,
                 execution, JobStatus.RUNNING, "EXECUTING", 1, 1, null, null, null, null, now, now, null)
             val attempt = AttemptView("test-attempt", job.id, 1, AttemptReason.INITIAL, AttemptStatus.RUNNING, execution, null,
@@ -67,6 +71,10 @@ class V2WorkerUsageTest {
             val request = CreateJobRequest("test-key", job.jobKind, job.taskType, execution, JobInput("Test instruction"), OutputContract(artifacts = artifacts))
             val claim = ClaimedJob(job, attempt, "test-fence", now.plusSeconds(120), now.plusSeconds(3600), request)
             val executor = V2WorkerExecutor(config, mapper, "boot", startContainer = { process ->
+                if (ollama) {
+                    assertThat(process.command()).contains("AR_ENGINE=OLLAMA", "AR_OLLAMA_BASE_URL=http://host.docker.internal:11434/v1", "AR_OLLAMA_CONTEXT_WINDOW=65536")
+                    assertThat(process.command().joinToString(" ")).doesNotContain("credential-source", "OPENAI_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "MISTRAL_API_KEY")
+                }
                 if (mistral) {
                     assertThat(process.command()).contains("MISTRAL_API_KEY", "AR_ENGINE=MISTRAL")
                     assertThat(process.command().joinToString(" ")).doesNotContain("mistral-subscription-secret", "credential-source")

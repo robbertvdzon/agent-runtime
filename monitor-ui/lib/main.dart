@@ -1601,6 +1601,7 @@ class _JobDetailState extends State<JobDetail> {
                             'CLAUDE' || 'ANTHROPIC' => 'Claude',
                             'CODEX' || 'OPENAI' => 'Codex',
                             'MISTRAL' => 'Mistral',
+                            'OLLAMA' => 'Ollama',
                             _ => 'Agent',
                           },
                           result: detail!['result']?['result'] == null

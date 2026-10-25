@@ -1,8 +1,8 @@
 # Lokale modellen met Codex CLI
 
 Onderzoeksnotitie, 25 oktober 2026. Uitgangspunt: **Codex CLI als harnas**, met
-een lokale modelserver op de worker-Mac. Dit document beschrijft een voorstel;
-er zijn in dit onderzoek geen modellen geïnstalleerd of lokale modelruns uitgevoerd.
+een lokale modelserver op de worker-Mac. Modelkeuze en HKH-benchmark zijn onderzoek; de Ollama-runtimekoppeling is inmiddels
+geïmplementeerd als `vendorId: ollama`, `mode: API`. Zie de hoofd-README voor configuratie.
 
 ## Eerste advies
 

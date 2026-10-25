@@ -6,6 +6,7 @@ result_file="${AR_RESULT_FILE:-/job/output/result.json}"
 
 provider_prompt() {
   cat /job/input/prompt.md
+  if [[ -n "${AR_OLLAMA_CORRECTION:-}" ]]; then printf '\n%s\n' "$AR_OLLAMA_CORRECTION"; fi
   if [[ "${AR_JOB_KIND:-}" == "APPLICATION_WORK" ]]; then
     printf '\n\nReturn only the complete JSON result as your final response and satisfy /job/input/response-schema.json when it exists. The runtime captures that response automatically; do not create or write a result file yourself.\n'
   fi
@@ -35,10 +36,23 @@ fi
 # Prompt gaat via stdin, nooit als CLI-argument: een lang prompt.md (grote frozen
 # context) liet exec() eerder stuklopen op "Argument list too long" (E2BIG, exit 126).
 case "${AR_ENGINE:-}" in
-  CODEX)
-    copy_credentials /credential-source /home/agent/.codex
+  CODEX|OLLAMA_CODEX)
+    if [[ "$AR_ENGINE" == CODEX ]]; then copy_credentials /credential-source /home/agent/.codex; fi
     args=(exec --json --ephemeral --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -C /work -m "$AR_MODEL" -o "$result_file")
-    if [[ -s /job/input/response-schema.json ]]; then
+    if [[ "$AR_ENGINE" == OLLAMA_CODEX ]]; then
+      # Dedicated provider: no cloud credentials/configuration and no web-search fallback.
+      args+=(--ignore-user-config -c 'model_provider="ar-ollama"'
+        -c 'model_providers.ar-ollama.name="Ollama"'
+        -c "model_providers.ar-ollama.base_url=\"${AR_OLLAMA_BASE_URL:?}\""
+        -c 'model_providers.ar-ollama.wire_api="responses"'
+        -c 'model_providers.ar-ollama.requires_openai_auth=false'
+        -c "model_context_window=${AR_OLLAMA_CONTEXT_WINDOW:-65536}"
+        -c "model_auto_compact_token_limit=$(( ${AR_OLLAMA_CONTEXT_WINDOW:-65536} * 3 / 4 ))"
+        -c 'web_search="disabled"')
+    fi
+    # Ollama response_format constrains intermediate turns too and can suppress tool calls.
+    # Keep file access agentic; the worker/server validates the final schema and retries.
+    if [[ "$AR_ENGINE" == CODEX && -s /job/input/response-schema.json ]]; then
       args+=(--output-schema /job/input/response-schema.json)
     fi
     provider_prompt | codex "${args[@]}"
@@ -62,6 +76,9 @@ case "${AR_ENGINE:-}" in
     capture_claude_result "$stream_file" "$result_file"
     if (( provider_status != 0 )); then exit "$provider_status"; fi
     ;;
+  OLLAMA)
+    exec /opt/vibe/bin/python /usr/local/lib/agent-runtime/ollama-agent.py
+    ;;
   MISTRAL)
     exec /opt/vibe/bin/python /usr/local/lib/agent-runtime/mistral-agent.py
     ;;
@@ -71,4 +88,4 @@ case "${AR_ENGINE:-}" in
     ;;
 esac
 
-test -s "$result_file"
+if [[ "${AR_ENGINE:-}" != OLLAMA_CODEX ]]; then test -s "$result_file"; fi

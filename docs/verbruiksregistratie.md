@@ -62,3 +62,11 @@ Verbruik is alleen compleet wanneer alle door Vibe gemelde modelbeurten zijn aan
 Ontbrekende/afgebroken telemetry blijft gedeeltelijk of onbekend. Subagents, automatische
 sessietitels en externe connectoren zijn in deze adapter uitgeschakeld. Er zijn voor Mistral
 geen prijsregels toegevoegd: onbekende kosten zijn geen nulbedrag en geen API-fallback.
+
+## Ollama
+
+Ollama gebruikt de Codex `turn.completed`-usage-events, met dezelfde splitsing tussen
+input en cached input als Codex/OpenAI. De provider blijft `ollama`; tokens worden niet
+als OpenAI-verbruik geboekt. Voor `qwen3.5:35b` zijn nulprijzen opgenomen voor externe
+providertokenkosten (hardware en elektriciteit uitgesloten). Zonder usage blijft de
+kwaliteit unavailable/partial; ontbrekende tokens worden niet als nul aangenomen.

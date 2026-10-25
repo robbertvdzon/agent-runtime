@@ -1306,7 +1306,7 @@ components:
         vendorId:
           type: string
           pattern: '^[a-z][a-z0-9-]{0,99}$'
-          description: Use mock when mode is MOCK.
+          description: Use mock when mode is MOCK. Ollama uses vendorId ollama with mode API and runs through Codex on a worker.
         model:
           type: string
           minLength: 1

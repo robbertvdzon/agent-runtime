@@ -1,7 +1,8 @@
 # Codex CLI: uitvoering en proefopzet
 
-Voorstel, 25 oktober 2026. Alleen documentatie; onderstaande stappen zijn nog niet
-uitgevoerd. De lokale CLI-help is gecontroleerd voor versie 0.147.0.
+Stand 25 oktober 2026. De Ollama-runtimekoppeling is geïmplementeerd; de inhoudelijke
+HKH-benchmark hieronder blijft een proefvoorstel. De lokale CLI-help is gecontroleerd
+voor versie 0.147.0.
 
 ## Uitvoering
 
@@ -35,13 +36,14 @@ zonder meer voldoende. Configureer voor de container een expliciet lokaal
 endpoint en controleer dat er geen cloudfallback of cloudmodel wordt gebruikt.
 Leen geen persoonlijke cloudcredentials voor de lokale proef.
 
-## Benodigde runtime-uitwerking (nog niet geïmplementeerd)
+## Runtime-integratie
 
 1. Maak harnas/endpoint/model onafhankelijk van de bestaande OpenAI-koppeling.
-   Een mogelijk v2-profiel is `vendorId: local`, `mode: LOCAL` en een lokaal model,
-   met Codex als workerengine. Dit is een ontwerpkeuze, geen huidig API-contract.
+   Het v2-profiel is `vendorId: ollama`, `mode: API` en een lokaal model,
+   met Codex als workerengine. De bestaande `local`/`LOCAL`-route is transcriptie.
 2. Laat workerregistratie lokale capabilities melden zonder OpenAI-credentials
-   te vereisen. Breid serverpolicy/catalogus uit voor lokale structured generation.
+   te vereisen. Serverpolicy/catalogus ondersteunt Ollama structured generation voor toegestane tenants;
+   HKH is standaard toegestaan.
 3. Configureer lokaal endpoint, context, concurrency en model expliciet. Begin
    met één inferencejob tegelijk; modelswaps en gelijktijdige jobs kunnen extra
    geheugen en wachttijd kosten.
@@ -97,3 +99,17 @@ geen productie-logincredentials; functionele integratieproeven horen op preview/
 
 Bronnen: [Codex CLI](https://learn.chatgpt.com/docs/developer-commands#codex-exec),
 [Ollama-integratie](https://docs.ollama.com/integrations/codex).
+
+## Gevonden tijdens de integratie
+
+De echte containerproef met Qwen3.5 35B op Ollama 0.40.11 toonde dat Codex' native
+`--output-schema` de intermediate modelantwoorden kon begrenzen: het model gaf
+syntactisch geldige JSON maar las het bronbestand niet en verzon de plaatsnaam.
+Zonder die optie las het model de bron met een tool en gaf het Heemskerk correct terug.
+Daarom gebruikt de Ollama-adapter agentische Codex-stappen zonder native outputschema,
+normaliseert alleen een compleet JSON-codeblok, valideert met JSON Schema en probeert
+maximaal drie correcties. De server valideert onafhankelijk. Usage van afgewezen
+antwoorden blijft meetellen. Dit is een technische rookproef, geen HKH-kwaliteitsbenchmark.
+
+De interne Codex-configuratie gebruikt de naam `ar-ollama`, omdat Codex de naam
+`ollama` reserveert. Het publieke runtime-vendorId blijft `ollama`.

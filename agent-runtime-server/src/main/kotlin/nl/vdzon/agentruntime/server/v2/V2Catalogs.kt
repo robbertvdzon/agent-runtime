@@ -105,6 +105,7 @@ class V2CatalogService(private val properties: RuntimeProperties, private val st
         if (providerName !in properties.allowedProviders(tenantId) || !properties.modelAllowed(tenantId, capability.model)) return false
         if (capability.mode == ExecutionMode.MOCK) return properties.environment != RuntimeEnvironment.PRODUCTION && capability == MOCK_CAPABILITY
         if (capability.mode == ExecutionMode.LOCAL) return capability.vendorId == "local" && taskType == TaskType.TRANSCRIPTION
+        if (capability.vendorId == "ollama") return capability.mode == ExecutionMode.API && taskType == TaskType.STRUCTURED_GENERATION
         if (capability.mode != ExecutionMode.SUBSCRIPTION) return false
         return (capability.vendorId in setOf("openai", "anthropic") && taskType in setOf(TaskType.STRUCTURED_GENERATION, TaskType.REPOSITORY_AGENT)) ||
             (capability.vendorId == "mistral" && tenantId == "hkh" && taskType == TaskType.STRUCTURED_GENERATION)

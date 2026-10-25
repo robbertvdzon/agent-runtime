@@ -55,6 +55,7 @@ enum class VerificationMode { NONE, REPOSITORY_CONFIG }
 enum class VerificationStatus { PASSED, FAILED, SKIPPED, CONFIG_MISSING, CONFIG_INVALID, TIMEOUT }
 enum class VerificationCommandStatus { PASSED, FAILED, TIMEOUT, SKIPPED }
 
+/** Ollama uses vendorId="ollama", mode=API; LOCAL remains the native transcription route. */
 data class ExecutionSelection(
     @field:Pattern(regexp = "[a-z][a-z0-9-]{0,99}") val vendorId: String,
     @field:NotBlank @field:Size(max = 160) val model: String,

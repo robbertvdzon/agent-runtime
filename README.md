@@ -378,3 +378,29 @@ onder `main` en een immutable `sha-...`-tag. De workflow commit daarna de server
 - [Deployment en operatie](docs/deployment-en-operatie.md)
 - [Runbook](docs/runbook.md)
 - [Specificatie uitbreidbare AI-runtime](docs/specificatie-uitbreidbare-ai-runtime.md)
+
+## Ollama via Codex CLI
+
+Ollama is een zelfstandige v2-provider (`vendorId: ollama`, `mode: API`) voor
+`APPLICATION_WORK` / `STRUCTURED_GENERATION`. De Mac-worker draait Codex in het
+execution-image en benadert de Ollama Responses-API op de host; er zijn geen OpenAI-
+credentials nodig. De bestaande `local`/`LOCAL`-transcriptieroute blijft apart.
+HKH heeft deze provider standaard in zijn allowlist; bestaande modelkeuzes veranderen niet.
+
+Configureer in de owner-only `properties.env` op de worker:
+
+```dotenv
+AR_OLLAMA_MODELS=qwen3.5:35b
+AR_OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
+AR_OLLAMA_CONTEXT_WINDOW=65536
+AR_WORKER_PROVIDER_LIMITS=ollama=1
+```
+
+Voeg bij bestaande providerlimieten `ollama=1` toe aan de kommagescheiden lijst.
+Ollama moet dezelfde contextcapaciteit hebben, het lokale model moet vooraf zijn
+gedownload en Docker moet de host-API kunnen bereiken. De worker moet na configuratie
+of JAR-wijziging via `deploy/macos/install-worker-launch-agent.sh install` worden herstart,
+na afronding van actieve jobs. Controleer daarna de runtimecatalogus: HKH kan Ollama
+voor onderzoek en/of schrijven kiezen. Begin met een beperkt HKH-tekstbudget.
+
+Zie [lokale modellen](local-models/README.md) voor modelkeuze en proefopzet.
