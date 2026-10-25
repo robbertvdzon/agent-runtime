@@ -11,6 +11,14 @@ import org.junit.jupiter.api.io.TempDir
 class ExecutionUsageTest {
     private val mapper = jacksonObjectMapper()
 
+    @Test fun `Ollama explicit handoff cannot report incomplete research usage as complete after formatting`() {
+        val tracker = ProviderUsageTracker("ollama", mapper)
+        tracker.observe("""{"type":"ar.ollama.usage_incomplete"}""")
+        tracker.observe("""{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":20}}""")
+        assertThat(tracker.complete).isFalse()
+        assertThat(tracker.totals()[UsageMetric.INPUT_TOKENS]).isEqualTo(100L)
+    }
+
     @Test fun `Mistral accounts for every request including hook retries and deduplicates journal replays`() {
         val requests = mutableListOf<AppendUsageRequest>()
         val reporter = ExecutionUsageReporter("fence", { requests += it })

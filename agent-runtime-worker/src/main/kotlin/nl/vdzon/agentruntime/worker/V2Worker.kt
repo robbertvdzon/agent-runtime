@@ -453,7 +453,8 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
             else credentials?.let { isolateProviderCredentials(it, task, engine) }
         credentialSource?.let { command += listOf("-v", "$it:/credential-source:ro") }
         if (engine == "CLAUDE" && !config.claudeOauthToken.isNullOrBlank()) command += listOf("-e", "CLAUDE_CODE_OAUTH_TOKEN")
-        if (engine == "MISTRAL") command += listOf("-e", "MISTRAL_API_KEY", "-e", "AR_TIME_LIMIT_SECONDS=${Duration.between(Instant.now(), executionDeadline).seconds.coerceAtLeast(1)}")
+        if (engine == "MISTRAL") command += listOf("-e", "MISTRAL_API_KEY")
+        if (engine in setOf("MISTRAL", "OLLAMA")) command += listOf("-e", "AR_TIME_LIMIT_SECONDS=${Duration.between(Instant.now(), executionDeadline).seconds.coerceAtLeast(1)}")
         if (engine == "OLLAMA") command += listOf("-e", "AR_OLLAMA_BASE_URL=${config.ollamaBaseUrl}", "-e", "AR_OLLAMA_CONTEXT_WINDOW=${config.ollamaContextWindow}")
         command += listOf("-e", "AR_ENGINE=$engine", "-e", "AR_MODEL=${claim.job.execution.model}", "-e", "AR_JOB_KIND=${claim.job.jobKind.name}", "-e", "AR_OUTPUT_ATTEMPT=$agentRound", "-e", "AR_RESULT_FILE=/job/output/result.json", config.executionImage)
         val transcript = ExecutionTranscript(task.resolve("provider-$agentRound.log"), agentRound)
@@ -470,11 +471,14 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
         val limitTracker = limits.tracker(provider,mapper)
         transcript.startForwarding { client.log(claim, it) }
         val streamFailed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val pendingProgress = java.util.concurrent.atomic.AtomicReference<OllamaProgress?>(null)
+        var lastProgressPercent = 20
         val reader = Thread {
             runCatching {
                 process.inputStream.bufferedReader().useLines { lines -> lines.forEach { line ->
                     roundUsage.observe(line)
                     limitTracker.observe(line)
+                    if (engine == "OLLAMA") ollamaProgress(line, mapper)?.let(pendingProgress::set)
                     val cleaned = redactProviderEvent(line, mapper)
                     if (cleaned.isNotBlank()) transcript.append(cleaned)
                 } }
@@ -485,6 +489,10 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
             while (!process.waitFor(1, TimeUnit.SECONDS)) {
                 usage.flush()
                 limits.flush()
+                pendingProgress.getAndSet(null)?.let { progress ->
+                    lastProgressPercent = maxOf(lastProgressPercent, progress.percent)
+                    runCatching { client.progress(claim, progress.phase, lastProgressPercent, progress.message) }
+                }
                 val heartbeat = heartbeatWithGrace(config.heartbeatGrace) { client.heartbeat(claim) }
                 if (!heartbeat.accepted || heartbeat.fenced || heartbeat.cancelRequested) {
                     throw JobFailure(if (heartbeat.cancelRequested) "CANCELLED" else "ATTEMPT_FENCED", "Execution was stopped.", false)

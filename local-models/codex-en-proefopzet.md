@@ -138,23 +138,63 @@ Dit installeert een eigen catalogus, Codex-home en startscript, zonder de gewone
 `AR_OLLAMA_CONTEXT_WINDOW` en `AR_OLLAMA_BASE_URL`. Stel ook Ollama zelf op hetzelfde
 contextvenster in; metadata vergroot het daadwerkelijke modelgeheugen niet.
 
-Na een geslaagde CLI-uitvoering wordt het eindantwoord geparseerd en gevalideerd:
+De uitvoering heeft nu drie zichtbare fasen: **bronnen lezen**, **antwoord controleren**
+en **antwoord herstellen**. De worker meldt deze fasen via de bestaande progress-API;
+er is geen monitor- of API-contractwijziging nodig.
 
-- Geldig JSON-document, onjuist schema: geef het vorige antwoord en concrete
-  validatiefouten mee, samen met de oorspronkelijke opdracht en toegang tot bronbestanden.
-  Maximaal drie herstelpogingen, binnen de bestaande harde jobdeadline.
-- Ontbrekend antwoord, losse tekst of onleesbare JSON: voer de oorspronkelijke opdracht
-  één keer opnieuw uit. Gebruik de mislukte uitvoer niet als herstelkandidaat.
-- Een fout tijdens uitvoering of een JSON-errorenvelop is geen document om te herstellen.
-  Verbindingsproblemen krijgen `PROVIDER_UNAVAILABLE` voor de bestaande workerretry;
-  een te groot contextvenster krijgt `SESSION_TOKEN_LIMIT` en wordt niet blind herhaald.
-- Een te groot resultaat krijgt `MODEL_OUTPUT_LIMIT`. Opnieuw mislukte parsing krijgt
-  `MODEL_OUTPUT_NOT_JSON`; uitgeput schemaherstel `MODEL_OUTPUT_SCHEMA_INVALID`.
+1. Codex voert het onderzoek uit met bestanden en tools. Het model mag het complete
+   antwoord bewaren in `/job/output/answer-draft.json`. De runtime leest dit ook als het
+   eindbericht alleen een ontvangstbevestiging bevat. Na zijn broncontroles kan het model
+   het document expliciet publiceren door daarna `{"complete":true}` naar
+   `/job/output/answer-draft.ready` te schrijven. Een succesvolle toolafronding na die
+   publicatie draagt het werk over: de runtime stopt Codex en controleert het document,
+   in plaats van te wachten op onnodige nieuwe broncontroles. Alleen het bestaan van
+   een JSON-bestand is geen publicatie. Voor compatibiliteit wordt een
+   tijdens dezelfde uitvoering gewijzigd `/work/answer.json` ook herkend. Alleen deze
+   vaste paden en het CLI-resultaat worden gelezen: reguliere bestanden, geen symlinks,
+   maximaal 1 MiB. Een bestaand ongewijzigd bestand is geen nieuw antwoord.
+2. Na normale CLI-afronding of expliciete publicatie valideert de runtime het document. Uitvoeringsfouten en
+   JSON-errorenveloppen gaan niet naar de formatter. Ontbreekt een bruikbaar document,
+   dan is maximaal één nieuwe onderzoeksuitvoering toegestaan.
+3. Een apart, toolvrij verzoek aan hetzelfde Ollama-model herstelt het bestaande
+   antwoord. Het krijgt uitsluitend de kandidaat, het JSON-schema en concrete fouten,
+   zonder oorspronkelijke onderzoeksopdracht of bronbestanden. Dit gebruikt de native
+   `/api/chat`-route naast de geconfigureerde `/v1`-route, met structured output,
+   temperatuur 0 en zonder thinking. Het begrenzen van de formatter hindert daardoor
+   geen toolcalls tijdens het onderzoek. Het volledige resultaat wordt onafhankelijk
+   opnieuw gevalideerd; bij eenvoudige objectschema's blijven al geldige velden zoals
+   artikeltekst en bron-ID's behouden, ook als het model die ongevraagd herschrijft.
+4. Ontbreken feiten die niet uit het bestaande antwoord afleidbaar zijn, dan kan de
+   formatter expliciet `needs_research` met één concrete vraag teruggeven. Alleen dan
+   volgt gericht vervolgonderzoek met toegang tot de bronbestanden en het bewaarde
+   antwoord. Maximaal twee onderzoeksuitvoeringen en drie formatterpogingen in totaal.
 
-Bronbestanden blijven bestanden en worden niet allemaal in de herstelprompt gekopieerd.
-Het vorige eindantwoord gaat via een tijdelijk bestand en stdin, niet via een grote
-environmentvariabele. Usage van alle pogingen telt mee; de server valideert onafhankelijk.
-Een geslaagde uitvoering plus geldig schema bewijst de structurele volledigheid, niet dat
-het model alle historische feiten heeft gevonden of juist heeft geïnterpreteerd.
+Iedere onderzoeksuitvoering is begrensd op acht minuten, een formatterverzoek op één
+minuut en de hele adapter op tien minuten of de kortere resterende jobdeadline.
+Annulering stopt het modelproces; de worker behoudt zijn harde deadline. De native
+Ollama-route moet op dezelfde server naast `/v1` bereikbaar zijn. Schema's met lokale
+referenties behouden hun oorspronkelijke referentiebasis: die worden tekstueel aangeboden
+in plaats van ingebed in de formatter-envelop, en achteraf volledig gevalideerd.
 
-Catalogusformaat: [officiële Codex-documentatie](https://learn.chatgpt.com/docs/model-catalogs).
+Bronbestanden blijven bestanden. Gerapporteerde usage van onderzoek en formatterpogingen
+wordt opgeteld. Bij expliciete publicatie kan Codex zijn laatste tokenmeting nog niet
+hebben verstuurd: die uitvoering blijft daarom gedeeltelijk/geschat, ook als de
+formatter zijn eigen usage wel rapporteert;
+de server valideert onafhankelijk. Geldig JSON bewijst geen inhoudelijke juistheid.
+Claude en OpenAI behouden hun bestaande uitvoeringsroute.
+
+Bronnen: [Codex-modelcatalogus](https://learn.chatgpt.com/docs/model-catalogs),
+[Ollama structured outputs](https://docs.ollama.com/capabilities/structured-outputs).
+
+### Verificatie van de scheiding (25 oktober 2026)
+
+De bewaarde mislukte HKH-schrijverskandidaat is met het echte Qwen-model via de
+formatter opnieuw verwerkt. Ontbrekende titel, verkeerde vervolgvragentypen en een
+te lange samenvatting zijn hersteld; het volledige schema valideert. Met behoud van
+al geldige velden blijven de oorspronkelijke artikeltekst en bron-ID's gelijk.
+De begrensde formatterproef duurde circa 32 seconden, zonder toegang tot bronbestanden.
+
+De volledige onderzoeksproef met vier bevroren bronbestanden publiceerde binnen de
+achtminutengrens geen antwoord en eindigde met `EXECUTION_TIMEOUT`. De formaatfix
+bewijst dus niet dat Qwen deze grote onderzoekstaak tijdig aankan. Deze grens blijft
+zichtbaar en wordt niet omzeild door telkens het onderzoek opnieuw te starten.

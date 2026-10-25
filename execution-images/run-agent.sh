@@ -9,11 +9,18 @@ provider_prompt() {
   if [[ "${AR_ENGINE:-}" == OLLAMA_CODEX && -s /job/input/response-schema.json ]]; then
     printf '\n\nBefore producing your final answer, use a tool to read the complete /job/input/response-schema.json. Follow all required fields, nesting and additionalProperties constraints from that file.\n'
   fi
-  if [[ "${AR_ENGINE:-}" == OLLAMA_CODEX && -n "${AR_OLLAMA_CORRECTION_FILE:-}" ]]; then
-    printf '\n\n'; cat -- "$AR_OLLAMA_CORRECTION_FILE"
+  if [[ "${AR_ENGINE:-}" == OLLAMA_CODEX && -n "${AR_OLLAMA_RESEARCH_FILE:-}" ]]; then
+    printf '\n\n'; cat -- "$AR_OLLAMA_RESEARCH_FILE"
+  fi
+  if [[ "${AR_ENGINE:-}" == OLLAMA_CODEX ]]; then
+    printf '\n\nFinish your source checks, then write your COMPLETE JSON answer to %s (use Python json.dump to avoid escaping errors). Publish it by writing {"complete":true} to /job/output/answer-draft.ready AFTER the JSON file is fully written. Publication hands the task to the runtime and stops research; do not continue tools or source checks afterward. Do not save the answer to another file. If you do not publish a file, your final response must be the complete JSON, not an acknowledgement or file path.\n' "${AR_OLLAMA_DRAFT_FILE:-/job/output/answer-draft.json}"
   fi
   if [[ "${AR_JOB_KIND:-}" == "APPLICATION_WORK" ]]; then
-    printf '\n\nReturn only the complete JSON result as your final response and satisfy /job/input/response-schema.json when it exists. The runtime captures that response automatically; do not create or write a result file yourself.\n'
+    if [[ "${AR_ENGINE:-}" == OLLAMA_CODEX ]]; then
+      printf '\n\nReturn only the complete JSON result as your final response. The runtime captures it automatically; do not write its result.json file yourself.\n'
+    else
+      printf '\n\nReturn only the complete JSON result as your final response and satisfy /job/input/response-schema.json when it exists. The runtime captures that response automatically; do not create or write a result file yourself.\n'
+    fi
   fi
 }
 

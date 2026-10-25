@@ -17,6 +17,24 @@ internal data class TranscriptChunk(
     val observedAt: Instant,
 )
 
+internal data class OllamaProgress(val phase: String, val percent: Int, val message: String)
+
+/** Only the Ollama adapter emits these stages; model text cannot choose arbitrary phases/messages. */
+internal fun ollamaProgress(line: String, mapper: ObjectMapper): OllamaProgress? {
+    val event = runCatching { mapper.readTree(line) }.getOrNull() ?: return null
+    if (event.path("type").asText() != "ar.ollama.phase") return null
+    val attempt = event.path("attempt").asInt(1)
+    if (attempt !in 1..3) return null
+    return when (event.path("stage").asText()) {
+        "research" -> OllamaProgress("EXECUTING", if (attempt == 1) 25 else 65,
+            if (attempt == 1) "Bronnen lezen en antwoord opstellen." else "Gericht vervolgonderzoek voor ontbrekende informatie.")
+        "restart" -> if (attempt == 2) OllamaProgress("EXECUTING", 65, "Geen bruikbaar antwoord ontvangen; onderzoek opnieuw uitvoeren (2/2).") else null
+        "validating" -> OllamaProgress("VALIDATING", 60, "Antwoord controleren tegen het JSON-schema.")
+        "repair" -> OllamaProgress("REPAIRING", 65 + attempt * 4, "Antwoord herstellen ($attempt/3), zonder bronnen opnieuw te lezen.")
+        else -> null
+    }
+}
+
 /** Redact decoded JSON strings, preserving the provider envelope and escaped secret values. */
 internal fun redactProviderEvent(line: String, mapper: ObjectMapper): String {
     val parsed = runCatching { mapper.readTree(line) }.getOrNull()
@@ -120,6 +138,7 @@ internal class ProviderUsageTracker(private val vendor: String, private val mapp
     private val cumulative = mutableMapOf<UsageMetric, Long>()
     private var currentMessage: String? = null
     private var nestedUsage = false
+    private var ollamaUsageIncomplete = false
     var providerRequestId: String? = null
         private set
     var complete = false
@@ -145,6 +164,11 @@ internal class ProviderUsageTracker(private val vendor: String, private val mapp
             return
         }
         if (vendor in setOf("openai", "ollama")) {
+            if (vendor == "ollama" && event.path("type").asText() == "ar.ollama.usage_incomplete") {
+                ollamaUsageIncomplete = true
+                complete = false
+                return
+            }
             if (event.path("type").asText() == "turn.completed" && event.path("usage").isObject) {
                 val usage = event.path("usage")
                 val counts = counts(usage)
@@ -152,7 +176,7 @@ internal class ProviderUsageTracker(private val vendor: String, private val mapp
                 counts[UsageMetric.INPUT_TOKENS] = (usage.count("input_tokens") - usage.count("cached_input_tokens")).coerceAtLeast(0)
                 counts[UsageMetric.CACHED_INPUT_TOKENS] = usage.count("cached_input_tokens")
                 merge(cumulative, counts)
-                complete = true
+                complete = !ollamaUsageIncomplete
             }
             return
         }

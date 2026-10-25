@@ -47,12 +47,26 @@ class V2WorkerUsageTest {
         exercise(root, "MODEL_OUTPUT_NOT_JSON", 0, "not JSON", ollama = true)
     }
 
-    private fun exercise(root: Path, expectedError: String, exit: Int, output: String?, requiredArtifact: Boolean = false, mistral: Boolean = false, failureCode: String? = null, limitEvent: String? = null, ollama: Boolean = false) {
+    @Test fun `Ollama repair stage is forwarded to progress without blocking usage or heartbeats`(@TempDir root: Path) {
+        exercise(root, "MODEL_OUTPUT_NOT_JSON", 0, "not JSON", ollama = true,
+            progressEvent = """{"type":"ar.ollama.phase","stage":"repair","attempt":1}""")
+    }
+
+    @Test fun `other providers cannot change progress through Ollama events`(@TempDir root: Path) {
+        exercise(root, "MODEL_OUTPUT_NOT_JSON", 0, "not JSON",
+            progressEvent = """{"type":"ar.ollama.phase","stage":"repair","attempt":1}""")
+    }
+
+    private fun exercise(root: Path, expectedError: String, exit: Int, output: String?, requiredArtifact: Boolean = false, mistral: Boolean = false, failureCode: String? = null, limitEvent: String? = null, ollama: Boolean = false, progressEvent: String? = null) {
         val calls = CopyOnWriteArrayList<Pair<String, JsonNode>>()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { exchange ->
             calls += exchange.requestURI.path to mapper.readTree(exchange.requestBody)
-            exchange.sendResponseHeaders(204, -1)
+            if (exchange.requestURI.path.endsWith("/heartbeat")) {
+                val response = """{"accepted":true,"cancelRequested":false,"fenced":false,"leaseUntil":null}""".toByteArray()
+                exchange.sendResponseHeaders(200, response.size.toLong())
+                exchange.responseBody.write(response)
+            } else exchange.sendResponseHeaders(204, -1)
             exchange.close()
         }
         server.start()
@@ -84,10 +98,18 @@ class V2WorkerUsageTest {
                 }
                 output?.let { root.resolve("v2-test-job-test-attempt/job/output/result.json").writeText(it) }
                 val event = if (mistral) """{"type":"mistral.usage","request_id":"call","session_id":"session","usage":{"input_tokens":100,"output_tokens":20}}""" else """{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":20}}"""
-                val lines=listOfNotNull(event,limitEvent).joinToString("\n")
-                ProcessBuilder("sh", "-c", "printf '%s\\n' '$lines'; exit $exit").start()
+                val lines=listOfNotNull(event,limitEvent,progressEvent).joinToString("\n")
+                ProcessBuilder("sh", "-c", "printf '%s\\n' '$lines'; ${if (progressEvent != null) "sleep 2; " else ""}exit $exit").start()
             })
             executor.execute(claim)
+            if (progressEvent != null) {
+                val repairs = calls.filter { it.first.endsWith("/progress") && it.second.path("phase").asText() == "REPAIRING" }
+                if (ollama) {
+                    assertThat(repairs).hasSize(1)
+                    assertThat(repairs.single().second.path("message").asText()).contains("Antwoord herstellen (1/3)")
+                    assertThat(calls.any { it.first.endsWith("/heartbeat") }).isTrue()
+                } else assertThat(repairs).isEmpty()
+            }
             val failed = calls.single { it.first.endsWith("/fail") }
             assertThat(failed.second.path("errorCode").asText()).isEqualTo(expectedError)
             if (mistral) assertThat(failed.second.path("retryable").asBoolean()).isEqualTo(expectedError == "PROVIDER_UNAVAILABLE")
