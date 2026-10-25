@@ -20,10 +20,13 @@ geïnstalleerd model en een draaiende Ollama-server met passend contextvenster:
 codex exec --oss --local-provider ollama -m gpt-oss:20b \
   --skip-git-repo-check --sandbox read-only --json \
   --output-last-message result.json \
-  --output-schema response-schema.json - < prompt.md
+  -c 'web_search="disabled"' - < prompt.md
 ```
 
-`prompt.md`, schema en bronbestanden zijn fixtures in die proefdirectory. Test
+`prompt.md`, schema en bronbestanden zijn fixtures in die proefdirectory. Laat de
+prompt expliciet het bronbestand en schema lezen. Dit handmatige voorbeeld valideert
+de uitvoer niet automatisch; de runtime-adapter doet dat wel. Gebruik voor Ollama
+geen native `--output-schema` bij agentische bestandslezing (zie de bevinding onderaan). Test
 eerst een minimale bestandsleesopdracht en klein JSON-schema. Daarna het echte
 HKH-schema, tool calling, streaming, resultaatbestand en tokenregistratie. Een
 aanwezige CLI-vlag bewijst geen ondersteuning door elke server/modelcombinatie.
