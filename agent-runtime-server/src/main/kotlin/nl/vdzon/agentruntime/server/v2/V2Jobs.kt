@@ -78,19 +78,22 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
     fun queued(): List<StoredV2Job> = jdbc.query("""SELECT * FROM runtime_v2_job WHERE status IN ('QUEUED','WAITING_FOR_WORKER')
         AND (not_before IS NULL OR not_before<=CURRENT_TIMESTAMP) ORDER BY created_at,id""",rowMapper())
 
+    fun lockQueued(id: String): Boolean = jdbc.queryForList("""SELECT id FROM runtime_v2_job WHERE id=?
+        AND status IN ('QUEUED','WAITING_FOR_WORKER') AND (not_before IS NULL OR not_before<=CURRENT_TIMESTAMP) FOR UPDATE""", id).isNotEmpty()
+
     fun markWaiting(id: String) { jdbc.update("UPDATE runtime_v2_job SET status='WAITING_FOR_WORKER',phase='WAITING_FOR_WORKER',updated_at=? WHERE id=? AND status='QUEUED'",utc(Instant.now()),id) }
 
     fun createAttempt(job: StoredV2Job, workerId: String, bootId: String, rawFencingToken: String, leaseUntil: Instant, deadline: Instant): StoredV2Attempt {
         val id = UUID.randomUUID().toString(); val now=Instant.now(); val number=job.view.attemptCount+1
         val reason = if(number==1) AttemptReason.INITIAL else when(job.view.errorCode) {
             "MODEL_OUTPUT_NOT_JSON","MODEL_OUTPUT_SCHEMA_INVALID","MISSING_REQUIRED_ARTIFACT" -> AttemptReason.INVALID_OUTPUT
-            "PROVIDER_ERROR","PROVIDER_RATE_LIMIT","ENGINE_FAILED" -> AttemptReason.PROVIDER_ERROR
+            "PROVIDER_ERROR","PROVIDER_RATE_LIMIT","PROVIDER_QUOTA_EXCEEDED","PROVIDER_UNAVAILABLE","ENGINE_FAILED" -> AttemptReason.PROVIDER_ERROR
             else -> AttemptReason.TECHNICAL_ERROR
         }
         jdbc.update("""INSERT INTO runtime_v2_attempt(id,job_id,worker_id,worker_boot_id,attempt_number,reason,status,vendor_id,model,execution_mode,task_type,fencing_token_hash,lease_until,attempt_deadline,heartbeat_at,started_at)
             VALUES (?,?,?,?,?,?,'RUNNING',?,?,?,?,?,?,?,?,?)""",id,job.view.id,workerId,bootId,number,reason.name,job.view.execution.vendorId,job.view.execution.model,job.view.execution.mode.name,job.view.taskType.name,
             hash(rawFencingToken),utc(leaseUntil),utc(deadline),utc(now),utc(now))
-        jdbc.update("""UPDATE runtime_v2_job SET status='RUNNING',phase='EXECUTING',attempt_count=?,error_code=NULL,error_message=NULL,progress_percent=0,updated_at=? WHERE id=? AND status IN ('QUEUED','WAITING_FOR_WORKER')""",number,utc(now),job.view.id)
+        jdbc.update("""UPDATE runtime_v2_job SET status='RUNNING',phase='EXECUTING',attempt_count=?,error_code=NULL,error_message=NULL,progress_percent=0,not_before=NULL,updated_at=? WHERE id=? AND status IN ('QUEUED','WAITING_FOR_WORKER')""",number,utc(now),job.view.id)
         addEvent(job.view.id,id,EventType.ATTEMPT_STARTED,"EXECUTING","Attempt $number started.",status=JobStatus.RUNNING,percent=0)
         return attempt(id)!!
     }
@@ -134,7 +137,7 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
         addEvent(jobId,null,EventType.JOB_FINISHED,phase,if(failed)"Mock job failed verification." else "Mock job completed.",status=status,percent=100)
     }
 
-    fun failAttempt(job:StoredV2Job,attemptId:String,code:String,message:String,retryable:Boolean,forceRetry:Boolean=false) {
+    fun failAttempt(job:StoredV2Job,attemptId:String,code:String,message:String,retryable:Boolean,forceRetry:Boolean=false,retryNotBefore:Instant?=null) {
         val now=Instant.now(); val mayRetry=retryable && (job.view.attemptCount < job.view.maxAttempts || forceRetry)
         if(code=="CANCELLED"||job.cancelRequested){
             jdbc.update("UPDATE runtime_v2_attempt SET status='CANCELLED',error_code='CANCELLED',completed_at=? WHERE id=? AND status='RUNNING'",utc(now),attemptId)
@@ -145,7 +148,7 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
         jdbc.update("UPDATE runtime_v2_attempt SET status='FAILED',error_code=?,completed_at=? WHERE id=? AND status='RUNNING'",code.take(120),utc(now),attemptId)
         addEvent(job.view.id,attemptId,EventType.ATTEMPT_FINISHED,"FAILED","$code: ${message.take(800)}")
         if(mayRetry) {
-            val notBefore=now.plusSeconds((5L shl (job.view.attemptCount-1).coerceAtLeast(0)).coerceAtMost(300))
+            val notBefore=maxOf(now.plusSeconds((5L shl (job.view.attemptCount-1).coerceAtLeast(0)).coerceAtMost(300)), retryNotBefore ?: now)
             jdbc.update("UPDATE runtime_v2_job SET status='QUEUED',phase='RETRY_WAIT',error_code=?,error_message=?,not_before=?,updated_at=? WHERE id=?",code.take(120),message.take(2000),utc(notBefore),utc(now),job.view.id)
             addEvent(job.view.id,attemptId,EventType.RETRY_SCHEDULED,"RETRY_WAIT","Retry scheduled after $code.",status=JobStatus.QUEUED)
         } else {
@@ -185,12 +188,23 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
     }
 
     fun events(jobId:String,after:Long,limit:Int):List<JobEventView> = jdbc.query("SELECT * FROM runtime_v2_event WHERE job_id=? AND sequence_number>? ORDER BY sequence_number LIMIT ?",{rs,_->
-        JobEventView(rs.getLong("sequence_number"),jobId,EventType.valueOf(rs.getString("event_type")),rs.getString("phase"),rs.getString("message"),rs.getString("log_kind")?.let(LogKind::valueOf),rs.getString("log_text"),rs.getString("log_stream_id"),rs.getObject("log_final") as? Boolean,rs.getString("job_status")?.let(JobStatus::valueOf),rs.getObject("progress_percent") as? Int,instant(rs.getObject("created_at")))
+        JobEventView(rs.getLong("sequence_number"),jobId,EventType.valueOf(rs.getString("event_type")),rs.getString("phase"),rs.getString("message"),rs.getString("log_kind")?.let(LogKind::valueOf),rs.getString("log_text"),rs.getString("log_stream_id"),rs.getObject("log_final") as? Boolean,rs.getString("job_status")?.let(JobStatus::valueOf),rs.getObject("progress_percent") as? Int,instant(rs.getObject("created_at")),rs.getString("attempt_id"),rs.getString("provider_limit_json")?.let { mapper.readValue(it,ProviderLimitObservation::class.java) })
     },jobId,after,limit.coerceIn(1,500))
+
+    fun appendProviderLimit(jobId: String, attemptId: String, observation: ProviderLimitObservation) {
+        jdbc.update("""INSERT INTO runtime_v2_event(job_id,attempt_id,event_type,phase,message,external_event_id,created_at,provider_limit_json)
+            VALUES (?,?,'PROVIDER_LIMIT_OBSERVED','PROVIDER_LIMIT',?,?,?,?) ON CONFLICT DO NOTHING""",
+            jobId, attemptId, "Provider limit: ${observation.kind}; blocked=${observation.blocked}.",
+            "provider-limit:${observation.eventId}", utc(Instant.now()), mapper.writeValueAsString(observation))
+    }
+
+    fun providerLimits(attemptId: String): List<ProviderLimitObservation> = jdbc.query(
+        "SELECT provider_limit_json FROM runtime_v2_event WHERE attempt_id=? AND provider_limit_json IS NOT NULL ORDER BY sequence_number",
+        { rs, _ -> mapper.readValue(rs.getString(1), ProviderLimitObservation::class.java) }, attemptId)
 
     fun requestContentDelete(jobId:String):Instant { val now=Instant.now(); jdbc.update("UPDATE runtime_v2_job SET content_delete_requested_at=? WHERE id=?",utc(now),jobId); return now }
 
-    private fun viewOf(rs: java.sql.ResultSet) = JobView(rs.getString("id"),rs.getString("tenant_id"),rs.getString("idempotency_key"),JobKind.valueOf(rs.getString("job_kind")),TaskType.valueOf(rs.getString("task_type")),ExecutionSelection(rs.getString("vendor_id"),rs.getString("model"),ExecutionMode.valueOf(rs.getString("execution_mode"))),JobStatus.valueOf(rs.getString("status")),rs.getString("phase"),rs.getInt("attempt_count"),rs.getInt("max_attempts"),rs.getObject("progress_percent") as? Int,rs.getString("progress_message"),rs.getString("error_code"),rs.getString("error_message"),instant(rs.getObject("created_at")),instant(rs.getObject("updated_at")),rs.getObject("completed_at")?.let(::instant))
+    private fun viewOf(rs: java.sql.ResultSet) = JobView(rs.getString("id"),rs.getString("tenant_id"),rs.getString("idempotency_key"),JobKind.valueOf(rs.getString("job_kind")),TaskType.valueOf(rs.getString("task_type")),ExecutionSelection(rs.getString("vendor_id"),rs.getString("model"),ExecutionMode.valueOf(rs.getString("execution_mode"))),JobStatus.valueOf(rs.getString("status")),rs.getString("phase"),rs.getInt("attempt_count"),rs.getInt("max_attempts"),rs.getObject("progress_percent") as? Int,rs.getString("progress_message"),rs.getString("error_code"),rs.getString("error_message"),instant(rs.getObject("created_at")),instant(rs.getObject("updated_at")),rs.getObject("completed_at")?.let(::instant),rs.getObject("not_before")?.let(::instant))
 
     private fun summaryRowMapper() = org.springframework.jdbc.core.RowMapper<StoredV2JobSummary> { rs,_ ->
         StoredV2JobSummary(
@@ -204,7 +218,7 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
         val requestTree=mapper.readTree(rs.getString("request_json")).also { if(it.isObject)(it as com.fasterxml.jackson.databind.node.ObjectNode).remove("repositoryRequest") }
         val request=mapper.treeToValue(requestTree,CreateJobRequest::class.java)
         StoredV2Job(
-            JobView(rs.getString("id"),rs.getString("tenant_id"),rs.getString("idempotency_key"),JobKind.valueOf(rs.getString("job_kind")),TaskType.valueOf(rs.getString("task_type")),ExecutionSelection(rs.getString("vendor_id"),rs.getString("model"),ExecutionMode.valueOf(rs.getString("execution_mode"))),JobStatus.valueOf(rs.getString("status")),rs.getString("phase"),rs.getInt("attempt_count"),rs.getInt("max_attempts"),rs.getObject("progress_percent") as? Int,rs.getString("progress_message"),rs.getString("error_code"),rs.getString("error_message"),instant(rs.getObject("created_at")),instant(rs.getObject("updated_at")),rs.getObject("completed_at")?.let(::instant)),
+            JobView(rs.getString("id"),rs.getString("tenant_id"),rs.getString("idempotency_key"),JobKind.valueOf(rs.getString("job_kind")),TaskType.valueOf(rs.getString("task_type")),ExecutionSelection(rs.getString("vendor_id"),rs.getString("model"),ExecutionMode.valueOf(rs.getString("execution_mode"))),JobStatus.valueOf(rs.getString("status")),rs.getString("phase"),rs.getInt("attempt_count"),rs.getInt("max_attempts"),rs.getObject("progress_percent") as? Int,rs.getString("progress_message"),rs.getString("error_code"),rs.getString("error_message"),instant(rs.getObject("created_at")),instant(rs.getObject("updated_at")),rs.getObject("completed_at")?.let(::instant),rs.getObject("not_before")?.let(::instant)),
             request,
             rs.getString("result_json")?.let(mapper::readTree),
             rs.getString("repository_result_json")?.let { mapper.readValue(it,RepositoryResult::class.java) },
@@ -218,7 +232,7 @@ class V2JobStore(private val jdbc: JdbcTemplate, private val mapper: ObjectMappe
     }
     companion object {
         /** Alle kolommen van runtime_v2_job behalve de zware JSON-kolommen request_json en result_json. */
-        const val SUMMARY_COLUMNS = "id,tenant_id,idempotency_key,job_kind,task_type,vendor_id,model,execution_mode,status,phase,attempt_count,max_attempts,progress_percent,progress_message,error_code,error_message,created_at,updated_at,completed_at,repository_result_json,verification_result_json"
+        const val SUMMARY_COLUMNS = "id,tenant_id,idempotency_key,job_kind,task_type,vendor_id,model,execution_mode,status,phase,attempt_count,max_attempts,progress_percent,progress_message,error_code,error_message,not_before,created_at,updated_at,completed_at,repository_result_json,verification_result_json"
         fun utc(value:Instant)=value.atOffset(ZoneOffset.UTC); fun instant(value:Any):Instant=when(value){is OffsetDateTime->value.toInstant();is java.sql.Timestamp->value.toInstant();else->error("Unsupported timestamp")}; fun hash(value:String)=MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString(""){"%02x".format(it)} }
 }
 

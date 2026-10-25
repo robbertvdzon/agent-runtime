@@ -140,6 +140,7 @@ data class V2ManagementWorkerView(
     val lastHeartbeatAt: Instant,
     val executors: Set<nl.vdzon.agentruntime.contracts.v2.ExecutorCapability>,
     val versions: Map<String, String>,
+    val providerConcurrencyLimits: Map<String, Int> = emptyMap(),
 )
 
 data class V2ManagementWorker(
@@ -372,7 +373,7 @@ class V2AdminController(
             record.view.workerId, record.view.bootId, status,
             record.view.executors.flatMap { it.taskTypes }.map { it.name }.toSet(),
             record.view.executors.map { it.vendorId }.toSet(), record.view.executors.map { it.model }.toSet(),
-            record.environmentKeys, record.repositoryAliases, record.view.maxConcurrency, last, record.view.executors, record.versions,
+            record.environmentKeys, record.repositoryAliases, record.view.maxConcurrency, last, record.view.executors, record.versions, record.view.providerConcurrencyLimits,
         )
     }
 

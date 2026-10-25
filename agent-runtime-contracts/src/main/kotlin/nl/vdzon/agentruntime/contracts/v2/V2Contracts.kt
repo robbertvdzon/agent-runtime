@@ -1,6 +1,7 @@
 package nl.vdzon.agentruntime.contracts.v2
 
 import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.annotation.JsonInclude
 import jakarta.validation.Valid
 import jakarta.validation.constraints.DecimalMax
 import jakarta.validation.constraints.DecimalMin
@@ -24,7 +25,24 @@ enum class UsageMetric { INPUT_TOKENS, CACHED_INPUT_TOKENS, CACHE_WRITE_TOKENS, 
 enum class UsageUnit { TOKEN, SECOND, CHARACTER, REQUEST, IMAGE }
 enum class UsageSource { PROVIDER_REPORTED, WORKER_MEASURED, MOCK }
 enum class InputRole { SOURCE, CONTEXT, PROMPT, IMAGE, AUDIO, VIDEO, DOCUMENT }
-enum class EventType { JOB_STATUS_CHANGED, ATTEMPT_STARTED, ATTEMPT_FINISHED, RETRY_SCHEDULED, PROGRESS_UPDATED, LOG_MESSAGE, OUTPUT_OBJECT_READY, JOB_FINISHED }
+enum class EventType { JOB_STATUS_CHANGED, ATTEMPT_STARTED, ATTEMPT_FINISHED, RETRY_SCHEDULED, PROGRESS_UPDATED, LOG_MESSAGE, OUTPUT_OBJECT_READY, JOB_FINISHED, PROVIDER_LIMIT_OBSERVED }
+enum class ProviderLimitKind { SHORT_WINDOW, WEEK, MONTH, UNKNOWN }
+enum class ProviderLimitSource { PROVIDER_STRUCTURED, PROVIDER_ERROR }
+
+/** Observations describe provider evidence, never an inferred remaining subscription budget. */
+data class ProviderLimitObservation(
+    @field:NotBlank @field:Size(max = 160) val eventId: String,
+    val kind: ProviderLimitKind,
+    val observedAt: Instant,
+    val blocked: Boolean = true,
+    val resetsAt: Instant? = null,
+    @field:Min(0) @field:Max(31_536_000) val retryAfterSeconds: Long? = null,
+    @field:Min(100) @field:Max(599) val httpStatus: Int? = null,
+    @field:Pattern(regexp = "[A-Za-z0-9_.:-]{1,120}") val providerCode: String? = null,
+    val source: ProviderLimitSource,
+)
+
+data class AppendProviderLimitRequest(val fencingToken: String, @field:Valid val observation: ProviderLimitObservation)
 enum class LogKind { AGENT_TEXT, REASONING_SUMMARY, TOOL_CALL, TOOL_OUTPUT, SYSTEM }
 enum class CostKind { DIRECT, CALCULATED, API_EQUIVALENT, ALLOCATED }
 enum class CostStatus { ESTIMATED, FINAL, RECONCILED }
@@ -181,6 +199,7 @@ data class JobView(
     val createdAt: Instant,
     val updatedAt: Instant,
     val completedAt: Instant?,
+    @get:JsonInclude(JsonInclude.Include.NON_NULL) val retryNotBefore: Instant? = null,
 )
 
 data class JobPage(val items: List<JobView>, val nextCursor: String? = null)
@@ -246,6 +265,8 @@ data class JobEventView(
     val status: JobStatus?,
     val progressPercent: Int?,
     val createdAt: Instant,
+    val attemptId: String? = null,
+    val providerLimit: ProviderLimitObservation? = null,
 )
 
 data class JobEventPage(val items: List<JobEventView>, val nextSequence: Long?, val active: Boolean)
@@ -295,8 +316,9 @@ data class WorkerRegistrationRequest(
     @field:Valid @field:NotEmpty @field:Size(max = 100) val executors: Set<ExecutorCapability>,
     @field:Size(max = 1_000) val availableEnvironmentKeys: Set<String> = emptySet(),
     @field:Size(max = 200) val availableRepositoryAliases: Set<@Pattern(regexp = "[a-z][a-z0-9-]{0,99}") String> = emptySet(),
-    @field:Min(1) @field:Max(32) val maxConcurrency: Int = 1,
+    @field:Min(1) @field:Max(256) val maxConcurrency: Int = 1,
     val versions: Map<String, String> = emptyMap(),
+    @field:Size(max = 100) val providerConcurrencyLimits: Map<@Pattern(regexp = "[a-z][a-z0-9-]{0,99}") String, @Min(1) @Max(256) Int> = emptyMap(),
 )
 data class WorkerView(
     val workerId: String,
@@ -305,6 +327,7 @@ data class WorkerView(
     val availableRepositoryAliases: Set<String> = emptySet(),
     val maxConcurrency: Int,
     val lastHeartbeatAt: Instant,
+    @get:JsonInclude(JsonInclude.Include.NON_EMPTY) val providerConcurrencyLimits: Map<String, Int> = emptyMap(),
 )
 data class ExecutionOptionView(
     val execution: ExecutionSelection,
@@ -338,6 +361,7 @@ data class CreateMockFixtureRequest(
     @field:Size(max = 50) val outputArtifactNames: Set<@Pattern(regexp = "[a-z][a-z0-9-]{0,99}") String> = emptySet(),
     @field:Valid val repositoryResult: RepositoryResult? = null,
     @field:Valid val verificationResult: VerificationResult? = null,
+    @field:Valid @field:Size(max = 100) val providerLimits: List<ProviderLimitObservation> = emptyList(),
 )
 data class MockFixtureView(
     val id: String,
@@ -352,6 +376,7 @@ data class MockFixtureView(
     val repositoryResult: RepositoryResult?,
     val verificationResult: VerificationResult?,
     val createdAt: Instant,
+    val providerLimits: List<ProviderLimitObservation> = emptyList(),
 )
 data class ClaimRequest(
     @field:NotBlank val bootId: String,
@@ -422,4 +447,7 @@ data class RepositoryPublicationIntentView(
 )
 data class ValidationError(val path: String, val code: String, val message: String)
 data class OutputRejectedResponse(val code: String, val retryScheduled: Boolean, val validationErrors: List<ValidationError>)
-data class FailAttemptRequest(val fencingToken: String, val errorCode: String, val message: String, val retryable: Boolean)
+data class FailAttemptRequest(
+    val fencingToken: String, val errorCode: String, val message: String, val retryable: Boolean,
+    @field:Valid @field:Size(max = 100) val providerLimits: List<ProviderLimitObservation> = emptyList(),
+)

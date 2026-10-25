@@ -353,6 +353,20 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
 
+  /jobs/{jobId}/usage:
+    get:
+      operationId: getJobUsage
+      summary: Get accumulated usage for any job status including failed or cancelled jobs
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Usage across all attempts; unavailable metrics are not zero usage
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/JobUsageSummary'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
   /jobs/{jobId}/attempts:
     get:
       operationId: listJobAttempts
@@ -944,6 +958,23 @@ paths:
         '204': {description: Usage stored or already present}
         '409': {$ref: '#/components/responses/Conflict'}
 
+  /workers/{workerId}/jobs/{jobId}/attempts/{attemptId}/provider-limits:
+    post:
+      operationId: appendProviderLimit
+      summary: Persist a structured limit observation before provider or runtime retries
+      parameters:
+        - $ref: '#/components/parameters/WorkerId'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/AttemptId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AppendProviderLimitRequest'}
+      responses:
+        '204': {description: Observation stored or already present}
+        '409': {$ref: '#/components/responses/Conflict'}
+
   /workers/{workerId}/jobs/{jobId}/attempts/{attemptId}/logs:
     post:
       operationId: appendAttemptLog
@@ -1214,10 +1245,10 @@ components:
         readyAt: {type: string, format: date-time}
 
     CreateJobRequest:
-      description: Production credentials are forbidden except PVDD__PRODUCTION_READ_ONLY_TOKEN for the explicitly authorized Product Factory PvdD advisor; the application enforces read-only routes.
       type: object
       additionalProperties: false
       description: |
+        Production credentials are forbidden except PVDD__PRODUCTION_READ_ONLY_TOKEN for the explicitly authorized Product Factory PvdD advisor; the application enforces read-only routes.
         repositorySnapshot and repositoryCheckout are mutually exclusive. REPOSITORY_WORK requires
         REPOSITORY_AGENT plus COMMIT_AND_PUSH. Read-only branch agents use APPLICATION_WORK,
         REPOSITORY_AGENT and NONE. The branch must already exist; the Runtime never creates a
@@ -1237,7 +1268,7 @@ components:
             - $ref: '#/components/schemas/JobVerification'
           description: Only valid for mutating REPOSITORY_WORK. REPOSITORY_CONFIG requires a timeout of at least 600 seconds.
         environmentKeys:
-        description: Only PROJECT__TEST_*, PROJECT__ACCEPTANCE_* and PROJECT__PREVIEW_* names are allowed. Production, unscoped, cluster and session-signing credentials are forbidden.
+          description: Only PROJECT__TEST_*, PROJECT__ACCEPTANCE_* and PROJECT__PREVIEW_* names are allowed. Production, unscoped, cluster and session-signing credentials are forbidden.
           type: array
           maxItems: 50
           uniqueItems: true
@@ -1356,6 +1387,7 @@ components:
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
         completedAt: {type: string, format: date-time}
+        retryNotBefore: {type: string, format: date-time, description: Earliest runtime retry time when queued after a failure}
 
     JobPage:
       type: object
@@ -1432,7 +1464,7 @@ components:
         jobId: {type: string, format: uuid}
         type:
           type: string
-          enum: [JOB_STATUS_CHANGED, ATTEMPT_STARTED, ATTEMPT_FINISHED, RETRY_SCHEDULED, PROGRESS_UPDATED, LOG_MESSAGE, OUTPUT_OBJECT_READY, JOB_FINISHED]
+          enum: [JOB_STATUS_CHANGED, ATTEMPT_STARTED, ATTEMPT_FINISHED, RETRY_SCHEDULED, PROGRESS_UPDATED, LOG_MESSAGE, OUTPUT_OBJECT_READY, JOB_FINISHED, PROVIDER_LIMIT_OBSERVED]
         phase: {type: string, maxLength: 80}
         message: {type: string, maxLength: 1000}
         logKind: {type: string, enum: [AGENT_TEXT, REASONING_SUMMARY, TOOL_CALL, TOOL_OUTPUT, SYSTEM]}
@@ -1451,6 +1483,8 @@ components:
         status: {$ref: '#/components/schemas/JobStatus'}
         progressPercent: {type: integer, minimum: 0, maximum: 100}
         createdAt: {type: string, format: date-time}
+        attemptId: {type: string, format: uuid}
+        providerLimit: {$ref: '#/components/schemas/ProviderLimitObservation'}
 
     JobEventPage:
       type: object
@@ -1679,10 +1713,17 @@ components:
           maxItems: 200
           uniqueItems: true
           items: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
-        maxConcurrency: {type: integer, minimum: 1, maximum: 32}
+        maxConcurrency: {type: integer, minimum: 1, maximum: 256}
         versions:
           type: object
           additionalProperties: {type: string}
+
+        providerConcurrencyLimits:
+          type: object
+          maxProperties: 100
+          propertyNames: {pattern: '^[a-z][a-z0-9-]{0,99}$'}
+          additionalProperties: {type: integer, minimum: 1, maximum: 256}
+          description: Optional per-vendor caps on this worker, shared across models and job classes; not global account quotas.
 
     ExecutorCapability:
       type: object
@@ -1712,8 +1753,13 @@ components:
           type: array
           uniqueItems: true
           items: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
-        maxConcurrency: {type: integer, minimum: 1, maximum: 32}
+        maxConcurrency: {type: integer, minimum: 1, maximum: 256}
         lastHeartbeatAt: {type: string, format: date-time}
+
+        providerConcurrencyLimits:
+          type: object
+          additionalProperties: {type: integer, minimum: 1, maximum: 256}
+          description: Configured per-vendor slot caps on this worker.
 
     ManagementJobItem:
       type: object
@@ -1881,10 +1927,14 @@ components:
           type: array
           uniqueItems: true
           items: {type: string, pattern: '^[a-z][a-z0-9-]{0,99}$'}
-        maxConcurrency: {type: integer, minimum: 1, maximum: 32}
+        maxConcurrency: {type: integer, minimum: 1, maximum: 256}
         lastHeartbeatAt: {type: string, format: date-time}
         executors: {type: array, items: {$ref: '#/components/schemas/ExecutorCapability'}}
         versions: {type: object, additionalProperties: {type: string}}
+
+        providerConcurrencyLimits:
+          type: object
+          additionalProperties: {type: integer, minimum: 1, maximum: 256}
 
     ManagementConsumerOverview:
       type: object
@@ -1978,6 +2028,11 @@ components:
           items: {$ref: '#/components/schemas/LogicalName'}
         repositoryResult: {$ref: '#/components/schemas/RepositoryResult'}
         verificationResult: {$ref: '#/components/schemas/VerificationResult'}
+        providerLimits:
+          type: array
+          maxItems: 100
+          description: Synthetic observations emitted on each mock attempt; observedAt is replaced by execution time.
+          items: {$ref: '#/components/schemas/ProviderLimitObservation'}
       oneOf:
         - required: [result]
         - required: [outputSequence]
@@ -2005,6 +2060,12 @@ components:
         repositoryResult: {$ref: '#/components/schemas/RepositoryResult'}
         verificationResult: {$ref: '#/components/schemas/VerificationResult'}
         createdAt: {type: string, format: date-time}
+
+        providerLimits:
+          type: array
+          maxItems: 100
+          description: Synthetic observations emitted on each mock attempt; observedAt is replaced by execution time.
+          items: {$ref: '#/components/schemas/ProviderLimitObservation'}
 
     ClaimRequest:
       type: object
@@ -2216,6 +2277,12 @@ components:
         message: {type: string, minLength: 1, maxLength: 2000}
         retryable: {type: boolean}
 
+        providerLimits:
+          type: array
+          maxItems: 100
+          description: Idempotent fallback for observations not delivered before failure. Week/month blocks prevent automatic retries; retry advice bounds other retries.
+          items: {$ref: '#/components/schemas/ProviderLimitObservation'}
+
     RepositorySnapshot:
       type: object
       additionalProperties: false
@@ -2381,3 +2448,27 @@ components:
         code: {type: string, maxLength: 120}
         message: {type: string, maxLength: 2000}
         timestamp: {type: string, format: date-time}
+
+    ProviderLimitObservation:
+      type: object
+      additionalProperties: false
+      required: [eventId, kind, observedAt, blocked, source]
+      properties:
+        eventId: {type: string, minLength: 1, maxLength: 160}
+        kind: {type: string, enum: [SHORT_WINDOW, WEEK, MONTH, UNKNOWN]}
+        observedAt: {type: string, format: date-time}
+        blocked: {type: boolean, default: true}
+        resetsAt: {type: string, format: date-time}
+        retryAfterSeconds: {type: integer, format: int64, minimum: 0, maximum: 31536000}
+        httpStatus: {type: integer, minimum: 100, maximum: 599}
+        providerCode: {type: string, pattern: '^[A-Za-z0-9_.:-]{1,120}$'}
+        source: {type: string, enum: [PROVIDER_STRUCTURED, PROVIDER_ERROR]}
+      description: Provider evidence only. UNKNOWN never implies a week or month quota. No raw error bodies or credentials.
+
+    AppendProviderLimitRequest:
+      type: object
+      additionalProperties: false
+      required: [fencingToken, observation]
+      properties:
+        fencingToken: {type: string, minLength: 32, maxLength: 500}
+        observation: {$ref: '#/components/schemas/ProviderLimitObservation'}

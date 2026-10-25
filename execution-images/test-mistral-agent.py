@@ -50,8 +50,32 @@ class MistralAdapterTest(unittest.TestCase):
 
     def test_failures_are_classified_without_returning_provider_errors(self):
         self.assertEqual(m.failure_code({'error':'HTTP 429 quota exceeded secret'},1),'PROVIDER_UNAVAILABLE')
-        self.assertEqual(m.failure_code({},3),'EXECUTION_TIMEOUT')
+        self.assertEqual(m.failure_code({'outcome':'deadline'},3),'EXECUTION_TIMEOUT')
+        self.assertEqual(m.failure_code({'outcome':'token_limit'},3),'SESSION_TOKEN_LIMIT')
+        self.assertEqual(m.failure_code({'outcome':'turn_limit'},3),'SESSION_TURN_LIMIT')
         self.assertEqual(m.failure_code({'error':'generic'},1),'ENGINE_FAILED')
+
+    def test_quota_evidence_is_sanitized_and_local_caps_are_not_provider_limits(self):
+        self.assertIsNone(m.limit_event({'outcome':'token_limit'}))
+        event = m.limit_event({'error':{'code':'model_stream_failed','message':'secret provider detail',
+                                      'details':{'httpStatus':429,'correlationId':'private'}}})
+        self.assertEqual(event['http_status'],429)
+        self.assertEqual(event['kind'],'UNKNOWN')
+        self.assertNotIn('secret',json.dumps(event))
+        self.assertNotIn('private',json.dumps(event))
+        monthly = m.limit_event({'error':{'code':'monthly_quota_exceeded','status':429}})
+        self.assertEqual(monthly['kind'],'MONTH')
+
+    def test_pinned_journal_failure_is_detected_without_export_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d); (p/'journal').mkdir()
+            failure={'type':'action_result','payload':{'result':{'type':'completion_failed','action_id':'failed-call',
+                     'error':{'code':'model_stream_failed','message':'hidden detail','retryable':False,'details':{'httpStatus':429}}}}}
+            (p/'journal'/'0001.jsonl').write_text(json.dumps(failure)+'\n')
+            event=list(m.limit_events(p))[0]
+            self.assertEqual(event['request_id'],'failed-call')
+            self.assertEqual(event['http_status'],429)
+            self.assertNotIn('hidden detail',json.dumps(event))
 
     def test_finished_exit_zero_with_invalid_answer_still_fails(self):
         self.exercise('NOT_JSON', expected=1)
@@ -67,6 +91,7 @@ class MistralAdapterTest(unittest.TestCase):
             fake=p/'vibe'; fake.write_text('''#!/usr/bin/env python3
 import os,sys,json,pathlib
 args=sys.argv
+assert 'api_retry_max_elapsed_time = 0.0' in (pathlib.Path(os.environ['VIBE_HOME'])/'config.toml').read_text()
 out=pathlib.Path(args[args.index('--output-dir')+1]); (out/'session'/'journal').mkdir(parents=True)
 (out/'session'/'meta.json').write_text('{"session_id":"session-proof"}')
 records=[]

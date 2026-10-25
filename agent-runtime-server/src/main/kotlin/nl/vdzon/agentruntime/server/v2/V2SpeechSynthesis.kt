@@ -85,7 +85,7 @@ class V2SpeechSynthesisExecutor(
 
     private fun send(request:HttpRequest,provider:String):ByteArray {
         val response=http.send(request,HttpResponse.BodyHandlers.ofByteArray())
-        if(response.statusCode() !in 200..299)throw ProviderFailure(if(response.statusCode()==429)"PROVIDER_RATE_LIMIT" else "PROVIDER_ERROR","$provider returned HTTP ${response.statusCode()}: ${String(response.body(),StandardCharsets.UTF_8).take(1000)}",response.statusCode()==429||response.statusCode()>=500)
+        if(response.statusCode() !in 200..299)throw providerHttpFailure(provider,response.statusCode(),String(response.body(),StandardCharsets.UTF_8),response.headers(),mapper)
         if(response.body().isEmpty())throw ProviderFailure("PROVIDER_OUTPUT_MISSING","$provider returned no audio.",true)
         return response.body()
     }

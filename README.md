@@ -187,6 +187,17 @@ De worker voert meerdere v2-jobs tegelijk uit, met een eigen limiet per jobklass
 applicatiejobs nooit achter lange repositoryjobs wachten:
 `AR_WORKER_APPLICATION_SLOTS` (standaard 6), `AR_WORKER_REPOSITORY_SLOTS` (2) en
 `AR_WORKER_TRANSCRIPTION_SLOTS` (1). De server kent de som als `maxConcurrency`.
+Een klasse kan 0–256 slots hebben; de som moet 1–256 zijn. De defaults blijven 6/2/1.
+Met `AR_WORKER_PROVIDER_LIMITS=openai=2,anthropic=2,mistral=2` begrens je per worker
+het aantal gelijktijdige jobs van iedere vendor, over alle modellen en jobklassen samen.
+Niet genoemde vendors gebruiken de vrije totale capaciteit. Deze caps verdelen capaciteit;
+ze zijn geen accountquota en reserveren geen CPU of geheugen. Verhoog parallelisme pas na meting.
+
+Consumenten kunnen limietwaarnemingen tijdens uitvoering uit `/v2/jobs/{jobId}/events`
+of de SSE-stream lezen, inclusief attempt-ID, limiettype en beschikbaar reset-/retryadvies.
+`GET /v2/jobs/{jobId}/usage` levert verbruik in iedere jobstatus, ook bij fouten en annulering.
+Zie [Providerlimieten en capaciteit](docs/providerlimieten-en-capaciteit.md) voor het contract,
+de beperkingen van providerinformatie en de aansluitpunten voor HKH-capaciteitstests.
 
 `LOCAL`-transcriptie draait whisper.cpp direct op de Mac (Metal), niet in Docker:
 
@@ -361,6 +372,7 @@ onder `main` en een immutable `sha-...`-tag. De workflow commit daarna de server
 ## Documentatie
 
 - [Jobs en uitvoering](docs/jobs-en-uitvoering.md)
+- [Providerlimieten en capaciteit](docs/providerlimieten-en-capaciteit.md)
 - [Architectuur en beveiliging](docs/architectuur-en-beveiliging.md)
 - [Beheerinterface](docs/beheerinterface.md)
 - [Deployment en operatie](docs/deployment-en-operatie.md)

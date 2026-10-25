@@ -52,7 +52,7 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
             client.register(
                 WorkerRegistrationRequest(
                     config.workerId, bootId, capabilities, config.projectCredentials.keys,
-                    config.repositoryAliases.keys, maxConcurrency, mapOf("worker" to "0.4.0"),
+                    config.repositoryAliases.keys, maxConcurrency, mapOf("worker" to "0.5.0"), config.providerConcurrencyLimits,
                 ),
             )
             true
@@ -69,6 +69,7 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
         if (claim.job.execution.mode == ExecutionMode.LOCAL) return transcriber.execute(claim)
         val root = config.workRoot.resolve("v2-${claim.job.id}-${claim.attempt.id}")
         val usage = ExecutionUsageReporter(claim.fencingToken, { client.usage(claim, it) })
+        val limits = ProviderLimitReporter { client.providerLimit(claim,it) }
         try {
             root.createDirectories()
             if (reconcilePublication(claim, root)) return
@@ -78,7 +79,7 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
             client.progress(claim, "PREPARING", 5, "Preparing streamed inputs and repository checkout.")
             val repositoryState = prepare(claim, workspace, task)
             val started = Instant.now()
-            val roundsOutcome = executeAgentRounds(claim, workspace, task, repositoryState, usage)
+            val roundsOutcome = executeAgentRounds(claim, workspace, task, repositoryState, usage, limits)
             val verificationResult = roundsOutcome.verificationResult
             client.progress(claim, "UPLOADING_OUTPUT", 85, "Uploading declared output artifacts.")
             val outputIds = uploadOutputs(claim, task)
@@ -86,9 +87,9 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
             client.log(claim, LogKind.SYSTEM, "Execution finished in ${Duration.between(started, Instant.now()).seconds} seconds.")
             complete(claim, workspace, repositoryState, result, outputIds, verificationResult)
         } catch (failure: JobFailure) {
-            runCatching { client.fail(claim, failure.code, failure.message.orEmpty(), failure.retryable) }
+            runCatching { client.fail(claim, failure.code, failure.message.orEmpty(), failure.retryable, limits.snapshot()) }
         } catch (error: Exception) {
-            runCatching { client.fail(claim, "WORKER_ERROR", safe(error.message), true) }
+            runCatching { client.fail(claim, "WORKER_ERROR", safe(error.message), true, limits.snapshot()) }
         } finally {
             usage.finish()
             runCatching { deleteTree(root) }
@@ -98,7 +99,7 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
     private data class AgentRoundsOutcome(val result: JsonNode, val verificationResult: VerificationResult?)
     private data class ContainerRunResult(val exitCode: Int, val timedOut: Boolean)
 
-    private fun executeAgentRounds(claim: ClaimedJob, workspace: Path, task: Path, repositoryState: V2RepositoryState?, usage: ExecutionUsageReporter): AgentRoundsOutcome {
+    private fun executeAgentRounds(claim: ClaimedJob, workspace: Path, task: Path, repositoryState: V2RepositoryState?, usage: ExecutionUsageReporter, limits: ProviderLimitReporter): AgentRoundsOutcome {
         val request = claim.request.verification
         val enabled = request?.mode == VerificationMode.REPOSITORY_CONFIG
         val maximumRounds = if (enabled) request!!.maxRepairAttempts + 1 else 1
@@ -110,13 +111,17 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
         while (true) {
             task.resolve("output/result.json").deleteIfExists()
             client.progress(claim, "EXECUTING", (10 + round * 10).coerceAtMost(55), "Starting agent round $round of $maximumRounds.")
-            val container = runContainer(claim, workspace, task, round, executionDeadline, usage)
+            val container = runContainer(claim, workspace, task, round, executionDeadline, usage, limits)
             if (container.timedOut && lastValidatedResult != null) {
                 return AgentRoundsOutcome(lastValidatedResult, timeoutResult(lastVerificationResult, round))
             }
+            if (container.exitCode != 0 && !container.timedOut && limits.snapshot().any { it.blocked }) {
+                val longLimit = limits.snapshot().any { it.kind in setOf(ProviderLimitKind.WEEK,ProviderLimitKind.MONTH) }
+                throw JobFailure(if (longLimit) "PROVIDER_QUOTA_EXCEEDED" else "PROVIDER_RATE_LIMIT", "Provider reported an execution limit; see provider limit events.", !longLimit)
+            }
             if (container.exitCode != 0 && claim.job.execution.vendorId == "mistral") {
                 val status = runCatching { mapper.readTree(task.resolve("output/mistral-status.json").toFile()) }.getOrNull()
-                val code = status?.path("code")?.asText()?.takeIf { it in setOf("MODEL_OUTPUT_NOT_JSON", "MODEL_OUTPUT_SCHEMA_INVALID", "PROVIDER_UNAVAILABLE", "EXECUTION_TIMEOUT", "ENGINE_FAILED") } ?: "ENGINE_FAILED"
+                val code = status?.path("code")?.asText()?.takeIf { it in setOf("MODEL_OUTPUT_NOT_JSON", "MODEL_OUTPUT_SCHEMA_INVALID", "PROVIDER_UNAVAILABLE", "EXECUTION_TIMEOUT", "SESSION_TOKEN_LIMIT", "SESSION_TURN_LIMIT", "SESSION_PRICE_LIMIT", "MODEL_OUTPUT_LIMIT", "ENGINE_FAILED") } ?: "ENGINE_FAILED"
                 throw JobFailure(if (container.timedOut) "EXECUTION_TIMEOUT" else code, "Mistral execution failed: $code.", code == "PROVIDER_UNAVAILABLE" || container.timedOut)
             }
             if (container.exitCode != 0) throw JobFailure(if (container.timedOut) "VERIFICATION_TIMEOUT" else "ENGINE_FAILED", "Provider process exited with code ${container.exitCode}.", !container.timedOut && container.exitCode in setOf(124, 137))
@@ -417,7 +422,7 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
         }
     }
 
-    private fun runContainer(claim: ClaimedJob, workspace: Path, task: Path, agentRound: Int, executionDeadline: Instant, usage: ExecutionUsageReporter): ContainerRunResult {
+    private fun runContainer(claim: ClaimedJob, workspace: Path, task: Path, agentRound: Int, executionDeadline: Instant, usage: ExecutionUsageReporter, limits: ProviderLimitReporter): ContainerRunResult {
         val provider = claim.job.execution.vendorId
         val engine = when (provider) {
             "openai" -> "CODEX"
@@ -455,12 +460,14 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
             throw error
         }
         val roundUsage = usage.round(provider, mapper)
+        val limitTracker = limits.tracker(provider,mapper)
         transcript.startForwarding { client.log(claim, it) }
         val streamFailed = java.util.concurrent.atomic.AtomicBoolean(false)
         val reader = Thread {
             runCatching {
                 process.inputStream.bufferedReader().useLines { lines -> lines.forEach { line ->
                     roundUsage.observe(line)
+                    limitTracker.observe(line)
                     val cleaned = redactProviderEvent(line, mapper)
                     if (cleaned.isNotBlank()) transcript.append(cleaned)
                 } }
@@ -470,6 +477,7 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
         try {
             while (!process.waitFor(1, TimeUnit.SECONDS)) {
                 usage.flush()
+                limits.flush()
                 val heartbeat = heartbeatWithGrace(config.heartbeatGrace) { client.heartbeat(claim) }
                 if (!heartbeat.accepted || heartbeat.fenced || heartbeat.cancelRequested) {
                     throw JobFailure(if (heartbeat.cancelRequested) "CANCELLED" else "ATTEMPT_FENCED", "Execution was stopped.", false)
@@ -497,6 +505,7 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
             val promptBytes = task.resolve("input/prompt.md").fileSize()
             roundUsage.finish(((promptBytes + inputBytes) / 4).coerceAtLeast(1), estimatedOutput, streamDrained = !reader.isAlive && !streamFailed.get())
             usage.flush(force = true)
+            repeat(3) { limits.flush(force = true) }
             transcript.close()
         }
     }
@@ -534,12 +543,13 @@ class V2RuntimeClient(private val config: WorkerConfig, private val mapper: Obje
     fun log(claim: ClaimedJob, kind: LogKind, text: String) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/logs", AppendLogRequest(claim.fencingToken, UUID.randomUUID().toString(), kind, text.take(8192), observedAt = Instant.now()), Void::class.java) }
     internal fun log(claim: ClaimedJob, chunk: TranscriptChunk) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/logs", AppendLogRequest(claim.fencingToken, chunk.eventId, LogKind.AGENT_TEXT, chunk.text, chunk.streamId, chunk.final, chunk.observedAt), Void::class.java) }
     fun audioUsage(claim: ClaimedJob, seconds: Long) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/usage-events", AppendUsageRequest(claim.fencingToken, UUID.randomUUID().toString(), Instant.now(), listOf(UsageMetricValue(UsageMetric.AUDIO_INPUT_SECONDS, seconds.toString(), UsageUnit.SECOND)), source = UsageSource.WORKER_MEASURED), Void::class.java) }
+    fun providerLimit(claim: ClaimedJob, observation: ProviderLimitObservation) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/provider-limits", AppendProviderLimitRequest(claim.fencingToken,observation), Void::class.java) }
     fun usage(claim: ClaimedJob, request: AppendUsageRequest) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/usage-events", request, Void::class.java) }
     fun submit(claim: ClaimedJob, result: JsonNode, objectIds: Set<String>, repositoryResult: RepositoryResult?, verificationResult: VerificationResult?) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/result", SubmitResultRequest(claim.fencingToken, result, objectIds, repositoryResult, verificationResult), Void::class.java) }
     fun preparePublication(claim: ClaimedJob, result: JsonNode, objectIds: Set<String>, repositoryResult: RepositoryResult, verificationResult: VerificationResult?) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/repository-publication", PrepareRepositoryPublicationRequest(claim.fencingToken, result, objectIds, repositoryResult, verificationResult), RepositoryPublicationIntentView::class.java) }
     fun confirmPublication(claim: ClaimedJob, commitSha: String) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/repository-publication/confirm", ConfirmRepositoryPublicationRequest(claim.fencingToken, commitSha), Void::class.java) }
     fun discardPublication(claim: ClaimedJob, commitSha: String) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/repository-publication/discard", DiscardRepositoryPublicationRequest(claim.fencingToken, commitSha), Void::class.java) }
-    fun fail(claim: ClaimedJob, code: String, message: String, retryable: Boolean) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/fail", FailAttemptRequest(claim.fencingToken, code, message, retryable), Void::class.java) }
+    fun fail(claim: ClaimedJob, code: String, message: String, retryable: Boolean, providerLimits: List<ProviderLimitObservation> = emptyList()) { post("/v2/workers/${config.workerId}/jobs/${claim.job.id}/attempts/${claim.attempt.id}/fail", FailAttemptRequest(claim.fencingToken, code, message, retryable, providerLimits), Void::class.java) }
 
     fun download(claim: ClaimedJob, objectId: String, target: Path) {
         val request = HttpRequest.newBuilder(uri("/v2/workers/${config.workerId}/jobs/${claim.job.id}/objects/$objectId/content")).timeout(Duration.ofMinutes(30)).header("Authorization", "Bearer ${config.token}").header("X-Attempt-Id", claim.attempt.id).header("X-Fencing-Token", claim.fencingToken).GET().build()

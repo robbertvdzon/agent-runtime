@@ -41,13 +41,13 @@ class V2MockFixtureStore(private val jdbc: JdbcTemplate, private val mapper: Obj
         val id = UUID.randomUUID().toString()
         try {
             jdbc.update(
-                """INSERT INTO runtime_v2_mock_fixture(id,tenant_id,idempotency_key,result_json,output_sequence_json,error_code,error_message,delay_millis,output_artifact_names_json,repository_result_json,verification_result_json,created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                """INSERT INTO runtime_v2_mock_fixture(id,tenant_id,idempotency_key,result_json,output_sequence_json,error_code,error_message,delay_millis,output_artifact_names_json,repository_result_json,verification_result_json,created_at,provider_limits_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 id, request.tenantId, request.idempotencyKey, request.result?.toString(),
                 request.outputSequence.takeIf(List<String>::isNotEmpty)?.let(mapper::writeValueAsString),
                 request.errorCode, request.errorMessage, request.delayMillis,
                 mapper.writeValueAsString(request.outputArtifactNames), request.repositoryResult?.let(mapper::writeValueAsString),
-                request.verificationResult?.let(mapper::writeValueAsString), V2JobStore.utc(Instant.now()),
+                request.verificationResult?.let(mapper::writeValueAsString), V2JobStore.utc(Instant.now()), mapper.writeValueAsString(request.providerLimits),
             )
         } catch (_: DuplicateKeyException) {
             throw ApiException("MOCK_FIXTURE_CONFLICT", "A fixture already exists for this exact tenant and idempotency key.", HttpStatus.CONFLICT)
@@ -85,6 +85,7 @@ class V2MockFixtureStore(private val jdbc: JdbcTemplate, private val mapper: Obj
             rs.getString("repository_result_json")?.let { mapper.readValue(it, nl.vdzon.agentruntime.contracts.v2.RepositoryResult::class.java) },
             rs.getString("verification_result_json")?.let { mapper.readValue(it, nl.vdzon.agentruntime.contracts.v2.VerificationResult::class.java) },
             V2JobStore.instant(rs.getObject("created_at")),
+            mapper.readValue(rs.getString("provider_limits_json"),mapper.typeFactory.constructCollectionType(List::class.java,nl.vdzon.agentruntime.contracts.v2.ProviderLimitObservation::class.java)),
         )
     }
 
@@ -121,6 +122,7 @@ class V2TargetedMockExecutor(
         val fixtureErrorCode = fixture.errorCode
         if (fixtureErrorCode != null) {
             val attempt = attempt(job)
+            fixture.providerLimits.forEach { jobs.appendProviderLimit(job.view.id,attempt.view.id,it.copy(observedAt=Instant.now())) }
             jobs.failAttempt(job, attempt.view.id, fixtureErrorCode, fixture.errorMessage ?: "Prepared mock failure.", false)
             return
         }
@@ -129,6 +131,7 @@ class V2TargetedMockExecutor(
             val current = jobs.find(job.view.id) ?: return
             if (current.view.status !in setOf(nl.vdzon.agentruntime.contracts.v2.JobStatus.QUEUED, nl.vdzon.agentruntime.contracts.v2.JobStatus.WAITING_FOR_WORKER)) return
             val attempt = attempt(current)
+            fixture.providerLimits.forEach { jobs.appendProviderLimit(job.view.id,attempt.view.id,it.copy(observedAt=Instant.now())) }
             val result = runCatching { mapper.readTree(candidate) }.getOrNull()
             if (result == null) {
                 jobs.rejectOutput(jobs.find(job.view.id)!!, attempt.view.id, "MODEL_OUTPUT_NOT_JSON", "Prepared mock output is not JSON.")

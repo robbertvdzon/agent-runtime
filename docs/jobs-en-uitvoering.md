@@ -328,6 +328,22 @@ Na maximaal drie hook-herstelbeurten valideert de adapter onafhankelijk opnieuw;
 van Vibe is onvoldoende. Ongeldige JSON/schema-uitvoer wordt niet als resultaatbestand
 gepubliceerd. De bestaande serverpolicy bepaalt eventuele volgende technische attempts.
 
-Quota-, rate-limit- en authenticatiefouten worden `PROVIDER_UNAVAILABLE` (retryable),
-zonder naar API-betaling of een ander model over te schakelen. Tijdslimieten worden
-`EXECUTION_TIMEOUT`. Onbekende procesfouten worden `ENGINE_FAILED`.
+Herkenbare providerlimieten leveren een `PROVIDER_LIMIT_OBSERVED`-event op. De attempt
+faalt bij een bevestigde week-/maandgrens met `PROVIDER_QUOTA_EXCEEDED`, anders met
+`PROVIDER_RATE_LIMIT`. Een onduidelijke periode blijft `UNKNOWN`. Authenticatie- en overige
+beschikbaarheidsfouten blijven `PROVIDER_UNAVAILABLE`; er is geen fallback naar API-betaling
+of een ander model. De adapter schakelt interne Vibe-netwerkretries uit; de runtime registreert
+de eerste fout en bepaalt de technische retry. JSON-herstel via de hook blijft werken.
+
+De Vibe-journalfout `completion_failed` met `details.httpStatus` wordt tijdens uitvoering
+gelezen; een gesanitiseerde exportfout is achtervang. Headers of quota-informatie die Vibe
+niet bewaart, kan de runtime niet reconstrueren. Een 401 wordt niet zonder bewijs als
+maandquotum geïnterpreteerd.
+
+Deadline/terminatie wordt `EXECUTION_TIMEOUT`. Vibe-uitkomsten `token_limit`, `turn_limit`,
+`price_limit` en `length` worden afzonderlijk `SESSION_TOKEN_LIMIT`, `SESSION_TURN_LIMIT`,
+`SESSION_PRICE_LIMIT` en `MODEL_OUTPUT_LIMIT`. Exitcode 3 alleen bewijst geen timeout.
+Onbekende procesfouten worden `ENGINE_FAILED`.
+
+Zie [Providerlimieten en capaciteit](providerlimieten-en-capaciteit.md) voor events,
+retrygedrag, verbruik bij mislukte jobs en providergebonden workercapaciteit.

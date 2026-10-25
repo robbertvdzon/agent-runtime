@@ -33,12 +33,18 @@ drie afleverpogingen gedaan. Een blijvend onbereikbare server wordt in de worker
 gemeld; de wachtrij overleeft geen workerherstart. Reeds ontvangen events blijven
 wel behouden, ook na mislukking of annulering.
 
-Alleen het accounting-endpoint accepteert tot 24 uur na het einde van de poging
+Het accounting-endpoint accepteert tot 24 uur na het einde van de poging
 nog verbruik met de oorspronkelijke worker-, job-, attempt- en fencing-identiteit.
 De observatietijd moet bij de oorspronkelijke uitvoering horen (60 seconden marge
 voor afsluiting en klokverschil). Dit heropent geen job en verruimt de toegang tot
 resultaten, bestanden of heartbeats niet. Database-inserts zijn idempotent, ook
 wanneer het antwoord op een geslaagde insert onderweg verloren gaat.
+
+`GET /v2/jobs/{jobId}/usage` maakt de jobtotalen ook zonder geslaagd resultaat beschikbaar,
+inclusief tijdens uitvoering en na falen of annulering. `GET /v2/jobs/{jobId}/attempts`
+blijft de uitsplitsing per attempt leveren. Limietwaarnemingen hebben een afzonderlijk
+append-only endpoint met hetzelfde beperkte venster voor late rapportage; zie
+[Providerlimieten en capaciteit](providerlimieten-en-capaciteit.md).
 
 Uitrol vereist de nieuwe server, execution-image en worker-JAR. Rol eerst de
 server uit en werk daarna image en worker bij. Historische pogingen zonder

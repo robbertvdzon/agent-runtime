@@ -38,7 +38,12 @@ class V2WorkerUsageTest {
         exercise(root, "MODEL_OUTPUT_SCHEMA_INVALID", 1, null, mistral = true, failureCode = "MODEL_OUTPUT_SCHEMA_INVALID")
     }
 
-    private fun exercise(root: Path, expectedError: String, exit: Int, output: String?, requiredArtifact: Boolean = false, mistral: Boolean = false, failureCode: String? = null) {
+    @Test fun `Mistral limit reaches the server before failure and is repeated with stable ID in failure fallback`(@TempDir root: Path) {
+        exercise(root, "PROVIDER_QUOTA_EXCEEDED", 1, null, mistral=true, failureCode="PROVIDER_UNAVAILABLE",
+            limitEvent="""{"type":"mistral.limit","kind":"MONTH","http_status":429,"provider_code":"monthly_quota_exceeded"}""")
+    }
+
+    private fun exercise(root: Path, expectedError: String, exit: Int, output: String?, requiredArtifact: Boolean = false, mistral: Boolean = false, failureCode: String? = null, limitEvent: String? = null) {
         val calls = CopyOnWriteArrayList<Pair<String, JsonNode>>()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { exchange ->
@@ -71,7 +76,8 @@ class V2WorkerUsageTest {
                 }
                 output?.let { root.resolve("v2-test-job-test-attempt/job/output/result.json").writeText(it) }
                 val event = if (mistral) """{"type":"mistral.usage","request_id":"call","session_id":"session","usage":{"input_tokens":100,"output_tokens":20}}""" else """{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":20}}"""
-                ProcessBuilder("sh", "-c", "printf '%s\\n' '$event'; exit $exit").start()
+                val lines=listOfNotNull(event,limitEvent).joinToString("\n")
+                ProcessBuilder("sh", "-c", "printf '%s\\n' '$lines'; exit $exit").start()
             })
             executor.execute(claim)
             val failed = calls.single { it.first.endsWith("/fail") }
@@ -81,6 +87,12 @@ class V2WorkerUsageTest {
             assertThat(usage.flatMap { it.second.path("metrics").toList() }.filter { it.path("metric").asText() == "INPUT_TOKENS" }.sumOf { it.path("quantity").asLong() }).isEqualTo(100L)
             assertThat(usage.flatMap { it.second.path("metrics").toList() }.filter { it.path("metric").asText() == "OUTPUT_TOKENS" }.sumOf { it.path("quantity").asLong() }).isEqualTo(20L)
             assertThat(calls.indexOf(usage.first())).isLessThan(calls.indexOf(failed))
+            if (limitEvent!=null) {
+                val observed=calls.single { it.first.endsWith("/provider-limits") }
+                assertThat(calls.indexOf(observed)).isLessThan(calls.indexOf(failed))
+                assertThat(failed.second.path("providerLimits").single().path("eventId").asText())
+                    .isEqualTo(observed.second.path("observation").path("eventId").asText())
+            }
             assertThat(root.resolve("v2-test-job-test-attempt")).doesNotExist()
         } finally {
             server.stop(0)

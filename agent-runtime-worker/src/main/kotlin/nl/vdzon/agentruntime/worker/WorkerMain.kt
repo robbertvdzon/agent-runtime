@@ -59,8 +59,11 @@ data class WorkerConfig(
     val heartbeatGrace: Duration = Duration.ofSeconds(300),
     val mistralApiKey: String? = null,
     val mistralModels: Set<String> = emptySet(),
+    val providerConcurrencyLimits: Map<String, Int> = emptyMap(),
 ) {
     init {
+        require(applicationSlots + repositorySlots + transcriptionSlots in 1..256) { "Total worker slots must be between 1 and 256." }
+        require(providerConcurrencyLimits.all { (vendor, limit) -> vendor.matches(Regex("[a-z][a-z0-9-]{0,99}")) && limit in 1..256 }) { "Invalid provider concurrency limits." }
         require(mistralModels.all { it == "glm-5-3" }) { "Only glm-5-3 is supported for Mistral." }
     }
 
@@ -87,7 +90,7 @@ data class WorkerConfig(
                 values["AR_CLAUDE_OAUTH_TOKEN"]?.takeIf(String::isNotBlank),
                 aliases, root.resolve("project-credentials.env"), java.util.concurrent.ConcurrentHashMap(projectCredentials),
                 advertisedModels,
-                slots(values, "AR_WORKER_APPLICATION_SLOTS", 6), slots(values, "AR_WORKER_REPOSITORY_SLOTS", 2), slots(values, "AR_WORKER_TRANSCRIPTION_SLOTS", 1),
+                parallelSlots(values, "AR_WORKER_APPLICATION_SLOTS", 6), parallelSlots(values, "AR_WORKER_REPOSITORY_SLOTS", 2), parallelSlots(values, "AR_WORKER_TRANSCRIPTION_SLOTS", 1),
                 Path.of(values["AR_WHISPER_BINARY"]?.takeIf(String::isNotBlank) ?: "/opt/homebrew/bin/whisper-cli"),
                 Path.of(values["AR_FFMPEG_BINARY"]?.takeIf(String::isNotBlank) ?: "/opt/homebrew/bin/ffmpeg"),
                 whisperModels(values["AR_WHISPER_MODELS"]),
@@ -95,8 +98,20 @@ data class WorkerConfig(
                 Duration.ofSeconds(slots(values, "AR_WORKER_HEARTBEAT_GRACE_SECONDS", 300).toLong()),
                 values["AR_MISTRAL_API_KEY"]?.takeIf(String::isNotBlank),
                 models("AR_MISTRAL_MODELS"),
+                providerLimits(values["AR_WORKER_PROVIDER_LIMITS"]),
             )
         }
+
+        internal fun providerLimits(value: String?): Map<String, Int> = value?.takeIf(String::isNotBlank)?.split(',')?.associate { item ->
+            val parts = item.trim().split('=', limit = 2)
+            require(parts.size == 2) { "AR_WORKER_PROVIDER_LIMITS must use vendor=count pairs." }
+            parts[0].trim() to (parts[1].trim().toIntOrNull() ?: error("Invalid provider slot count."))
+        }.orEmpty()
+
+        private fun parallelSlots(values: Map<String, String>, name: String, default: Int): Int =
+            values[name]?.takeIf(String::isNotBlank)?.let { raw ->
+                raw.toIntOrNull()?.takeIf { it in 0..256 } ?: error("$name must be between 0 and 256.")
+            } ?: default
 
         private fun slots(values: Map<String, String>, name: String, default: Int): Int =
             values[name]?.takeIf(String::isNotBlank)?.toIntOrNull()?.coerceIn(0, 32) ?: default
@@ -112,6 +127,7 @@ fun main(args: Array<String>) {
     SecretRedactor.configure(redactionValues(config.projectCredentials, config.claudeOauthToken) + listOfNotNull(config.mistralApiKey))
     config.workRoot.createDirectories()
     val mapper = jacksonObjectMapper().registerModule(JavaTimeModule())
+        .disable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
     val client = RuntimeClient(config, mapper)
     val bootId = UUID.randomUUID().toString()
     val providers = buildSet {

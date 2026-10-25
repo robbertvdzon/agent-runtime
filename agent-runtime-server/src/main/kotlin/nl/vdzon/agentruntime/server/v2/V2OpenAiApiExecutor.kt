@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service
 import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.net.URI
+import java.net.http.HttpHeaders
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
@@ -56,7 +57,12 @@ class V2OpenAiApiExecutor(
     internal fun run(job:StoredV2Job,attempt:StoredV2Attempt) {
         try {
             when(job.view.taskType){TaskType.STRUCTURED_GENERATION->structured(job,attempt);TaskType.TRANSCRIPTION->transcribe(job,attempt);TaskType.SPEECH_SYNTHESIS->speech.synthesize(job,attempt);else->error("Unsupported API task")}
-        } catch(error:ProviderFailure) { jobs.failAttempt(jobs.find(job.view.id)!!,attempt.view.id,error.code,error.message.orEmpty(),error.retryable)
+        } catch(error:ProviderFailure) {
+            error.limit?.let { jobs.appendProviderLimit(job.view.id,attempt.view.id,it) }
+            val limit=error.limit
+            val longLimit=limit?.kind in setOf(ProviderLimitKind.WEEK,ProviderLimitKind.MONTH)
+            val retryAt=limit?.let { listOfNotNull(it.resetsAt,it.retryAfterSeconds?.let { seconds -> it.observedAt.plusSeconds(seconds) }).maxOrNull() }
+            jobs.failAttempt(jobs.find(job.view.id)!!,attempt.view.id,error.code,error.message.orEmpty(),error.retryable && !longLimit,retryNotBefore=retryAt)
         } catch(error:Exception) { logger.error("API job {} failed",job.view.id,error);jobs.failAttempt(jobs.find(job.view.id)!!,attempt.view.id,"API_EXECUTION_ERROR",error.message?:"API execution failed",true) }
     }
 
@@ -111,10 +117,10 @@ class V2OpenAiApiExecutor(
         jobs.complete(job.view.id,attempt.view.id,result,null,null,usage.attemptSummary(attempt.view.id).usageQuality)
     }
 
-    private fun recordResponseMetadata(job:StoredV2Job,attempt:StoredV2Attempt,response:JsonNode) {
+    private fun recordResponseMetadata(job:StoredV2Job,attempt:StoredV2Attempt,response:JsonNode,complete:Boolean=true) {
         response.path("output").filter{it.path("type").asText()=="reasoning"}.flatMap{it.path("summary").toList()}.mapNotNull{it.path("text").asText().takeIf(String::isNotBlank)}.forEachIndexed{i,text->jobs.addEvent(job.view.id,attempt.view.id,EventType.LOG_MESSAGE,"CALLING_PROVIDER",null,LogKind.REASONING_SUMMARY,text,"openai-reasoning-$i",true,externalId="reasoning-$i")}
         val metrics=openAiUsageMetrics(response)
-        if(metrics.isNotEmpty())usage.append(job,attempt.view.id,AppendUsageRequest("internal","openai-${response.path("id").asText()}",Instant.now(),metrics,response.path("id").asText(),UsageSource.PROVIDER_REPORTED))
+        if(metrics.isNotEmpty())usage.append(job,attempt.view.id,AppendUsageRequest("internal","openai-${response.path("id").asText()}",Instant.now(),metrics,response.path("id").asText(),UsageSource.PROVIDER_REPORTED,complete=complete))
     }
 
     private fun uploadProviderFile(record:StoredV2Object):String {
@@ -126,7 +132,7 @@ class V2OpenAiApiExecutor(
     private fun postResponsesStream(payload:JsonNode,job:StoredV2Job,attempt:StoredV2Attempt):StreamedResponse {
         val request=HttpRequest.newBuilder(uri("/responses")).timeout(Duration.ofSeconds(job.request.executionTimeoutSeconds.toLong())).header("Authorization","Bearer ${properties.openAiApiKey}").header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(payload.toString())).build()
         val response=http.send(request,HttpResponse.BodyHandlers.ofInputStream())
-        if(response.statusCode() !in 200..299){val error=response.body().use{String(it.readNBytes(64*1024),StandardCharsets.UTF_8)};throw ProviderFailure("PROVIDER_ERROR","OpenAI returned HTTP ${response.statusCode()}: ${error.take(1000)}",response.statusCode()==429||response.statusCode()>=500)}
+        if(response.statusCode() !in 200..299){val error=response.body().use{String(it.readNBytes(64*1024),StandardCharsets.UTF_8)};throw providerHttpFailure("OpenAI",response.statusCode(),error,response.headers(),mapper)}
         val output=StringBuilder();var completed:JsonNode?=null;var sequence=0L
         response.body().bufferedReader().useLines{lines->lines.forEach{line->
             if(!line.startsWith("data: "))return@forEach
@@ -137,17 +143,22 @@ class V2OpenAiApiExecutor(
                 "response.reasoning_summary_text.delta"->{val text=event.path("delta").asText().take(8192);if(text.isNotBlank())jobs.addEvent(job.view.id,attempt.view.id,EventType.LOG_MESSAGE,"CALLING_PROVIDER",null,LogKind.REASONING_SUMMARY,text,event.path("item_id").asText("openai-reasoning"),false,externalId="openai-stream-${sequence++}")}
                 "response.reasoning_summary_text.done"->{val text=event.path("text").asText().take(8192);if(text.isNotBlank())jobs.addEvent(job.view.id,attempt.view.id,EventType.LOG_MESSAGE,"CALLING_PROVIDER",null,LogKind.REASONING_SUMMARY,text,event.path("item_id").asText("openai-reasoning"),true,externalId="openai-stream-${sequence++}")}
                 "response.completed"->completed=event.path("response")
-                "response.failed"->throw ProviderFailure("PROVIDER_ERROR",event.path("response").path("error").path("message").asText("OpenAI response failed."),true)
+                "response.failed"->{
+                    val failed=event.path("response")
+                    recordResponseMetadata(job,attempt,failed,complete=false)
+                    val failure=providerHttpFailure("OpenAI",200,failed.toString(),HttpHeaders.of(emptyMap()) { _,_ -> true },mapper)
+                    throw ProviderFailure(failure.code,"OpenAI response failed.",true,failure.limit)
+                }
             }
         }}
         return StreamedResponse(output.toString(),completed?:throw ProviderFailure("PROVIDER_STREAM_INCOMPLETE","OpenAI stream ended without response.completed.",true))
     }
     private fun deleteProviderFile(id:String){send(HttpRequest.newBuilder(uri("/files/$id")).DELETE().build())}
-    private fun send(builder:HttpRequest):String {val request=HttpRequest.newBuilder(builder.uri()).method(builder.method(),builder.bodyPublisher().orElse(HttpRequest.BodyPublishers.noBody())).timeout(builder.timeout().orElse(Duration.ofMinutes(30))).headers(*builder.headers().map().flatMap{(k,v)->v.map{k to it}}.flatMap{listOf(it.first,it.second)}.toTypedArray()).header("Authorization","Bearer ${properties.openAiApiKey}").build();val response=http.send(request,HttpResponse.BodyHandlers.ofInputStream());val bytes=response.body().use{it.readNBytes(64*1024*1024+1)};if(bytes.size>64*1024*1024)throw ProviderFailure("PROVIDER_RESPONSE_TOO_LARGE","OpenAI response exceeds the 64 MiB safety bound; use output artifacts.",false);val body=String(bytes,StandardCharsets.UTF_8);if(response.statusCode() !in 200..299)throw ProviderFailure("PROVIDER_ERROR","OpenAI returned HTTP ${response.statusCode()}: ${body.take(1000)}",response.statusCode()==429||response.statusCode()>=500);return body}
+    private fun send(builder:HttpRequest):String {val request=HttpRequest.newBuilder(builder.uri()).method(builder.method(),builder.bodyPublisher().orElse(HttpRequest.BodyPublishers.noBody())).timeout(builder.timeout().orElse(Duration.ofMinutes(30))).headers(*builder.headers().map().flatMap{(k,v)->v.map{k to it}}.flatMap{listOf(it.first,it.second)}.toTypedArray()).header("Authorization","Bearer ${properties.openAiApiKey}").build();val response=http.send(request,HttpResponse.BodyHandlers.ofInputStream());val bytes=response.body().use{it.readNBytes(64*1024*1024+1)};if(bytes.size>64*1024*1024)throw ProviderFailure("PROVIDER_RESPONSE_TOO_LARGE","OpenAI response exceeds the 64 MiB safety bound; use output artifacts.",false);val body=String(bytes,StandardCharsets.UTF_8);if(response.statusCode() !in 200..299)throw providerHttpFailure("OpenAI",response.statusCode(),body,response.headers(),mapper);return body}
     private fun uri(path:String)=URI.create(properties.openAiApiBaseUrl.removeSuffix("/")+path)
 }
 
-class ProviderFailure(val code:String,message:String,val retryable:Boolean):IOException(message)
+class ProviderFailure(val code:String,message:String,val retryable:Boolean,val limit:ProviderLimitObservation?=null):IOException(message)
 
 internal fun openAiReasoningOptions(mapper:ObjectMapper):JsonNode =
     mapper.createObjectNode().put("summary","auto")

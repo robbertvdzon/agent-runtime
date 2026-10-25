@@ -6,6 +6,7 @@ Raw reasoning and export configuration never leave the execution container.
 """
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import signal
@@ -105,6 +106,19 @@ def usage_events(session):
             yield {"type": "mistral.usage", "request_id": action, "session_id": json.loads((Path(session) / "meta.json").read_text())["session_id"], "usage": usage}
 
 
+def limit_events(session):
+    for record in records(session, "completion_failed"):
+        if record.get("type") != "action_result":
+            continue
+        result = record.get("payload", {}).get("result", {})
+        if result.get("type") != "completion_failed":
+            continue
+        event = limit_event({"error": result.get("error")})
+        if event:
+            event["request_id"] = result.get("action_id")
+            yield event
+
+
 def public_event(entry):
     """Convert visible messages/tools to the existing provider-neutral Codex envelope."""
     if (entry.get("outcome") or {}).get("type") == "discarded":
@@ -125,10 +139,48 @@ def public_event(entry):
     return None
 
 
+def limit_event(export):
+    """Only provider failures establish limits; token_limit is a local session cap.
+
+    Vibe error strings can establish an unknown limit. Only explicit period codes
+    establish a week/month cap. Never publish raw error text or configuration.
+    """
+    error = export.get("error")
+    if not error:
+        return None
+    detail = error if isinstance(error, dict) else {}
+    extra = detail.get("details") if isinstance(detail.get("details"), dict) else {}
+    text = json.dumps(error).lower()
+    code = str(detail.get("code", ""))
+    status = detail.get("status_code", detail.get("status", extra.get("httpStatus")))
+    if status not in (429,) and not any(word in text for word in ("429", "quota", "rate limit", "rate_limit")):
+        return None
+    kind = {"weekly_quota_exceeded": "WEEK", "monthly_quota_exceeded": "MONTH"}.get(code, "UNKNOWN")
+    event = {"type": "mistral.limit", "kind": kind}
+    if isinstance(status, int) and 100 <= status <= 599:
+        event["http_status"] = status
+    elif "429" in text:
+        event["http_status"] = 429
+    if re.fullmatch(r"[A-Za-z0-9_.:-]{1,120}", code):
+        event["provider_code"] = code
+    retry = detail.get("retry_after_seconds")
+    if isinstance(retry, int) and not isinstance(retry, bool) and 0 <= retry <= 31536000:
+        event["retry_after_seconds"] = retry
+    reset = detail.get("resets_at")
+    if isinstance(reset, (int, str)):
+        event["resets_at"] = reset
+    return event
+
+
 def failure_code(export, exit_code):
-    error = json.dumps(export.get("error", "")).lower()
-    if exit_code == 3 or export.get("outcome") == "time_limit":
+    outcome = export.get("outcome")
+    local_limits = {"token_limit": "SESSION_TOKEN_LIMIT", "turn_limit": "SESSION_TURN_LIMIT",
+                    "price_limit": "SESSION_PRICE_LIMIT", "length": "MODEL_OUTPUT_LIMIT"}
+    if outcome in local_limits:
+        return local_limits[outcome]
+    if outcome in ("deadline", "time_limit", "terminated"):
         return "EXECUTION_TIMEOUT"
+    error = json.dumps(export.get("error", "")).lower()
     if any(word in error for word in ("429", "quota", "rate limit", "rate_limit", "401", "unauthorized", "403", "503", "overloaded")):
         return "PROVIDER_UNAVAILABLE"
     return "ENGINE_FAILED"
@@ -163,6 +215,7 @@ def run(input_dir=Path("/job/input"), output_dir=Path("/job/output"), workdir=Pa
             'active_model = "glm-5-3"\nenable_update_checks = false\nenable_auto_update = false\n'
             'enable_telemetry = false\nenable_otel = false\nenable_subagents = false\n'
             'enable_connectors = false\nenable_mcp = false\n'
+            'api_retry_max_elapsed_time = 0.0\n'
             '[session_logging]\ngenerate_titles = false\n'
             '[[models]]\nname = "zai-glm-5-3"\nalias = "glm-5-3"\nprovider = "mistral"\n'
             'max_output_tokens = 65536\nthinking = "high"\n'
@@ -187,8 +240,14 @@ def run(input_dir=Path("/job/input"), output_dir=Path("/job/output"), workdir=Pa
         previous = signal.signal(signal.SIGTERM, stop)
         final = ""
         emitted_usage = set()
+        emitted_limits = set()
 
         def read_usage(session):
+            for event in limit_events(session):
+                key = event.get("request_id")
+                if key not in emitted_limits:
+                    emit(event)
+                    emitted_limits.add(key)
             for event in usage_events(session):
                 if event['request_id'] not in emitted_usage:
                     emit(event)
@@ -235,7 +294,10 @@ def run(input_dir=Path("/job/input"), output_dir=Path("/job/output"), workdir=Pa
         usage_complete = bool(emitted_usage) and steps == len(emitted_usage) and not interrupted
         emit({"type": "mistral.completed", "session_id": export.get("session_id"), "complete": usage_complete})
         if interrupted or exit_code != 0 or export.get("outcome") != "finished":
-            return failed(failure_code(export, 3 if interrupted else exit_code))
+            limit = limit_event(export)
+            if limit:
+                emit(limit)
+            return failed("EXECUTION_TIMEOUT" if interrupted else failure_code(export, exit_code))
         effective = export.get("config", {}).get("active_model")
         if effective != model:
             return failed("ENGINE_FAILED")

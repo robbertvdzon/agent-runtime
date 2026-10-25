@@ -26,12 +26,17 @@ data class RegisteredV2WorkerDetails(
 class V2WorkerStore(private val jdbc:JdbcTemplate,private val mapper:ObjectMapper) {
     fun register(request:WorkerRegistrationRequest):WorkerView {
         val now=Instant.now()
-        val updated=jdbc.update("""UPDATE runtime_v2_worker SET boot_id=?,executors_json=?,environment_keys_json=?,repository_aliases_json=?,max_concurrency=?,versions_json=?,last_heartbeat_at=? WHERE worker_id=?""",
-            request.bootId,mapper.writeValueAsString(request.executors),mapper.writeValueAsString(request.availableEnvironmentKeys.filter(ExecutionCredentialPolicy::allows)),mapper.writeValueAsString(request.availableRepositoryAliases),request.maxConcurrency,mapper.writeValueAsString(request.versions),V2JobStore.utc(now),request.workerId)
-        if(updated==0)jdbc.update("""INSERT INTO runtime_v2_worker(worker_id,boot_id,executors_json,environment_keys_json,repository_aliases_json,max_concurrency,versions_json,last_heartbeat_at,registered_at) VALUES (?,?,?,?,?,?,?,?,?)""",
-            request.workerId,request.bootId,mapper.writeValueAsString(request.executors),mapper.writeValueAsString(request.availableEnvironmentKeys.filter(ExecutionCredentialPolicy::allows)),mapper.writeValueAsString(request.availableRepositoryAliases),request.maxConcurrency,mapper.writeValueAsString(request.versions),V2JobStore.utc(now),V2JobStore.utc(now))
-        return WorkerView(request.workerId,request.bootId,request.executors,request.availableRepositoryAliases,request.maxConcurrency,now)
+        val updated=jdbc.update("""UPDATE runtime_v2_worker SET boot_id=?,executors_json=?,environment_keys_json=?,repository_aliases_json=?,max_concurrency=?,versions_json=?,provider_concurrency_json=?,last_heartbeat_at=? WHERE worker_id=?""",
+            request.bootId,mapper.writeValueAsString(request.executors),mapper.writeValueAsString(request.availableEnvironmentKeys.filter(ExecutionCredentialPolicy::allows)),mapper.writeValueAsString(request.availableRepositoryAliases),request.maxConcurrency,mapper.writeValueAsString(request.versions),mapper.writeValueAsString(request.providerConcurrencyLimits),V2JobStore.utc(now),request.workerId)
+        if(updated==0)jdbc.update("""INSERT INTO runtime_v2_worker(worker_id,boot_id,executors_json,environment_keys_json,repository_aliases_json,max_concurrency,versions_json,provider_concurrency_json,last_heartbeat_at,registered_at) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            request.workerId,request.bootId,mapper.writeValueAsString(request.executors),mapper.writeValueAsString(request.availableEnvironmentKeys.filter(ExecutionCredentialPolicy::allows)),mapper.writeValueAsString(request.availableRepositoryAliases),request.maxConcurrency,mapper.writeValueAsString(request.versions),mapper.writeValueAsString(request.providerConcurrencyLimits),V2JobStore.utc(now),V2JobStore.utc(now))
+        return WorkerView(request.workerId,request.bootId,request.executors,request.availableRepositoryAliases,request.maxConcurrency,now,request.providerConcurrencyLimits)
     }
+    fun lock(workerId: String) { jdbc.queryForList("SELECT worker_id FROM runtime_v2_worker WHERE worker_id=? FOR UPDATE", workerId) }
+    fun providerLimits(workerId: String): Map<String, Int> = jdbc.query("SELECT provider_concurrency_json FROM runtime_v2_worker WHERE worker_id=?",
+        { rs, _ -> mapper.readValue<Map<String, Int>>(rs.getString(1), mapper.typeFactory.constructMapType(Map::class.java, String::class.java, Int::class.javaObjectType)) }, workerId).firstOrNull().orEmpty()
+    fun activeProviderCount(workerId: String, bootId: String, vendor: String): Int = jdbc.queryForObject(
+        "SELECT COUNT(*) FROM runtime_v2_attempt WHERE worker_id=? AND worker_boot_id=? AND status='RUNNING' AND vendor_id=?", Int::class.java, workerId, bootId, vendor) ?: 0
     fun bootId(workerId:String):String?=jdbc.query("SELECT boot_id FROM runtime_v2_worker WHERE worker_id=?",{rs,_->rs.getString(1)},workerId).firstOrNull()
     fun activeCount(workerId:String,bootId:String):Int=jdbc.queryForObject("SELECT COUNT(*) FROM runtime_v2_attempt WHERE worker_id=? AND worker_boot_id=? AND status='RUNNING'",Int::class.java,workerId,bootId)?:0
     fun maxConcurrency(workerId:String):Int=jdbc.queryForObject("SELECT max_concurrency FROM runtime_v2_worker WHERE worker_id=?",Int::class.java,workerId)?:0
@@ -60,6 +65,7 @@ class V2WorkerStore(private val jdbc:JdbcTemplate,private val mapper:ObjectMappe
             WorkerView(
                 rs.getString("worker_id"), rs.getString("boot_id"), executors,
                 repositoryAliases, rs.getInt("max_concurrency"), V2JobStore.instant(rs.getObject("last_heartbeat_at")),
+                mapper.readValue(rs.getString("provider_concurrency_json"),mapper.typeFactory.constructMapType(Map::class.java,String::class.java,Int::class.javaObjectType)),
             ),
             environmentKeys,
             repositoryAliases,
@@ -74,22 +80,31 @@ class V2WorkerService(
     private val objects:V2ObjectStore,private val uploads:V2UploadService,private val usage:V2UsageStore,private val jobService:V2JobService,
     private val publications:V2RepositoryPublicationStore,
 ) {
-    fun register(request:WorkerRegistrationRequest)=workers.register(request)
+    fun register(request:WorkerRegistrationRequest): WorkerView {
+        if (request.providerConcurrencyLimits.any { (vendor, count) ->
+                !vendor.matches(Regex("[a-z][a-z0-9-]{0,99}")) || count !in 1..256 || request.executors.none { it.vendorId==vendor }
+            }) throw ApiException("INVALID_PROVIDER_CAPACITY", "Provider limits must name registered vendors with capacity between 1 and 256.")
+        return workers.register(request)
+    }
 
     @Synchronized
     @Transactional
     fun claim(workerId:String,request:ClaimRequest):ClaimedJob? {
+        workers.lock(workerId)
         if(workers.bootId(workerId)!=request.bootId)throw ApiException("WORKER_BOOT_MISMATCH","Worker must register this boot ID.",HttpStatus.CONFLICT)
         if(request.executors!=workers.executors(workerId))throw ApiException("WORKER_CAPABILITY_MISMATCH","Claim capabilities must equal the registered capabilities.",HttpStatus.CONFLICT)
         workers.touch(workerId)
         if(workers.activeCount(workerId,request.bootId)>=workers.maxConcurrency(workerId))return null
         val environmentKeys=workers.environmentKeys(workerId)
         val repositoryAliases=workers.repositoryAliases(workerId)
+        val providerLimits=workers.providerLimits(workerId)
+        val activeByProvider=providerLimits.keys.associateWith { workers.activeProviderCount(workerId,request.bootId,it) }
         val job=jobs.queued().firstOrNull{candidate->
+            (providerLimits[candidate.view.execution.vendorId]?.let { activeByProvider.getValue(candidate.view.execution.vendorId) < it } != false) &&
             request.jobKinds?.contains(candidate.view.jobKind)!=false && request.taskTypes?.contains(candidate.view.taskType)!=false &&
             request.executors.any{cap->cap.vendorId==candidate.view.execution.vendorId&&cap.model==candidate.view.execution.model&&cap.mode==candidate.view.execution.mode&&candidate.view.taskType in cap.taskTypes} &&
                 candidate.request.environmentKeys.all(environmentKeys::contains) &&
-                candidate.request.repositoryCheckout?.alias?.let(repositoryAliases::contains) != false
+                candidate.request.repositoryCheckout?.alias?.let(repositoryAliases::contains) != false && jobs.lockQueued(candidate.view.id)
         } ?: return null
         val token=UUID.randomUUID().toString()+UUID.randomUUID().toString();val now=Instant.now();val lease=now.plusSeconds(properties.leaseSeconds);val deadline=now.plusSeconds(job.request.executionTimeoutSeconds.toLong())
         val attempt=jobs.createAttempt(job,workerId,request.bootId,token,lease,deadline)
@@ -141,6 +156,28 @@ class V2WorkerService(
         }
         usage.append(job,attemptId,request)
     }
+    @Transactional
+    fun appendProviderLimit(workerId: String, jobId: String, attemptId: String, request: AppendProviderLimitRequest) {
+        // Like usage, late evidence may be appended without granting result/heartbeat rights.
+        val attempt=jobs.attempt(attemptId) ?: throw ApiException("ATTEMPT_FENCED", "Attempt is unavailable.", HttpStatus.CONFLICT)
+        val endedAt=attempt.view.completedAt ?: attempt.attemptDeadline
+        if (attempt.workerId!=workerId || attempt.view.jobId!=jobId ||
+            !MessageDigest.isEqual(attempt.fencingTokenHash.toByteArray(),V2JobStore.hash(request.fencingToken).toByteArray()) ||
+            !Instant.now().isBefore(endedAt.plusSeconds(86400))) {
+            throw ApiException("ATTEMPT_FENCED", "Limit reporting credentials have expired or are invalid.", HttpStatus.CONFLICT)
+        }
+        validateProviderLimit(attempt, request.observation)
+        jobs.appendProviderLimit(jobId,attemptId,request.observation)
+    }
+
+    private fun validateProviderLimit(attempt: StoredV2Attempt, observation: ProviderLimitObservation) {
+        if (observation.observedAt.isBefore(attempt.view.startedAt) || observation.observedAt.isAfter(Instant.now().plusSeconds(60)) ||
+            observation.observedAt.isAfter(minOf(attempt.view.completedAt ?: attempt.attemptDeadline,attempt.attemptDeadline).plusSeconds(60)) ||
+            observation.resetsAt?.isAfter(observation.observedAt.plusSeconds(31_536_000))==true) {
+            throw ApiException("INVALID_PROVIDER_LIMIT", "Limit must have been observed during this attempt.")
+        }
+    }
+
     fun appendLog(workerId:String,jobId:String,attemptId:String,request:AppendLogRequest){authenticate(workerId,jobId,attemptId,request.fencingToken);jobs.addEvent(jobId,attemptId,EventType.LOG_MESSAGE,"EXECUTING",null,request.kind,request.text,request.streamId,request.final,externalId=request.eventId)}
     @Transactional fun submit(workerId:String,jobId:String,attemptId:String,request:SubmitResultRequest):OutputRejectedResponse? {
         val(job,_)=authenticate(workerId,jobId,attemptId,request.fencingToken)
@@ -193,5 +230,15 @@ class V2WorkerService(
         val discarded=publications.discard(jobId,request.commitSha)?:throw ApiException("REPOSITORY_PUBLICATION_AMBIGUOUS","Publication intent cannot be discarded.",HttpStatus.CONFLICT)
         uploads.discardAttemptOutputs(jobId,discarded.view.attemptId)
     }
-    fun fail(workerId:String,jobId:String,attemptId:String,request:FailAttemptRequest){val(job,_)=authenticate(workerId,jobId,attemptId,request.fencingToken);val hasPublication=publications.find(jobId)!=null;if(!hasPublication)uploads.discardAttemptOutputs(jobId,attemptId);jobs.failAttempt(job,attemptId,request.errorCode,request.message,request.retryable,hasPublication&&request.retryable)}
+    @Transactional
+    fun fail(workerId:String,jobId:String,attemptId:String,request:FailAttemptRequest) {
+        val(job,attempt)=authenticate(workerId,jobId,attemptId,request.fencingToken)
+        request.providerLimits.forEach { validateProviderLimit(attempt,it); jobs.appendProviderLimit(jobId,attemptId,it) }
+        val blocking=jobs.providerLimits(attemptId).filter { it.blocked }
+        val longLimit=blocking.any { it.kind in setOf(ProviderLimitKind.WEEK,ProviderLimitKind.MONTH) }
+        val notBefore=blocking.mapNotNull { limit -> listOfNotNull(limit.resetsAt,limit.retryAfterSeconds?.let { limit.observedAt.plusSeconds(it) }).maxOrNull() }.maxOrNull()
+        val hasPublication=publications.find(jobId)!=null
+        if(!hasPublication)uploads.discardAttemptOutputs(jobId,attemptId)
+        jobs.failAttempt(job,attemptId,request.errorCode,request.message,request.retryable && !longLimit,hasPublication&&request.retryable,retryNotBefore=notBefore)
+    }
 }
