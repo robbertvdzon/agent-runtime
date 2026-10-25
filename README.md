@@ -169,10 +169,23 @@ Een worker met uitsluitend deze Mistral-configuratie kan zonder v1-provider star
 
 Het execution-image bevat Vibe **3.0.2** en een eigen adapter. Die begrenst model-output op
 65.536 tokens, de sessie op 3.500.000 tokens en 60 modelbeurten, en gebruikt de harde jobdeadline.
-Een `post_agent`-hook valideert JSON en het volledige responseschema en geeft concrete fouten
-binnen dezelfde sessie terug, met maximaal drie herstelbeurten. De adapter valideert het
-uiteindelijke resultaat opnieuw: Vibe kan na de herstelgrens ongeldige uitvoer als `finished`
-melden. Daarna blijft ook de servervalidatie verplicht. De adapter ondersteunt alleen GLM-5.3.
+Een `post_agent`-hook bewaart het expliciete conceptantwoord voordat een CLI-slotmelding het
+kan vervangen. De adapter normaliseert uitsluitend een volledig JSON-codeblok en valideert JSON
+en het volledige responseschema. Bij fouten volgen maximaal drie afzonderlijke Vibe-herstelruns
+via hetzelfde model en abonnement, elk maximaal 60 seconden en twee modelbeurten. Alle tools
+zijn daarbij uitgeschakeld; de herstelrun krijgt alleen het concept, schema en validatieregels,
+in een lege werkdirectory. Geldige velden blijven waar het schema dit toelaat behouden.
+Onderzoek en herstel delen de harde jobdeadline en het gemeten budget van 3.500.000 tokens.
+Een ontbrekend antwoord of een uitvoeringsfout start geen nieuw onderzoek. Servervalidatie
+blijft verplicht. De adapter ondersteunt alleen GLM-5.3.
+
+`mistral.phase` toont onderzoek en herstel in het transcript. `mistral.diagnostic` bewaart per run
+de fase, exitcode, bekende Vibe-eindstatus, bekende providerfoutcode/HTTP-status en een vaste
+foutcategorie. Stderr wordt tijdelijk begrensd gelezen voor classificatie, maar nooit als tekst
+gepubliceerd. Ruwe reasoning, configuratie en onbekende foutteksten worden niet opgeslagen.
+Concepten blijven tijdens herstel begrensd in de attemptdirectory; ze worden niet als geslaagd
+resultaat gepubliceerd. Na succes wordt het tijdelijke concept verwijderd. Diagnostiek en
+verbruik blijven via de bestaande runtime-events beschikbaar nadat de worker de directory opruimt.
 
 Verbruik wordt per voltooide modelaanroep uit het Vibe-journal gelezen, inclusief afgekeurde
 antwoorden en herstelbeurten. De export bevat niet betrouwbaar de som daarvan. Er zijn geen

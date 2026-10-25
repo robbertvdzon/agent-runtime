@@ -357,3 +357,18 @@ webzoekfunctie. Inputbestanden, schemaherstel, artifacts en deadlines volgen dez
 workerketen als andere CLI-providers. `LOCAL` blijft de native transcriptie-uitvoering.
 De server-side API-executor claimt deze jobs niet; de geregistreerde Ollama-worker doet dat.
 Zie [workerconfiguratie](../README.md#ollama-via-codex-cli).
+
+### Mistral: concept, formaatherstel en diagnostiek
+
+De Mistral-adapter bewaart het expliciete finale antwoord uit de `post_agent`-hook. Als het
+antwoord het JSON-schema niet haalt, voert hij maximaal drie afzonderlijke herstelruns uit
+met hetzelfde model, zonder tools of de oorspronkelijke bronbestanden. Herstel krijgt maximaal
+60 seconden per run binnen de oorspronkelijke jobdeadline. Geldige velden worden bij eenvoudige
+schema's behouden; ieder hersteld document wordt opnieuw volledig gevalideerd.
+
+Dit blijft één technische attempt: extra modelaanroepen zijn zichtbaar via `mistral.phase` en
+worden samen met het onderzoek in de usage geteld. Een uitvoeringsfout wordt niet als een
+JSON-fout hersteld. `mistral.diagnostic` bewaart bekende exit-/providerstatussen en een vaste
+foutcategorie. Er wordt geen ruwe stderr, reasoning, providerconfiguratie of fouttekst gelogd.
+Zonder voldoende bewijs blijft de fout `ENGINE_FAILED`; context- en verbindingsfouten kunnen
+specifieker worden geclassificeerd. De afwezigheid van een limietevent bewijst geen vrij quotum.
