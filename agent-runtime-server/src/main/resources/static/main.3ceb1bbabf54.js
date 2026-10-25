@@ -48154,7 +48154,7 @@ l=t.a.a(B.aM.jU(A.a5g(A.a52(h.e)).fo(h.w),null))
 h=J.cm(l,"buildId")
 j=h==null?null:J.bl(h)
 k=j==null?"":j
-if(J.bW(k)===0||J.c(k,"f139fd6893055f74")){s=1
+if(J.bW(k)===0||J.c(k,"043cf306c7b9fd28")){s=1
 break}n.ay=!0
 s=8
 return A.K(A.v3(),$async$rm)
@@ -48795,6 +48795,7 @@ if(o==null)o=""
 l=J.cm(d.d.h(0,b),a)
 A:{if("CLAUDE"===l||"ANTHROPIC"===l){n="Claude"
 break A}if("CODEX"===l||"OPENAI"===l){n="Codex"
+break A}if("MISTRAL"===l){n="Mistral"
 break A}n="Agent"
 break A}k=d.d.h(0,a3)
 if((k==null?c:J.cm(k,a3))==null)k=c

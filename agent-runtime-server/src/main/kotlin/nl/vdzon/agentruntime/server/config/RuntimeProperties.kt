@@ -36,7 +36,7 @@ data class RuntimeProperties(
     var productFactoryProviders: String = "CODEX,CLAUDE,MOCKED",
     var softwareFactoryProviders: String = "CODEX,CLAUDE,MOCKED",
     var hkhAutopilotProviders: String = "CODEX,CLAUDE,MOCKED",
-    var hkhProviders: String = "CODEX,CLAUDE,MOCKED",
+    var hkhProviders: String = "CODEX,CLAUDE,MISTRAL,MOCKED",
     var pvddProviders: String = "CODEX",
     var productFactoryModels: String = "*",
     var softwareFactoryModels: String = "*",

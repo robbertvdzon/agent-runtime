@@ -43,3 +43,16 @@ wanneer het antwoord op een geslaagde insert onderweg verloren gaat.
 Uitrol vereist de nieuwe server, execution-image en worker-JAR. Rol eerst de
 server uit en werk daarna image en worker bij. Historische pogingen zonder
 opgeslagen verbruik worden niet achteraf met gefingeerde bedragen aangevuld.
+
+## Mistral Vibe
+
+De gepinde Vibe 3.0.2-adapter leest iedere voltooide modelaanroep uit het sessiejournal.
+Ook door de JSON-hook afgekeurde antwoorden tellen mee; action-ID's voorkomen dubbeltelling
+bij herhaald uitlezen. `input_tokens` bevat cached input: de worker registreert het verschil
+als INPUT_TOKENS en cached input afzonderlijk als CACHED_INPUT_TOKENS. De sessie-ID wordt
+providerRequestId. De samenvatting uit export.json wordt niet als sessietotaal gebruikt.
+
+Verbruik is alleen compleet wanneer alle door Vibe gemelde modelbeurten zijn aangetroffen.
+Ontbrekende/afgebroken telemetry blijft gedeeltelijk of onbekend. Subagents, automatische
+sessietitels en externe connectoren zijn in deze adapter uitgeschakeld. Er zijn voor Mistral
+geen prijsregels toegevoegd: onbekende kosten zijn geen nulbedrag en geen API-fallback.

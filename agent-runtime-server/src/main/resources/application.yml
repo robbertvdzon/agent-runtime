@@ -61,7 +61,7 @@ agent-runtime:
   product-factory-providers: ${AR_PRODUCT_FACTORY_PROVIDERS:CODEX,CLAUDE,MOCKED}
   software-factory-providers: ${AR_SOFTWARE_FACTORY_PROVIDERS:CODEX,CLAUDE,MOCKED}
   hkh-autopilot-providers: ${AR_HKH_AUTOPILOT_PROVIDERS:CODEX,CLAUDE,MOCKED}
-  hkh-providers: ${AR_HKH_PROVIDERS:CODEX,CLAUDE,MOCKED}
+  hkh-providers: ${AR_HKH_PROVIDERS:CODEX,CLAUDE,MISTRAL,MOCKED}
   pvdd-providers: ${AR_PVDD_PROVIDERS:CODEX,CLAUDE}
   product-factory-models: ${AR_PRODUCT_FACTORY_MODELS:*}
   software-factory-models: ${AR_SOFTWARE_FACTORY_MODELS:*}

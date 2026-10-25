@@ -11,6 +11,25 @@ import org.junit.jupiter.api.io.TempDir
 class ExecutionUsageTest {
     private val mapper = jacksonObjectMapper()
 
+    @Test fun `Mistral accounts for every request including hook retries and deduplicates journal replays`() {
+        val requests = mutableListOf<AppendUsageRequest>()
+        val reporter = ExecutionUsageReporter("fence", { requests += it })
+        val round = reporter.round("mistral", mapper)
+        val first = """{"type":"mistral.usage","request_id":"first","session_id":"session","usage":{"input_tokens":100,"cached_input_tokens":60,"output_tokens":10}}"""
+        round.observe(first)
+        round.observe(first)
+        round.observe("""{"type":"mistral.usage","request_id":"repair","session_id":"session","usage":{"input_tokens":200,"cached_input_tokens":150,"output_tokens":20}}""")
+        round.observe("""{"type":"mistral.completed","session_id":"session","complete":true}""")
+        round.finish(9999, 9999)
+        reporter.finish()
+        fun total(metric: UsageMetric) = requests.flatMap { it.metrics }.filter { it.metric == metric }.sumOf { it.quantity.toLong() }
+        assertThat(total(UsageMetric.INPUT_TOKENS)).isEqualTo(90L)
+        assertThat(total(UsageMetric.CACHED_INPUT_TOKENS)).isEqualTo(210L)
+        assertThat(total(UsageMetric.OUTPUT_TOKENS)).isEqualTo(30L)
+        assertThat(requests.dropLast(1).map { it.providerRequestId }.toSet()).containsExactly("session")
+        assertThat(requests.last().complete).isTrue()
+    }
+
     @Test fun `transcript can be tailed repeatedly without blocking provider usage on failed log delivery`(@TempDir root: Path) {
         ExecutionTranscript(root.resolve("transcript.log")).use { transcript ->
             val lines = mutableListOf<String>()

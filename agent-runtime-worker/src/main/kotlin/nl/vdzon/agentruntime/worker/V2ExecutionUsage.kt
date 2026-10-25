@@ -120,11 +120,30 @@ internal class ProviderUsageTracker(private val vendor: String, private val mapp
     private val cumulative = mutableMapOf<UsageMetric, Long>()
     private var currentMessage: String? = null
     private var nestedUsage = false
+    var providerRequestId: String? = null
+        private set
     var complete = false
         private set
 
     fun observe(line: String) {
         val event = runCatching { mapper.readTree(line) }.getOrNull() ?: return
+        if (vendor == "mistral") {
+            providerRequestId = event.path("session_id").asText().takeIf { it.isNotBlank() } ?: providerRequestId
+            when (event.path("type").asText()) {
+                "mistral.usage" -> {
+                    val id = event.path("request_id").asText().takeIf { it.isNotBlank() } ?: return
+                    val usage = event.path("usage")
+                    val cached = usage.count("cached_input_tokens")
+                    merge(messages.getOrPut(id) { mutableMapOf() }, mapOf(
+                        UsageMetric.INPUT_TOKENS to (usage.count("input_tokens") - cached).coerceAtLeast(0),
+                        UsageMetric.CACHED_INPUT_TOKENS to cached,
+                        UsageMetric.OUTPUT_TOKENS to usage.count("output_tokens"),
+                    ))
+                }
+                "mistral.completed" -> complete = event.path("complete").asBoolean(false)
+            }
+            return
+        }
         if (vendor == "openai") {
             if (event.path("type").asText() == "turn.completed" && event.path("usage").isObject) {
                 val usage = event.path("usage")
@@ -225,7 +244,7 @@ internal class ExecutionUsageReporter(
             if (totals.isEmpty()) return
             val delta = totals.mapValues { (metric, count) -> count - (reported[metric] ?: 0) }
             if (reported.isEmpty() || delta.values.any { it > 0 }) {
-                enqueue(delta, UsageSource.PROVIDER_REPORTED, false)
+                enqueue(delta, UsageSource.PROVIDER_REPORTED, false, tracker.providerRequestId)
                 reported = totals
             }
         }
@@ -248,9 +267,9 @@ internal class ExecutionUsageReporter(
         return Round(ProviderUsageTracker(vendor, mapper))
     }
 
-    @Synchronized private fun enqueue(counts: Map<UsageMetric, Long>, source: UsageSource, complete: Boolean) {
+    @Synchronized private fun enqueue(counts: Map<UsageMetric, Long>, source: UsageSource, complete: Boolean, providerRequestId: String? = null) {
         val metrics = counts.map { (metric, quantity) -> UsageMetricValue(metric, quantity.toString(), UsageUnit.TOKEN) }
-        pending.addLast(AppendUsageRequest(fencingToken, "execution-usage-${++sequence}", Instant.now(), metrics, source = source, complete = complete))
+        pending.addLast(AppendUsageRequest(fencingToken, "execution-usage-${++sequence}", Instant.now(), metrics, providerRequestId = providerRequestId, source = source, complete = complete))
     }
 
     fun finish() {

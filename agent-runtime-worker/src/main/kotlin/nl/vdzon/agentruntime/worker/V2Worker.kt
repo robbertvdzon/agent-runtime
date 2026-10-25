@@ -38,6 +38,9 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
         config.advertisedModels[Provider.CLAUDE].orEmpty().forEach { model ->
             add(ExecutorCapability("anthropic", model, ExecutionMode.SUBSCRIPTION, setOf(TaskType.STRUCTURED_GENERATION, TaskType.REPOSITORY_AGENT)))
         }
+        if (!config.mistralApiKey.isNullOrBlank()) config.mistralModels.forEach { model ->
+            add(ExecutorCapability("mistral", model, ExecutionMode.SUBSCRIPTION, setOf(TaskType.STRUCTURED_GENERATION)))
+        }
         V2LocalTranscriber.availableModels(config).forEach { model ->
             add(ExecutorCapability("local", model, ExecutionMode.LOCAL, setOf(TaskType.TRANSCRIPTION)))
         }
@@ -110,6 +113,11 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
             val container = runContainer(claim, workspace, task, round, executionDeadline, usage)
             if (container.timedOut && lastValidatedResult != null) {
                 return AgentRoundsOutcome(lastValidatedResult, timeoutResult(lastVerificationResult, round))
+            }
+            if (container.exitCode != 0 && claim.job.execution.vendorId == "mistral") {
+                val status = runCatching { mapper.readTree(task.resolve("output/mistral-status.json").toFile()) }.getOrNull()
+                val code = status?.path("code")?.asText()?.takeIf { it in setOf("MODEL_OUTPUT_NOT_JSON", "MODEL_OUTPUT_SCHEMA_INVALID", "PROVIDER_UNAVAILABLE", "EXECUTION_TIMEOUT", "ENGINE_FAILED") } ?: "ENGINE_FAILED"
+                throw JobFailure(if (container.timedOut) "EXECUTION_TIMEOUT" else code, "Mistral execution failed: $code.", code == "PROVIDER_UNAVAILABLE" || container.timedOut)
             }
             if (container.exitCode != 0) throw JobFailure(if (container.timedOut) "VERIFICATION_TIMEOUT" else "ENGINE_FAILED", "Provider process exited with code ${container.exitCode}.", !container.timedOut && container.exitCode in setOf(124, 137))
             repositoryState?.let { repositories.verifyAgentDidNotMutate(it, workspace) }
@@ -272,7 +280,7 @@ class V2WorkerExecutor(private val config: WorkerConfig, private val mapper: Obj
         val resultPath = task.resolve("output/result.json")
         if (!resultPath.isRegularFile() || resultPath.fileSize() > 1024L * 1024) throw JobFailure("RESULT_TOO_LARGE", "Provider did not produce a bounded result.json.", true)
         val result = runCatching { mapper.readTree(resultPath.toFile()) }.getOrElse { throw JobFailure("MODEL_OUTPUT_NOT_JSON", "Provider result is not valid JSON.", true) }
-        if (SecretRedactor.contains(result.toString(), selectedSensitiveValues(claim.request.environmentKeys, config.projectCredentials))) {
+        if (SecretRedactor.contains(result.toString(), listOfNotNull(config.mistralApiKey) + selectedSensitiveValues(claim.request.environmentKeys, config.projectCredentials))) {
             throw JobFailure("SECRET_EXPOSURE_BLOCKED", "Provider result contained a selected sensitive value.", false)
         }
         return result
@@ -411,8 +419,16 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
 
     private fun runContainer(claim: ClaimedJob, workspace: Path, task: Path, agentRound: Int, executionDeadline: Instant, usage: ExecutionUsageReporter): ContainerRunResult {
         val provider = claim.job.execution.vendorId
-        val engine = if (provider == "openai") "CODEX" else "CLAUDE"
-        val credentials = if (engine == "CODEX") config.codexCredentials else config.claudeCredentials
+        val engine = when (provider) {
+            "openai" -> "CODEX"
+            "anthropic" -> "CLAUDE"
+            "mistral" -> "MISTRAL"
+            else -> throw JobFailure("EXECUTION_NOT_SUPPORTED", "Unknown execution vendor.", false)
+        }
+        if (engine == "MISTRAL" && (claim.job.tenantId != "hkh" || claim.job.jobKind != JobKind.APPLICATION_WORK || claim.job.taskType != TaskType.STRUCTURED_GENERATION || claim.job.execution.mode != ExecutionMode.SUBSCRIPTION))
+            throw JobFailure("EXECUTION_NOT_SUPPORTED", "Mistral is restricted to HKH structured subscription jobs.", false)
+        if (engine == "MISTRAL" && config.mistralApiKey.isNullOrBlank()) throw JobFailure("PROVIDER_UNAVAILABLE", "Mistral subscription credentials are unavailable.", true)
+        val credentials = when (engine) { "CODEX" -> config.codexCredentials; "CLAUDE" -> config.claudeCredentials; else -> null }
         if (engine == "CODEX" && credentials == null) throw JobFailure("PROVIDER_UNAVAILABLE", "Codex credentials are unavailable.", true)
         if (engine == "CLAUDE" && credentials == null && config.claudeOauthToken.isNullOrBlank()) throw JobFailure("PROVIDER_UNAVAILABLE", "Claude credentials are unavailable.", true)
         val name = "ar-v2-${claim.job.id.take(8)}-${claim.attempt.id.take(8)}-$agentRound"
@@ -426,11 +442,13 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
             else credentials?.let { isolateProviderCredentials(it, task, engine) }
         credentialSource?.let { command += listOf("-v", "$it:/credential-source:ro") }
         if (engine == "CLAUDE" && !config.claudeOauthToken.isNullOrBlank()) command += listOf("-e", "CLAUDE_CODE_OAUTH_TOKEN")
+        if (engine == "MISTRAL") command += listOf("-e", "MISTRAL_API_KEY", "-e", "AR_TIME_LIMIT_SECONDS=${Duration.between(Instant.now(), executionDeadline).seconds.coerceAtLeast(1)}")
         command += listOf("-e", "AR_ENGINE=$engine", "-e", "AR_MODEL=${claim.job.execution.model}", "-e", "AR_JOB_KIND=${claim.job.jobKind.name}", "-e", "AR_OUTPUT_ATTEMPT=$agentRound", "-e", "AR_RESULT_FILE=/job/output/result.json", config.executionImage)
         val transcript = ExecutionTranscript(task.resolve("provider-$agentRound.log"), agentRound)
         val process = try {
             startContainer(ProcessBuilder(command).redirectErrorStream(true).also {
                 if (engine == "CLAUDE" && !config.claudeOauthToken.isNullOrBlank()) it.environment()["CLAUDE_CODE_OAUTH_TOKEN"] = config.claudeOauthToken
+                if (engine == "MISTRAL") it.environment()["MISTRAL_API_KEY"] = config.mistralApiKey
             })
         } catch (error: Exception) {
             transcript.close()
@@ -493,7 +511,7 @@ ${if (artifactInstructions.isBlank()) "No output artifacts are declared." else "
         val size = path.fileSize()
         declaration.maxBytes?.let { if (size > it) throw JobFailure("OUTPUT_TOO_LARGE", "Artifact ${declaration.name} is too large.", false) }
         val bytes = path.readBytes()
-        if (SecretRedactor.contains(bytes, selectedSensitiveValues(claim.request.environmentKeys, config.projectCredentials))) throw JobFailure("SECRET_EXPOSURE_BLOCKED", "Artifact contained a selected sensitive value.", false)
+        if (SecretRedactor.contains(bytes, listOfNotNull(config.mistralApiKey) + selectedSensitiveValues(claim.request.environmentKeys, config.projectCredentials))) throw JobFailure("SECRET_EXPOSURE_BLOCKED", "Artifact contained a selected sensitive value.", false)
         val mime = Files.probeContentType(path) ?: declaration.mimeTypes.first()
         if (mime !in declaration.mimeTypes) throw JobFailure("OUTPUT_MIME_NOT_ALLOWED", "Artifact ${declaration.name} has MIME $mime.", false)
         client.upload(claim, declaration.name, path, mime)

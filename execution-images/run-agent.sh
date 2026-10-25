@@ -62,6 +62,9 @@ case "${AR_ENGINE:-}" in
     capture_claude_result "$stream_file" "$result_file"
     if (( provider_status != 0 )); then exit "$provider_status"; fi
     ;;
+  MISTRAL)
+    exec /opt/vibe/bin/python /usr/local/lib/agent-runtime/mistral-agent.py
+    ;;
   *)
     echo "Unsupported execution engine" >&2
     exit 64

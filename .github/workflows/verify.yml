@@ -26,6 +26,10 @@ jobs:
           agent-runtime-server/src/main/resources/static
           ':(exclude)agent-runtime-server/src/main/resources/static/canvaskit/**'
       - run: mvn -B --no-transfer-progress verify
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install jsonschema==4.26.0
+      - run: python execution-images/test-mistral-agent.py
       - run: bash execution-images/test-run-agent.sh
       - run: bash deploy/macos/test-immutable-worker-jar.sh
       - run: |

@@ -268,7 +268,8 @@ class V2JobService(private val properties:RuntimeProperties,private val jobs:V2J
         if(!properties.modelAllowed(tenantId,e.model)) throw ApiException("EXECUTION_NOT_ALLOWED","Model ${e.model} is not allowed for $tenantId.",HttpStatus.UNPROCESSABLE_ENTITY)
         val supported = when(e.mode) {
             ExecutionMode.MOCK -> e.vendorId=="mock"
-            ExecutionMode.SUBSCRIPTION -> e.vendorId in setOf("openai","anthropic") && request.taskType in setOf(TaskType.STRUCTURED_GENERATION,TaskType.REPOSITORY_AGENT)
+            ExecutionMode.SUBSCRIPTION -> (e.vendorId in setOf("openai","anthropic") && request.taskType in setOf(TaskType.STRUCTURED_GENERATION,TaskType.REPOSITORY_AGENT)) ||
+                (e.vendorId == "mistral" && tenantId == "hkh" && request.jobKind == JobKind.APPLICATION_WORK && request.taskType == TaskType.STRUCTURED_GENERATION)
             ExecutionMode.API -> (e.vendorId=="openai" && request.taskType in setOf(TaskType.STRUCTURED_GENERATION,TaskType.TRANSCRIPTION,TaskType.SPEECH_SYNTHESIS)) || (e.vendorId=="elevenlabs" && request.taskType==TaskType.SPEECH_SYNTHESIS)
             ExecutionMode.LOCAL -> e.vendorId=="local" && request.taskType==TaskType.TRANSCRIPTION
         }

@@ -2,7 +2,7 @@
 
 Agent Runtime is een gedeeld platform voor duurzame AI-agentuitvoering. Geautoriseerde applicaties
 dienen jobs in bij de server op OpenShift. Een worker op een MacBook haalt passende jobs via
-uitgaande HTTPS-long-polling op en voert Codex of Claude uit in een geïsoleerde Dockercontainer. De
+uitgaande HTTPS-long-polling op en voert Codex, Claude of Mistral Vibe uit in een geïsoleerde Dockercontainer. De
 laptop hoeft niet vanaf internet bereikbaar te zijn.
 
 De runtime ondersteunt:
@@ -138,12 +138,48 @@ AR_CLAUDE_MODELS=claude-sonnet-5-5,claude-opus-5-5,claude-sonnet-5,claude-opus-5
 eventuele `AR_REPOSITORY_<ALIAS>_URL`-instellingen. Paden zijn absoluut; `~` en `$HOME` worden niet
 uitgebreid. De Claude OAuth-token heeft voorrang op `AR_CLAUDE_CREDENTIALS_DIR`. Verwijder de
 providerregel voor een provider die deze worker niet aanbiedt.
-De v2-worker adverteert uitsluitend modellen uit `AR_CODEX_MODELS` en `AR_CLAUDE_MODELS`; zonder
+De v2-worker adverteert uitsluitend modellen uit `AR_CODEX_MODELS`, `AR_CLAUDE_MODELS` en `AR_MISTRAL_MODELS`; zonder
 die expliciete lijst claimt hij voor die provider geen v2-job. De Runtime kiest nooit een fallbackmodel.
 
 `AR_EXECUTION_IMAGE` hoeft niet te worden ingesteld. De standaard is
 `ghcr.io/robbertvdzon/agent-runtime-execution:main`; de worker gebruikt bij iedere job
 `docker run --pull always`.
+
+#### Mistral voor HKH
+
+Mistral is beschikbaar via `/v2` voor uitsluitend tenant `hkh`, `APPLICATION_WORK`,
+`STRUCTURED_GENERATION` en `SUBSCRIPTION`. Andere tenants, v1, repositorywerk en API-fallback
+zijn uitgesloten. De consumer kiest `vendorId=mistral`, `model=glm-5-3`, `mode=SUBSCRIPTION`.
+HKH krijgt de combinatie via `/v2/execution-options` zodra een geschikte worker registreert.
+Bestaande HKH-keuzes voor Codex/Claude blijven beschikbaar; de runtime kiest geen ander model.
+
+Configureer in het lokale `properties.env` (mode 0600):
+
+```dotenv
+AR_MISTRAL_API_KEY=<key-van-het-Vibe-abonnement>
+AR_MISTRAL_MODELS=glm-5-3
+```
+
+Vibe gebruikt ook voor abonnementsgebruik een API-key. Gebruik de key van de bestaande
+Vibe-abonnementslogin; de runtime kan aan een key niet zien hoe Mistral hem factureert.
+De key gaat uitsluitend als environmentvariable naar de geselecteerde executioncontainer;
+geen persoonlijk Vibe-profiel, Keychain, MCP-configuratie of sessiehistorie wordt gemount.
+De key wordt geredigeerd en in resultaten/artifacts geblokkeerd. De server ontvangt hem niet.
+Een worker met uitsluitend deze Mistral-configuratie kan zonder v1-provider starten.
+
+Het execution-image bevat Vibe **3.0.2** en een eigen adapter. Die begrenst model-output op
+65.536 tokens, de sessie op 3.500.000 tokens en 60 modelbeurten, en gebruikt de harde jobdeadline.
+Een `post_agent`-hook valideert JSON en het volledige responseschema en geeft concrete fouten
+binnen dezelfde sessie terug, met maximaal drie herstelbeurten. De adapter valideert het
+uiteindelijke resultaat opnieuw: Vibe kan na de herstelgrens ongeldige uitvoer als `finished`
+melden. Daarna blijft ook de servervalidatie verplicht. De adapter ondersteunt alleen GLM-5.3.
+
+Verbruik wordt per voltooide modelaanroep uit het Vibe-journal gelezen, inclusief afgekeurde
+antwoorden en herstelbeurten. De export bevat niet betrouwbaar de som daarvan. Er zijn geen
+Mistral-tarieven toegevoegd; onbekende kosten blijven onbekend. Zichtbare tekst en toolactiviteit
+komen in het transcript; ruwe reasoning en exportconfiguratie worden niet doorgestuurd.
+Bij een Vibe-upgrade moeten het journalformaat, de hook, outputextractie en usage opnieuw worden
+getest. `execution-images/test-mistral-agent.py` draait ook in CI.
 
 #### Parallelle slots en lokale transcriptie
 

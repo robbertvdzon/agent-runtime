@@ -313,3 +313,21 @@ idempotentiesleutels `pf-product-advisor-*`. Product Factory beperkt de grant aa
 PvdD-productadviseur. V1, repositoryjobs en Software Factory krijgen deze uitzondering niet.
 Nieuwe productiecredentials blijven standaard verboden. De worker materialiseert en redigeert deze
 key zoals andere geselecteerde credentials. Geheime waarden blijven uitsluitend lokaal.
+
+## Mistral Vibe voor HKH (v2)
+
+Alleen `hkh` kan `mistral/glm-5-3/SUBSCRIPTION` gebruiken voor
+`APPLICATION_WORK` met `STRUCTURED_GENERATION`. Deze beperking wordt zowel bij jobaanmaak
+als in de catalogus en de worker afgedwongen, ook wanneer een andere tenant MISTRAL
+in zijn providerconfiguratie zou opnemen. V1, API-fallback en repositorywerk zijn uitgesloten.
+
+Het execution-image start een geïsoleerde Vibe 3.0.2-sessie met een expliciete output-cap.
+De `post_agent`-hook parseert de finale tekst en valideert het volledige resultSchema.
+Bij afkeuring ontvangt dezelfde sessie de concrete fout en de afgekeurde tekst voor herstel.
+Na maximaal drie hook-herstelbeurten valideert de adapter onafhankelijk opnieuw; exit 0
+van Vibe is onvoldoende. Ongeldige JSON/schema-uitvoer wordt niet als resultaatbestand
+gepubliceerd. De bestaande serverpolicy bepaalt eventuele volgende technische attempts.
+
+Quota-, rate-limit- en authenticatiefouten worden `PROVIDER_UNAVAILABLE` (retryable),
+zonder naar API-betaling of een ander model over te schakelen. Tijdslimieten worden
+`EXECUTION_TIMEOUT`. Onbekende procesfouten worden `ENGINE_FAILED`.

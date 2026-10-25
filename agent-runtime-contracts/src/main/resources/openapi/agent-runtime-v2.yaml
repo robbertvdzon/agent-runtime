@@ -2333,7 +2333,7 @@ components:
       type: string
       enum: [SUBSCRIPTION, API, MOCK, LOCAL]
       description: |
-        SUBSCRIPTION runs Codex/Claude on a worker. API runs server-side: openai for STRUCTURED_GENERATION,
+        SUBSCRIPTION runs Codex/Claude on a worker, plus Mistral Vibe (mistral) exclusively for HKH APPLICATION_WORK STRUCTURED_GENERATION. API runs server-side: openai for STRUCTURED_GENERATION,
         TRANSCRIPTION and SPEECH_SYNTHESIS, elevenlabs for SPEECH_SYNTHESIS. LOCAL runs whisper.cpp on a
         worker host (vendorId local, TRANSCRIPTION only). MOCK is for non-production tests.
 

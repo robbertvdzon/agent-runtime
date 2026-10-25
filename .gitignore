@@ -10,3 +10,5 @@ secrets.env
 project-credentials.env
 deploy/secrets-cluster.env
 /mistral-test/
+
+__pycache__/

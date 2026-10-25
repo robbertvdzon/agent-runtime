@@ -1600,6 +1600,7 @@ class _JobDetailState extends State<JobDetail> {
                           agentLabel: switch (detail!['job']['provider']) {
                             'CLAUDE' || 'ANTHROPIC' => 'Claude',
                             'CODEX' || 'OPENAI' => 'Codex',
+                            'MISTRAL' => 'Mistral',
                             _ => 'Agent',
                           },
                           result: detail!['result']?['result'] == null

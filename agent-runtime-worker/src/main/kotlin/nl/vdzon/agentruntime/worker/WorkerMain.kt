@@ -57,7 +57,13 @@ data class WorkerConfig(
      * poging als WORKER_ERROR afgebroken. Zie [heartbeatWithGrace].
      */
     val heartbeatGrace: Duration = Duration.ofSeconds(300),
+    val mistralApiKey: String? = null,
+    val mistralModels: Set<String> = emptySet(),
 ) {
+    init {
+        require(mistralModels.all { it == "glm-5-3" }) { "Only glm-5-3 is supported for Mistral." }
+    }
+
     companion object {
         fun load(): WorkerConfig {
             val root = Path.of(System.getProperty("user.dir"))
@@ -87,6 +93,8 @@ data class WorkerConfig(
                 whisperModels(values["AR_WHISPER_MODELS"]),
                 slots(values, "AR_WHISPER_THREADS", 8),
                 Duration.ofSeconds(slots(values, "AR_WORKER_HEARTBEAT_GRACE_SECONDS", 300).toLong()),
+                values["AR_MISTRAL_API_KEY"]?.takeIf(String::isNotBlank),
+                models("AR_MISTRAL_MODELS"),
             )
         }
 
@@ -101,7 +109,7 @@ data class WorkerConfig(
 
 fun main(args: Array<String>) {
     val config = WorkerConfig.load()
-    SecretRedactor.configure(redactionValues(config.projectCredentials, config.claudeOauthToken))
+    SecretRedactor.configure(redactionValues(config.projectCredentials, config.claudeOauthToken) + listOfNotNull(config.mistralApiKey))
     config.workRoot.createDirectories()
     val mapper = jacksonObjectMapper().registerModule(JavaTimeModule())
     val client = RuntimeClient(config, mapper)
@@ -110,12 +118,15 @@ fun main(args: Array<String>) {
         if (config.codexCredentials?.exists() == true) add(Provider.CODEX)
         if (!config.claudeOauthToken.isNullOrBlank() || config.claudeCredentials?.exists() == true) add(Provider.CLAUDE)
     }
-    require(providers.isNotEmpty()) { "No provider credential directory configured." }
+    require(providers.isNotEmpty() || (!config.mistralApiKey.isNullOrBlank() && config.mistralModels.isNotEmpty())) { "No provider credentials configured." }
     val capabilities = buildSet { add("application-work"); if (config.repositoryAliases.isNotEmpty()) add("repository-work") }
-    fun register() = client.register(WorkerRegistrationRequest(
-        config.workerId, bootId, capabilities, providers, emptySet(), config.projectCredentials.keys, 1, mapOf("worker" to "0.1.0"),
-        advertisedModels = config.advertisedModels,
-    ))
+    fun register() {
+        if (providers.isEmpty()) return // Mistral is v2-only.
+        client.register(WorkerRegistrationRequest(
+            config.workerId, bootId, capabilities, providers, emptySet(), config.projectCredentials.keys, 1, mapOf("worker" to "0.1.0"),
+            advertisedModels = config.advertisedModels,
+        ))
+    }
     register()
     println("Agent Runtime worker ${config.workerId} online with ${providers.joinToString()}.")
     val journal = WorkerJournal(config.workRoot, mapper)
@@ -132,14 +143,14 @@ fun main(args: Array<String>) {
             val refreshed = try { ProjectCredentials.load(config.projectCredentialsPath) } catch (error: Exception) {
                 val hadKeys = config.projectCredentials.isNotEmpty()
                 config.projectCredentials.clear()
-                SecretRedactor.configure(redactionValues(emptyMap(), config.claudeOauthToken))
+                SecretRedactor.configure(redactionValues(emptyMap(), config.claudeOauthToken) + listOfNotNull(config.mistralApiKey))
                 if (hadKeys) { register(); v2Executor.register() }
                 throw error
             }
             if (refreshed != config.projectCredentials) {
                 val keysChanged = refreshed.keys != config.projectCredentials.keys
                 config.projectCredentials.putAll(refreshed); config.projectCredentials.keys.retainAll(refreshed.keys)
-                SecretRedactor.configure(redactionValues(refreshed, config.claudeOauthToken))
+                SecretRedactor.configure(redactionValues(refreshed, config.claudeOauthToken) + listOfNotNull(config.mistralApiKey))
                 if (keysChanged) { register(); v2Executor.register() }
             }
             val idle = slots.activeTotal() == 0
@@ -150,7 +161,7 @@ fun main(args: Array<String>) {
                 val slot = slots.classOf(claimedV2.job)
                 slots.acquire(slot)
                 pool.execute { try { v2Executor.execute(claimedV2) } finally { slots.release(slot) } }
-            } else if (slots.activeTotal() == 0) {
+            } else if (slots.activeTotal() == 0 && providers.isNotEmpty()) {
                 val claimed = client.claim(ClaimRequest(bootId, capabilities, providers, emptySet(), 5))
                 if (claimed != null) executor.execute(claimed)
             } else {

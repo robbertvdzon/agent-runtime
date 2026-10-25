@@ -10,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl git gh jq openjdk-17-jdk-headless postgresql-client maven openssh-client python3 python3-pip unzip xz-utils \
+    && apt-get install -y --no-install-recommends ca-certificates curl git gh jq openjdk-17-jdk-headless postgresql-client maven openssh-client python3 python3-pip python3-venv unzip xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=node-runtime /usr/local/ /usr/local/
@@ -23,6 +23,11 @@ RUN node --version \
     && curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux${oc_suffix}.tar.gz" -o /tmp/oc.tar.gz \
     && tar -xzf /tmp/oc.tar.gz -C /usr/local/bin oc kubectl \
     && rm -f /tmp/oc.tar.gz
+
+# Pin Vibe: the adapter reads the tested unified-session journal format.
+RUN python3 -m venv /opt/vibe \
+    && /opt/vibe/bin/pip install --no-cache-dir mistral-vibe==3.0.2 jsonschema==4.26.0 \
+    && ln -s /opt/vibe/bin/vibe /usr/local/bin/vibe
 
 RUN useradd --create-home --shell /bin/bash agent \
     && install -d -o agent -g agent /work /job/input /job/secrets /job/docs /job/output/artifacts /home/agent/.codex /home/agent/.claude
@@ -37,6 +42,7 @@ ENV PATH="/opt/flutter/bin:${PATH}" \
     JAVA_HOME_17_X64=/usr/lib/jvm/java-17-openjdk-amd64 \
     JAVA_HOME_17_ARM64=/usr/lib/jvm/java-17-openjdk-arm64
 
+COPY mistral-agent.py /usr/local/lib/agent-runtime/mistral-agent.py
 COPY run-agent.sh /usr/local/bin/run-agent
 RUN chmod 0755 /usr/local/bin/run-agent
 
