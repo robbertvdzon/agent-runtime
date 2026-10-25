@@ -116,3 +116,45 @@ antwoorden blijft meetellen. Dit is een technische rookproef, geen HKH-kwaliteit
 
 De interne Codex-configuratie gebruikt de naam `ar-ollama`, omdat Codex de naam
 `ollama` reserveert. Het publieke runtime-vendorId blijft `ollama`.
+
+## Eigen modelmetadata en gericht herstel
+
+De Ollama-container genereert een Codex-modelcatalogus voor de exacte modelalias en het
+geconfigureerde contextvenster. Daarmee gebruikt Codex bekende metadata in plaats van
+fallbackmetadata. De catalogus geldt uitsluitend voor Ollama; de gewone OpenAI- en
+Claude-uitvoering verandert niet. Catalogus en hersteladapter zitten in het execution-image,
+zodat een nieuwe container geen handmatige installatie nodig heeft.
+
+Voor een aparte native CLI-proef op een Mac:
+
+```bash
+bash execution-images/install-ollama-codex.sh
+~/.local/bin/codex-ollama
+```
+
+Dit installeert een eigen catalogus, Codex-home en startscript, zonder de gewone
+`~/.codex/config.toml` te wijzigen. Standaard: `qwen3.5:35b`, 65.536 tokens en
+`http://127.0.0.1:11434/v1`. Andere waarden kunnen bij installatie via `AR_MODEL`,
+`AR_OLLAMA_CONTEXT_WINDOW` en `AR_OLLAMA_BASE_URL`. Stel ook Ollama zelf op hetzelfde
+contextvenster in; metadata vergroot het daadwerkelijke modelgeheugen niet.
+
+Na een geslaagde CLI-uitvoering wordt het eindantwoord geparseerd en gevalideerd:
+
+- Geldig JSON-document, onjuist schema: geef het vorige antwoord en concrete
+  validatiefouten mee, samen met de oorspronkelijke opdracht en toegang tot bronbestanden.
+  Maximaal drie herstelpogingen, binnen de bestaande harde jobdeadline.
+- Ontbrekend antwoord, losse tekst of onleesbare JSON: voer de oorspronkelijke opdracht
+  één keer opnieuw uit. Gebruik de mislukte uitvoer niet als herstelkandidaat.
+- Een fout tijdens uitvoering of een JSON-errorenvelop is geen document om te herstellen.
+  Verbindingsproblemen krijgen `PROVIDER_UNAVAILABLE` voor de bestaande workerretry;
+  een te groot contextvenster krijgt `SESSION_TOKEN_LIMIT` en wordt niet blind herhaald.
+- Een te groot resultaat krijgt `MODEL_OUTPUT_LIMIT`. Opnieuw mislukte parsing krijgt
+  `MODEL_OUTPUT_NOT_JSON`; uitgeput schemaherstel `MODEL_OUTPUT_SCHEMA_INVALID`.
+
+Bronbestanden blijven bestanden en worden niet allemaal in de herstelprompt gekopieerd.
+Het vorige eindantwoord gaat via een tijdelijk bestand en stdin, niet via een grote
+environmentvariabele. Usage van alle pogingen telt mee; de server valideert onafhankelijk.
+Een geslaagde uitvoering plus geldig schema bewijst de structurele volledigheid, niet dat
+het model alle historische feiten heeft gevonden of juist heeft geïnterpreteerd.
+
+Catalogusformaat: [officiële Codex-documentatie](https://learn.chatgpt.com/docs/model-catalogs).

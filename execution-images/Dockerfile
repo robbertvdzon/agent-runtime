@@ -42,6 +42,7 @@ ENV PATH="/opt/flutter/bin:${PATH}" \
     JAVA_HOME_17_X64=/usr/lib/jvm/java-17-openjdk-amd64 \
     JAVA_HOME_17_ARM64=/usr/lib/jvm/java-17-openjdk-arm64
 
+COPY ollama-model-catalog.py /usr/local/lib/agent-runtime/ollama-model-catalog.py
 COPY ollama-agent.py /usr/local/lib/agent-runtime/ollama-agent.py
 COPY mistral-agent.py /usr/local/lib/agent-runtime/mistral-agent.py
 COPY run-agent.sh /usr/local/bin/run-agent

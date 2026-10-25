@@ -6,7 +6,12 @@ result_file="${AR_RESULT_FILE:-/job/output/result.json}"
 
 provider_prompt() {
   cat /job/input/prompt.md
-  if [[ -n "${AR_OLLAMA_CORRECTION:-}" ]]; then printf '\n%s\n' "$AR_OLLAMA_CORRECTION"; fi
+  if [[ "${AR_ENGINE:-}" == OLLAMA_CODEX && -s /job/input/response-schema.json ]]; then
+    printf '\n\nBefore producing your final answer, use a tool to read the complete /job/input/response-schema.json. Follow all required fields, nesting and additionalProperties constraints from that file.\n'
+  fi
+  if [[ "${AR_ENGINE:-}" == OLLAMA_CODEX && -n "${AR_OLLAMA_CORRECTION_FILE:-}" ]]; then
+    printf '\n\n'; cat -- "$AR_OLLAMA_CORRECTION_FILE"
+  fi
   if [[ "${AR_JOB_KIND:-}" == "APPLICATION_WORK" ]]; then
     printf '\n\nReturn only the complete JSON result as your final response and satisfy /job/input/response-schema.json when it exists. The runtime captures that response automatically; do not create or write a result file yourself.\n'
   fi
@@ -40,8 +45,12 @@ case "${AR_ENGINE:-}" in
     if [[ "$AR_ENGINE" == CODEX ]]; then copy_credentials /credential-source /home/agent/.codex; fi
     args=(exec --json --ephemeral --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -C /work -m "$AR_MODEL" -o "$result_file")
     if [[ "$AR_ENGINE" == OLLAMA_CODEX ]]; then
-      # Dedicated provider: no cloud credentials/configuration and no web-search fallback.
-      args+=(--ignore-user-config -c 'model_provider="ar-ollama"'
+      # Generate metadata for the exact alias, isolated from normal OpenAI config.
+      catalog_file="$(mktemp)"
+      trap 'rm -f "$catalog_file"' EXIT
+      /opt/vibe/bin/python /usr/local/lib/agent-runtime/ollama-model-catalog.py \
+        "$AR_MODEL" "${AR_OLLAMA_CONTEXT_WINDOW:-65536}" "$catalog_file"
+      args+=(--ignore-user-config -c "model_catalog_json=\"$catalog_file\"" -c 'model_provider="ar-ollama"'
         -c 'model_providers.ar-ollama.name="Ollama"'
         -c "model_providers.ar-ollama.base_url=\"${AR_OLLAMA_BASE_URL:?}\""
         -c 'model_providers.ar-ollama.wire_api="responses"'
