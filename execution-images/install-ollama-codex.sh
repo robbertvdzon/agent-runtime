@@ -12,8 +12,8 @@ python3 "$script_dir/ollama-model-catalog.py" "$model" "$context" "$install_dir/
 # Quote each value for bash; no credentials are copied or required.
 {
   printf '#!/usr/bin/env bash\nset -euo pipefail\n'
-  printf 'export CODEX_HOME=%q\n'
-  printf 'if [[ "${1:-}" == exec ]]; then shift; set -- exec --ignore-user-config "$@"; fi\nexec codex' "$install_dir/codex-home"
+  printf 'export CODEX_HOME=%q\n' "$install_dir/codex-home"
+  printf 'if [[ "${1:-}" == exec ]]; then shift; set -- exec --ignore-user-config "$@"; fi\nexec codex'
   printf ' -c %q' "model_catalog_json=\"$install_dir/models.json\"" 'model_provider="ar-ollama"' \
     'model_providers.ar-ollama.name="Ollama"' "model_providers.ar-ollama.base_url=\"$base_url\"" \
     'model_providers.ar-ollama.wire_api="responses"' 'model_providers.ar-ollama.requires_openai_auth=false' \
